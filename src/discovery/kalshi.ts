@@ -57,7 +57,47 @@ function marketStrike(market: KalshiMarket): number | null {
 }
 
 function marketExpiry(market: KalshiMarket): number | null {
-  return timeFrom(market.expiration_time, market.expected_expiration_time, market.close_time);
+  return expiryFromTicker(market.ticker ?? market.market_ticker) ?? timeFrom(market.expiration_time, market.expected_expiration_time, market.close_time);
+}
+
+const monthIndexes: Record<string, number> = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+};
+
+function zonedTimeToUtcMs(year: number, monthIndex: number, day: number, hour: number, minute: number, timeZone: string): number {
+  const utcGuess = Date.UTC(year, monthIndex, day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(utcGuess));
+  const value = (type: string): number => Number(parts.find((part) => part.type === type)?.value);
+  const zoneAsUtc = Date.UTC(value("year"), value("month") - 1, value("day"), value("hour"), value("minute"));
+  return utcGuess - (zoneAsUtc - utcGuess);
+}
+
+function expiryFromTicker(ticker: string | undefined): number | null {
+  const match = ticker?.match(/KXBTC15M-(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})-/);
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+  const monthIndex = monthIndexes[monthText];
+  if (monthIndex == null) return null;
+  return zonedTimeToUtcMs(2000 + Number(yearText), monthIndex, Number(dayText), Number(hourText), Number(minuteText), "America/New_York");
 }
 
 function marketsPath(config: AppConfig): { url: URL; signPath: string } {
