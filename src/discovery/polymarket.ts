@@ -18,6 +18,8 @@ interface PolymarketMarket {
   game_start_time?: unknown;
   line?: unknown;
   strike?: unknown;
+  priceToBeat?: unknown;
+  price_to_beat?: unknown;
   outcomes?: unknown;
   clobTokenIds?: unknown;
   clob_token_ids?: unknown;
@@ -91,7 +93,12 @@ function contractsFromMarkets(markets: PolymarketMarket[], now: number): BinaryC
 
   for (const market of markets) {
     if (market.active === false || market.closed === true || !isBtc15MinuteMarket(market)) continue;
-    const strike = numberFrom(market.line) ?? numberFrom(market.strike) ?? strikeFromText(market.question, market.title, market.description, market.slug);
+    const strike =
+      numberFrom(market.priceToBeat) ??
+      numberFrom(market.price_to_beat) ??
+      numberFrom(market.line) ??
+      numberFrom(market.strike) ??
+      strikeFromText(market.question, market.title, market.description);
     const expiryMs = timeFrom(market.endDate, market.end_date, market.game_start_time);
     const contractId = market.conditionId ?? market.condition_id ?? market.id ?? market.slug;
     const { yesTokenId, noTokenId } = outcomeTokenIds(market);
@@ -143,7 +150,16 @@ export async function discoverPolymarketBtcContracts(config: AppConfig = loadCon
   const markets = await fetchMarkets(config.polymarketDiscoveryUrl);
   let contracts = contractsFromMarkets(markets, now);
   if (contracts.length === 0) {
-    contracts = contractsFromMarkets(await discoverPolymarketBtc15mBySlug(now), now);
+    const fallbackMarkets = await discoverPolymarketBtc15mBySlug(now);
+    contracts = contractsFromMarkets(fallbackMarkets, now);
+    if (fallbackMarkets.length > 0 && contracts.length === 0) {
+      logEvent({
+        severity: "WARN",
+        category: "DISCOVERY",
+        message: "Polymarket BTC 15m markets found without price-to-beat strike",
+        context: { count: fallbackMarkets.length },
+      });
+    }
   }
 
   logEvent({ category: "DISCOVERY", message: "Polymarket contracts discovered", context: { count: contracts.length } });
