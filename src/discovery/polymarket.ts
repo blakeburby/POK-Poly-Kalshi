@@ -85,12 +85,9 @@ function outcomeTokenIds(market: PolymarketMarket): { yesTokenId: string | null;
   return { yesTokenId: yesTokenId ?? tokenIds[0] ?? null, noTokenId: noTokenId ?? tokenIds[1] ?? null };
 }
 
-export async function discoverPolymarketBtcContracts(config: AppConfig = loadConfig(), now = Date.now()): Promise<BinaryContract[]> {
-  const response = await fetch(config.polymarketDiscoveryUrl);
-  if (!response.ok) throw new Error(`Polymarket discovery failed ${response.status}: ${await response.text()}`);
-  const payload = await response.json() as PolymarketMarket[] | { data?: PolymarketMarket[]; markets?: PolymarketMarket[] };
-  const markets = Array.isArray(payload) ? payload : payload.data ?? payload.markets ?? [];
+function contractsFromMarkets(markets: PolymarketMarket[], now: number): BinaryContract[] {
   const contracts: BinaryContract[] = [];
+  const seen = new Set<string>();
 
   for (const market of markets) {
     if (market.active === false || market.closed === true || !isBtc15MinuteMarket(market)) continue;
@@ -98,7 +95,8 @@ export async function discoverPolymarketBtcContracts(config: AppConfig = loadCon
     const expiryMs = timeFrom(market.endDate, market.end_date, market.game_start_time);
     const contractId = market.conditionId ?? market.condition_id ?? market.id ?? market.slug;
     const { yesTokenId, noTokenId } = outcomeTokenIds(market);
-    if (!contractId || strike == null || expiryMs == null || !yesTokenId || !noTokenId) continue;
+    if (!contractId || seen.has(contractId) || strike == null || expiryMs == null || !yesTokenId || !noTokenId) continue;
+    seen.add(contractId);
     contracts.push({
       venue: "polymarket",
       contractId,
@@ -115,6 +113,37 @@ export async function discoverPolymarketBtcContracts(config: AppConfig = loadCon
       marketSlug: market.slug ?? null,
       updatedAt: now,
     });
+  }
+
+  return contracts;
+}
+
+async function fetchMarkets(url: string): Promise<PolymarketMarket[]> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Polymarket discovery failed ${response.status}: ${await response.text()}`);
+  const payload = await response.json() as PolymarketMarket[] | { data?: PolymarketMarket[]; markets?: PolymarketMarket[] };
+  return Array.isArray(payload) ? payload : payload.data ?? payload.markets ?? [];
+}
+
+async function discoverPolymarketBtc15mBySlug(now: number): Promise<PolymarketMarket[]> {
+  const windowMs = 15 * 60 * 1000;
+  const currentWindowStart = Math.floor(now / windowMs) * windowMs;
+  const starts = [-1, 0, 1, 2, 3, 4].map((offset) => Math.floor((currentWindowStart + offset * windowMs) / 1000));
+  const batches = await Promise.allSettled(
+    starts.map((start) => fetchMarkets(`https://gamma-api.polymarket.com/markets?slug=btc-updown-15m-${start}&active=true&closed=false`)),
+  );
+  const markets = batches.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+  if (markets.length > 0) {
+    logEvent({ category: "DISCOVERY", message: "Polymarket BTC 15m slug fallback discovered markets", context: { count: markets.length } });
+  }
+  return markets;
+}
+
+export async function discoverPolymarketBtcContracts(config: AppConfig = loadConfig(), now = Date.now()): Promise<BinaryContract[]> {
+  const markets = await fetchMarkets(config.polymarketDiscoveryUrl);
+  let contracts = contractsFromMarkets(markets, now);
+  if (contracts.length === 0) {
+    contracts = contractsFromMarkets(await discoverPolymarketBtc15mBySlug(now), now);
   }
 
   logEvent({ category: "DISCOVERY", message: "Polymarket contracts discovered", context: { count: contracts.length } });
