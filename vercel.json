@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npm run build:dashboard",
+  "devCommand": "npm run dev:dashboard",
+  "framework": "nextjs"
+}
