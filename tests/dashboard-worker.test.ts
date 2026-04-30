@@ -1,0 +1,88 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { BookStore } from "../src/books/book-store";
+import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, type DashboardRuntime } from "../src/dashboard/worker-api";
+import type { AppConfig } from "../src/config";
+import type { DashboardSignal } from "../src/types";
+import { contract } from "./helpers";
+
+function config(input: Partial<AppConfig> = {}): AppConfig {
+  return {
+    port: 8080,
+    databaseUrl: "",
+    arbEnabled: true,
+    liveTrading: false,
+    minProfitDollars: 0.05,
+    reentryIntervalMs: 15_000,
+    staleBookMs: 10_000,
+    marketDiscoveryIntervalMs: 30_000,
+    kalshiApiBase: "",
+    kalshiWsUrl: "",
+    kalshiSeriesTicker: "KXBTC15M",
+    polymarketWsUrl: "",
+    polymarketDiscoveryUrl: "",
+    polymarketOrderEndpoint: "",
+    polymarketApiKey: "",
+    dashboardApiToken: "secret-token",
+    ...input,
+  };
+}
+
+function signal(): DashboardSignal {
+  return {
+    id: 7,
+    createdAt: "2026-04-29T20:00:00.000Z",
+    updatedAt: "2026-04-29T20:00:01.000Z",
+    pairKey: "pair",
+    expiryMs: 1_800_000_000_000,
+    kalshiContractId: "kalshi",
+    polymarketContractId: "poly",
+    lower: { venue: "polymarket", contractId: "poly", direction: "yes", strike: 1500, ask: 0.4 },
+    higher: { venue: "kalshi", contractId: "kalshi", direction: "no", strike: 1502, ask: 0.5 },
+    premium: 0.9,
+    guaranteedProfit: 0.1,
+    overlapProfit: 1.1,
+    threshold: 0.05,
+    action: "filled",
+    failureReason: null,
+    kalshiFillId: "kalshi-fill",
+    polymarketFillId: "poly-fill",
+    kalshiFillPrice: 0.5,
+    polymarketFillPrice: 0.4,
+  };
+}
+
+test("dashboard bearer token accepts valid requests and rejects missing or invalid requests", () => {
+  assert.equal(dashboardRequestAuthorized({ authorization: "Bearer secret-token" }, "secret-token"), true);
+  assert.equal(dashboardRequestAuthorized({ authorization: "Bearer wrong-token" }, "secret-token"), false);
+  assert.equal(dashboardRequestAuthorized({}, "secret-token"), false);
+  assert.equal(dashboardRequestAuthorized({ authorization: "Bearer secret-token" }, ""), false);
+});
+
+test("dashboard snapshot includes books, scanner status, recent signals, live candidates, and logs", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, updatedAt: now })]);
+  books.setKalshiContracts([contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now })]);
+  const runtime: DashboardRuntime = {
+    config: config(),
+    books,
+    signals: { listRecentSignals: async () => [signal()] },
+    getScannerStatus: () => ({ scanning: false, lastScanAt: now - 500, lastCandidateCount: 1 }),
+    getDiscoveryState: () => ({ lastDiscoveryAt: now - 1000, lastDiscoveryError: null }),
+    getLogs: () => [{ timestamp: new Date(now).toISOString(), severity: "INFO", category: "SCANNER", message: "ok" }],
+  };
+
+  const snapshot = await createDashboardSnapshot(runtime, now);
+  assert.equal(snapshot.health.ok, true);
+  assert.equal(snapshot.books.kalshi.length, 1);
+  assert.equal(snapshot.books.polymarket.length, 1);
+  assert.equal(snapshot.liveCandidates.length, 1);
+  assert.equal(snapshot.recentSignals[0].action, "filled");
+  assert.equal(snapshot.logs[0].category, "SCANNER");
+});
+
+test("dashboard stream events are valid SSE snapshot frames", () => {
+  const frame = formatSseEvent("snapshot", { ok: true });
+  assert.equal(frame, "event: snapshot\ndata: {\"ok\":true}\n\n");
+});
