@@ -165,7 +165,9 @@ export class PolymarketPriceToBeatService {
 
     socket.on("message", (raw: WebSocket.RawData) => {
       try {
-        const payload = JSON.parse(raw.toString());
+        const text = raw.toString().trim();
+        if (!text || text === "PING" || text === "PONG") return;
+        const payload = JSON.parse(text);
         const ticks = parsePolymarketChainlinkTicks(payload);
         for (const tick of ticks) void this.handleTick(tick);
       } catch (error) {
