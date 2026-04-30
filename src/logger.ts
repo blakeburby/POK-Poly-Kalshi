@@ -1,5 +1,5 @@
 export type LogSeverity = "DEBUG" | "INFO" | "WARN" | "ERROR";
-export type LogCategory = "BOOT" | "DB" | "DISCOVERY" | "KALSHI" | "POLYMARKET" | "SCANNER" | "EXECUTION";
+export type LogCategory = "BOOT" | "DB" | "DISCOVERY" | "KALSHI" | "POLYMARKET" | "POLYMARKET_PRICE" | "SCANNER" | "EXECUTION";
 
 export interface LogEntry {
   timestamp: string;

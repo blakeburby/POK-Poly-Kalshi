@@ -18,6 +18,11 @@ Recommended:
 - `MARKET_DISCOVERY_INTERVAL_MS=30000`: REST discovery cadence.
 - `KALSHI_SERIES_TICKER=KXBTC15M`: Kalshi BTC 15-minute series.
 - `POLYMARKET_DISCOVERY_URL=https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&tag_slug=crypto`: Polymarket metadata discovery endpoint.
+- `POLYMARKET_LIVE_DATA_WS_URL=wss://ws-live-data.polymarket.com`: Polymarket live Chainlink price feed used to capture BTC 15-minute `priceToBeat`.
+- `POLYMARKET_PRICE_TO_BEAT_SYMBOL=btc/usd`: live feed symbol filter.
+- `POLYMARKET_DISCOVERY_WINDOW_OFFSETS=-1,0,1,2,3,4,5,6`: 15-minute slug windows to hydrate around the current time.
+- `POLYMARKET_PRICE_CAPTURE_TOLERANCE_MS=5000`: maximum accepted delay after window open for the first Chainlink tick.
+- `POLYMARKET_MISSED_OPEN_BACKFILL=true`: allow exact page metadata backfill for already-open windows.
 
 Optional live Polymarket adapter:
 
@@ -69,6 +74,9 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 ## Operational Notes
 
 - The scanner uses REST only for market discovery. Prices come from Kalshi and Polymarket WebSockets.
+- Polymarket contracts do not enter `books.polymarket` until they have token IDs, expiry, an exact persisted or page-metadata `priceToBeat`, and live CLOB quotes.
+- The worker stores Polymarket opening strikes in `polymarket_price_beats`; this lets restarts resume without approximating from late spot ticks.
+- If Polymarket appears empty on the dashboard, check `Price-To-Beat Diagnostics` for `pending_strike`, `missing_strike`, Chainlink tick age, and skipped/backfill reasons.
 - Every attempted threshold-crossing entry is inserted before execution and then updated with `filled`, `skipped`, or `failed`.
 - If one venue execution adapter is missing in live mode, the executor fails before placing either leg.
 - Re-entry is tracked by pair key and hydrated from filled audit rows on startup.

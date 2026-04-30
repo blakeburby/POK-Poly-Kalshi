@@ -63,6 +63,29 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
         updatedAt: 1_800_000_009_500,
       }],
     },
+    diagnostics: {
+      polymarket: {
+        marketsFound: 1,
+        readyContracts: 1,
+        pendingStrikeCount: 0,
+        missingStrikeCount: 0,
+        invalidMarketCount: 0,
+        lastChainlinkTickAt: 1_800_000_009_900,
+        lastChainlinkTickAgeMs: 100,
+        nextCaptureWindowStartMs: null,
+        skippedReasons: [],
+        markets: [{
+          marketSlug: "btc-updown-15m-1800000000",
+          conditionId: "poly",
+          eventStartMs: 1_800_000_000_000,
+          expiryMs: 1_800_000_900_000,
+          priceToBeat: 1500,
+          strikeSource: "chainlink_ws",
+          status: "ready",
+          reason: "strike hydrated",
+        }],
+      },
+    },
     liveCandidates: [candidate("slow", 0.05, 1_800_000_900_000), candidate("fast", 0.12, 1_800_000_900_000)],
     recentSignals: [],
     logs: [],
@@ -98,6 +121,7 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
 
   const live = renderToStaticMarkup(<DashboardTerminalView dashboardName="POK Terminal" snapshot={snapshot()} streamState="live" />);
   assert.match(live, /Opportunity Blotter/);
+  assert.match(live, /Price-To-Beat Diagnostics/);
   assert.match(live, /SSE LIVE/);
   assert.match(live, /12c/);
 });

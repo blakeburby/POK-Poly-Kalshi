@@ -21,6 +21,11 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
     polymarketDiscoveryUrl: "",
+    polymarketLiveDataWsUrl: "",
+    polymarketPriceToBeatSymbol: "btc/usd",
+    polymarketDiscoveryWindowOffsets: [-1, 0, 1],
+    polymarketPriceCaptureToleranceMs: 5_000,
+    polymarketMissedOpenBackfill: true,
     polymarketOrderEndpoint: "",
     polymarketApiKey: "",
     dashboardApiToken: "secret-token",
@@ -70,6 +75,18 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
     signals: { listRecentSignals: async () => [signal()] },
     getScannerStatus: () => ({ scanning: false, lastScanAt: now - 500, lastCandidateCount: 1 }),
     getDiscoveryState: () => ({ lastDiscoveryAt: now - 1000, lastDiscoveryError: null }),
+    getPolymarketDiagnostics: () => ({
+      marketsFound: 1,
+      readyContracts: 1,
+      pendingStrikeCount: 0,
+      missingStrikeCount: 0,
+      invalidMarketCount: 0,
+      lastChainlinkTickAt: now - 200,
+      lastChainlinkTickAgeMs: 200,
+      nextCaptureWindowStartMs: null,
+      skippedReasons: [],
+      markets: [],
+    }),
     getLogs: () => [{ timestamp: new Date(now).toISOString(), severity: "INFO", category: "SCANNER", message: "ok" }],
   };
 
@@ -78,6 +95,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);
   assert.equal(snapshot.liveCandidates.length, 1);
+  assert.equal(snapshot.diagnostics.polymarket.readyContracts, 1);
   assert.equal(snapshot.recentSignals[0].action, "filled");
   assert.equal(snapshot.logs[0].category, "SCANNER");
 });

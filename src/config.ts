@@ -12,6 +12,11 @@ export interface AppConfig {
   kalshiSeriesTicker: string;
   polymarketWsUrl: string;
   polymarketDiscoveryUrl: string;
+  polymarketLiveDataWsUrl: string;
+  polymarketPriceToBeatSymbol: string;
+  polymarketDiscoveryWindowOffsets: number[];
+  polymarketPriceCaptureToleranceMs: number;
+  polymarketMissedOpenBackfill: boolean;
   polymarketOrderEndpoint: string;
   polymarketApiKey: string;
   dashboardApiToken: string;
@@ -37,6 +42,14 @@ function envBoolean(env: NodeJS.ProcessEnv, key: string, fallback: boolean): boo
   throw new Error(`${key} must be boolean-like`);
 }
 
+function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]): number[] {
+  const raw = envString(env, key);
+  if (!raw) return fallback;
+  const parsed = raw.split(",").map((part) => Number(part.trim()));
+  if (parsed.some((value) => !Number.isFinite(value))) throw new Error(`${key} must be a comma-separated list of numbers`);
+  return parsed;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     port: envNumber(env, "PORT", 8080),
@@ -56,6 +69,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       "POLYMARKET_DISCOVERY_URL",
       "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&tag_slug=crypto",
     ),
+    polymarketLiveDataWsUrl: envString(env, "POLYMARKET_LIVE_DATA_WS_URL", "wss://ws-live-data.polymarket.com"),
+    polymarketPriceToBeatSymbol: envString(env, "POLYMARKET_PRICE_TO_BEAT_SYMBOL", "btc/usd"),
+    polymarketDiscoveryWindowOffsets: envNumberList(env, "POLYMARKET_DISCOVERY_WINDOW_OFFSETS", [-1, 0, 1, 2, 3, 4, 5, 6]),
+    polymarketPriceCaptureToleranceMs: envNumber(env, "POLYMARKET_PRICE_CAPTURE_TOLERANCE_MS", 5_000),
+    polymarketMissedOpenBackfill: envBoolean(env, "POLYMARKET_MISSED_OPEN_BACKFILL", true),
     polymarketOrderEndpoint: envString(env, "POLYMARKET_ORDER_ENDPOINT"),
     polymarketApiKey: envString(env, "POLYMARKET_API_KEY"),
     dashboardApiToken: envString(env, "DASHBOARD_API_TOKEN"),

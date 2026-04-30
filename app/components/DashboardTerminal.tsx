@@ -126,6 +126,67 @@ function OpportunityBlotter({ snapshot }: { snapshot: DashboardSnapshot }) {
   );
 }
 
+function formatAgeMs(ageMs: number | null): string {
+  if (ageMs == null) return "--";
+  if (ageMs < 1000) return `${ageMs}ms`;
+  return `${Math.round(ageMs / 1000)}s`;
+}
+
+function PolymarketDiagnosticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const diagnostics = snapshot.diagnostics.polymarket;
+  const marketRows = diagnostics.markets.slice(0, 6);
+  return (
+    <section className="panel diagnostics-panel">
+      <div className="panel-header">
+        <div>
+          <p className="panel-kicker">polymarket hydration</p>
+          <h2>Price-To-Beat Diagnostics</h2>
+        </div>
+        <StatusPill
+          label={`${diagnostics.readyContracts}/${diagnostics.marketsFound} READY`}
+          state={diagnostics.readyContracts > 0 ? "live" : diagnostics.pendingStrikeCount > 0 ? "warn" : "empty"}
+        />
+      </div>
+      <div className="diagnostic-grid">
+        <div className="diagnostic-chip"><span>Pending</span><strong>{diagnostics.pendingStrikeCount}</strong></div>
+        <div className="diagnostic-chip"><span>Missing</span><strong>{diagnostics.missingStrikeCount}</strong></div>
+        <div className="diagnostic-chip"><span>Chainlink Age</span><strong>{formatAgeMs(diagnostics.lastChainlinkTickAgeMs)}</strong></div>
+        <div className="diagnostic-chip"><span>Next Capture</span><strong>{diagnostics.nextCaptureWindowStartMs ? formatCountdown(diagnostics.nextCaptureWindowStartMs, snapshot.generatedAt) : "--"}</strong></div>
+      </div>
+      {diagnostics.skippedReasons.length > 0 ? (
+        <div className="diagnostic-reasons">
+          {diagnostics.skippedReasons.slice(0, 4).map((reason) => <span key={reason}>{reason}</span>)}
+        </div>
+      ) : null}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Market</th>
+              <th>Status</th>
+              <th>Strike</th>
+              <th>Source</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {marketRows.map((market) => (
+              <tr key={market.marketSlug}>
+                <td>{market.marketSlug}</td>
+                <td>{market.status}</td>
+                <td>{formatDollars(market.priceToBeat)}</td>
+                <td>{market.strikeSource ?? "--"}</td>
+                <td>{market.reason}</td>
+              </tr>
+            ))}
+            {marketRows.length === 0 ? <tr><td colSpan={5} className="empty-cell">No Polymarket BTC 15m markets discovered yet.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function SignalTape({ signals }: { signals: DashboardSignal[] }) {
   return (
     <section className="panel tape-panel">
@@ -226,6 +287,8 @@ export function DashboardTerminalView({
       </section>
 
       {snapshot.discovery.lastDiscoveryError ? <div className="error-banner">Discovery error: {snapshot.discovery.lastDiscoveryError}</div> : null}
+
+      <PolymarketDiagnosticsPanel snapshot={snapshot} />
 
       <section className="bottom-grid">
         <SignalTape signals={snapshot.recentSignals} />

@@ -97,6 +97,32 @@ export interface DashboardLogEntry {
   context?: Record<string, unknown>;
 }
 
+export type PolymarketStrikeStatus = "ready" | "pending_strike" | "missing_strike" | "invalid_market";
+
+export interface PolymarketMarketDiagnostic {
+  marketSlug: string;
+  conditionId: string | null;
+  eventStartMs: number | null;
+  expiryMs: number | null;
+  priceToBeat: number | null;
+  strikeSource: string | null;
+  status: PolymarketStrikeStatus;
+  reason: string;
+}
+
+export interface PolymarketDiagnostics {
+  marketsFound: number;
+  readyContracts: number;
+  pendingStrikeCount: number;
+  missingStrikeCount: number;
+  invalidMarketCount: number;
+  lastChainlinkTickAt: number | null;
+  lastChainlinkTickAgeMs: number | null;
+  nextCaptureWindowStartMs: number | null;
+  skippedReasons: string[];
+  markets: PolymarketMarketDiagnostic[];
+}
+
 export interface DashboardSnapshot {
   generatedAt: number;
   health: {
@@ -119,6 +145,9 @@ export interface DashboardSnapshot {
   books: {
     kalshi: BinaryContract[];
     polymarket: BinaryContract[];
+  };
+  diagnostics: {
+    polymarket: PolymarketDiagnostics;
   };
   liveCandidates: ArbCandidate[];
   recentSignals: DashboardSignal[];

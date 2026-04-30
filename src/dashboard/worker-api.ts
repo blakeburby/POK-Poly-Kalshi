@@ -2,9 +2,10 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AppConfig } from "../config";
 import type { BookStore } from "../books/book-store";
+import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { pairExecutableCandidates } from "../scanner/pairing";
-import type { DashboardLogEntry, DashboardSignal, DashboardSnapshot } from "../types";
+import type { DashboardLogEntry, DashboardSignal, DashboardSnapshot, PolymarketDiagnostics } from "../types";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -21,6 +22,7 @@ export interface DashboardRuntime {
   signals: SignalReader;
   getScannerStatus: () => ScannerStatus;
   getDiscoveryState: () => DashboardDiscoveryState;
+  getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
   getLogs: (limit?: number) => DashboardLogEntry[];
 }
 
@@ -64,6 +66,9 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     discovery: runtime.getDiscoveryState(),
     scanner: runtime.getScannerStatus(),
     books,
+    diagnostics: {
+      polymarket: runtime.getPolymarketDiagnostics?.(now) ?? emptyPolymarketDiagnostics(),
+    },
     liveCandidates,
     recentSignals: await runtime.signals.listRecentSignals(100),
     logs: runtime.getLogs(150),
