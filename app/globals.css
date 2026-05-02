@@ -337,7 +337,7 @@ table {
 }
 
 .blotter-panel table {
-  min-width: 980px;
+  min-width: 1260px;
 }
 
 .book-panel table {
@@ -375,6 +375,13 @@ th {
 
 td {
   color: #d8e1ea;
+}
+
+.payoff-cell {
+  min-width: 270px;
+  padding: 8px;
+  text-align: left;
+  white-space: normal;
 }
 
 tbody tr:hover {
@@ -1336,6 +1343,179 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
+.inline-payoff {
+  border: 1px solid rgba(116, 130, 149, 0.16);
+  background:
+    linear-gradient(135deg, rgba(76, 201, 240, 0.06), transparent 46%),
+    rgba(6, 9, 13, 0.4);
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.inline-payoff-table {
+  min-width: 250px;
+  width: 270px;
+}
+
+.inline-payoff-card {
+  height: 100%;
+}
+
+.inline-payoff-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.inline-payoff-header span,
+.inline-payoff-header strong {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-payoff-header span {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.inline-payoff-header strong {
+  color: var(--cyan);
+  font-size: 10px;
+}
+
+.inline-payoff-svg {
+  border: 1px solid rgba(116, 130, 149, 0.12);
+  background:
+    linear-gradient(rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    rgba(3, 5, 8, 0.46);
+  background-size: 100% 25%, 33.333% 100%, auto;
+  height: 130px;
+  overflow: visible;
+  width: 100%;
+}
+
+.inline-payoff-card .inline-payoff-svg {
+  height: 210px;
+}
+
+.inline-zero-line,
+.inline-strike-marker {
+  vector-effect: non-scaling-stroke;
+}
+
+.inline-zero-line {
+  stroke: rgba(216, 225, 234, 0.4);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.55;
+}
+
+.inline-strike-marker {
+  stroke: rgba(76, 201, 240, 0.66);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.75;
+}
+
+.inline-dead-zone {
+  fill: rgba(255, 95, 101, 0.18);
+  stroke: rgba(255, 95, 101, 0.34);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.55;
+  vector-effect: non-scaling-stroke;
+}
+
+.inline-double-win-zone {
+  fill: rgba(70, 214, 125, 0.12);
+  stroke: rgba(70, 214, 125, 0.32);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.55;
+  vector-effect: non-scaling-stroke;
+}
+
+.inline-leg-line,
+.inline-combined-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.inline-leg-line {
+  stroke-width: 1.25;
+  stroke-dasharray: 3 2;
+}
+
+.inline-combined-line {
+  filter: drop-shadow(0 0 4px rgba(76, 201, 240, 0.5));
+  stroke: var(--cyan);
+  stroke-width: 2.8;
+}
+
+.inline-region-label,
+.inline-strike-label {
+  fill: #cdd8e4;
+  font-family: var(--font-mono);
+  font-size: 2.65px;
+  paint-order: stroke;
+  stroke: rgba(3, 5, 8, 0.9);
+  stroke-width: 0.9px;
+  text-anchor: middle;
+}
+
+.inline-strike-label {
+  fill: var(--cyan);
+  font-size: 2.25px;
+}
+
+.inline-region-label {
+  fill: var(--muted);
+}
+
+.inline-payoff-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.inline-payoff-legend span {
+  border: 1px solid rgba(116, 130, 149, 0.2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  padding: 4px 5px;
+  text-transform: uppercase;
+}
+
+.inline-payoff-legend .legend-yes {
+  border-color: rgba(70, 214, 125, 0.34);
+  color: var(--green);
+}
+
+.inline-payoff-legend .legend-no,
+.inline-payoff-legend .legend-loss {
+  border-color: rgba(255, 95, 101, 0.34);
+  color: var(--red);
+}
+
+.inline-payoff-legend .legend-combined {
+  border-color: rgba(76, 201, 240, 0.42);
+  color: var(--cyan);
+}
+
+.inline-payoff-legend .legend-bonus {
+  border-color: rgba(70, 214, 125, 0.34);
+  color: var(--green);
+}
+
 .tape-list {
   display: grid;
   overflow: auto;
@@ -1373,6 +1553,23 @@ tbody tr:hover {
   gap: 14px;
   outline: none;
   padding: 16px;
+}
+
+.signal-card-main {
+  align-items: stretch;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.42fr);
+}
+
+.signal-card-details {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.signal-inline-payoff {
+  min-width: 0;
 }
 
 .selected-trade-card {
@@ -1533,6 +1730,7 @@ tbody tr:hover {
   .payoff-curve-header,
   .trade-detail-body,
   .trade-payoff-header,
+  .signal-card-main,
   .signal-card-header {
     grid-template-columns: 1fr;
   }
@@ -1587,6 +1785,15 @@ tbody tr:hover {
 
   .signal-card {
     padding: 12px;
+  }
+
+  .inline-payoff-table {
+    min-width: 220px;
+    width: 230px;
+  }
+
+  .inline-payoff-card .inline-payoff-svg {
+    height: 180px;
   }
 
   .signal-time-grid,

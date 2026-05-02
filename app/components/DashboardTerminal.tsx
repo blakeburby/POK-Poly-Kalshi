@@ -556,6 +556,7 @@ function CandidateRow({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const tradeDetail = buildTradeDetailModel("opportunity", candidate);
   return (
     <tr
       aria-label={`Open payoff detail for ${candidate.pairKey}`}
@@ -576,6 +577,9 @@ function CandidateRow({
       <td>{formatCents(candidate.premium)}</td>
       <td className="profit">{formatCents(candidate.guaranteedProfit)}</td>
       <td>{formatCents(candidate.overlapProfit)}</td>
+      <td className="payoff-cell">
+        <InlineTradePayoffGraph trade={tradeDetail} variant="table" />
+      </td>
     </tr>
   );
 }
@@ -613,6 +617,7 @@ function OpportunityBlotter({
               <th>Premium</th>
               <th>Guaranteed</th>
               <th>Overlap</th>
+              <th>Payoff</th>
             </tr>
           </thead>
           <tbody>
@@ -625,7 +630,7 @@ function OpportunityBlotter({
                 selected={selectedTradeKey === tradeKeyFor("opportunity", candidate)}
               />
             ))}
-            {candidates.length === 0 ? <tr><td colSpan={10} className="empty-cell">No threshold-crossing spreads right now.</td></tr> : null}
+            {candidates.length === 0 ? <tr><td colSpan={11} className="empty-cell">No threshold-crossing spreads right now.</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -941,6 +946,57 @@ function TradeDetailLegCard({ leg }: { leg: TradeDetailLeg }) {
   );
 }
 
+export function InlineTradePayoffGraph({ trade, variant = "card" }: { trade: TradeDetailModel; variant?: "table" | "card" }) {
+  const yFor = detailYScale(trade);
+  const zeroY = yFor(0);
+  const legAPath = detailSeriesPath(trade.regions, (region) => region.legAPayout, yFor);
+  const legBPath = detailSeriesPath(trade.regions, (region) => region.legBPayout, yFor);
+  const combinedPath = detailSeriesPath(trade.regions, (region) => region.pnl, yFor);
+  const hasDoubleWin = trade.regions.some((region) => region.isDoubleWin);
+  const hasDeadZone = trade.regions.some((region) => region.isDeadZone);
+  const label = `${trade.title} inline payoff graph`;
+
+  return (
+    <div className={`inline-payoff inline-payoff-${variant}`}>
+      <div className="inline-payoff-header">
+        <span>{trade.structureLabel}</span>
+        <strong>{trade.classification}</strong>
+      </div>
+      <svg className="inline-payoff-svg" viewBox="0 0 100 64" role="img" aria-label={label}>
+        <title>{`${label}: lower ${formatDetailDollars(trade.lowerStrike)}, upper ${formatDetailDollars(trade.upperStrike)}, YES / UP leg, NO / DOWN leg, combined P/L.`}</title>
+        <line className="inline-zero-line" x1="5" x2="95" y1={zeroY} y2={zeroY} />
+        {trade.regions.map((region) => {
+          const { x1, x2, labelX } = regionXRange(region.key);
+          return (
+            <g key={region.key}>
+              {region.isDeadZone ? <rect className="inline-dead-zone" x={x1} y="8" width={x2 - x1} height="42" /> : null}
+              {region.isDoubleWin ? <rect className="inline-double-win-zone" x={x1} y="8" width={x2 - x1} height="42" /> : null}
+              <rect className="detail-region-hitbox" x={x1} y="8" width={x2 - x1} height="42">
+                <title>{`${region.label}: ${region.settlementLabel}. A pays ${region.legAPayout ?? "unknown"}, B pays ${region.legBPayout ?? "unknown"}, combined ${region.combinedPayout ?? "unknown"}, P/L ${formatSignedCents(region.pnl)}.`}</title>
+              </rect>
+              <text className="inline-region-label" x={labelX} y="60">{region.label}</text>
+            </g>
+          );
+        })}
+        <line className="inline-strike-marker" x1="34" x2="34" y1="6" y2="53" />
+        <line className="inline-strike-marker" x1="66" x2="66" y1="6" y2="53" />
+        <text className="inline-strike-label" x="34" y="6">Lower {formatDetailDollars(trade.lowerStrike)}</text>
+        <text className="inline-strike-label" x="66" y="6">Upper {formatDetailDollars(trade.upperStrike)}</text>
+        {legAPath ? <path className={`inline-leg-line ${detailLegClass(trade.legA)}`} d={legAPath} /> : null}
+        {legBPath ? <path className={`inline-leg-line ${detailLegClass(trade.legB)}`} d={legBPath} /> : null}
+        {combinedPath ? <path className="inline-combined-line" d={combinedPath} /> : null}
+      </svg>
+      <div className="inline-payoff-legend">
+        <span className="legend-yes">YES / UP</span>
+        <span className="legend-no">NO / DOWN</span>
+        <span className="legend-combined">Combined P/L</span>
+        {hasDoubleWin ? <span className="legend-bonus">Double-win zone</span> : null}
+        {hasDeadZone ? <span className="legend-loss">Dead-zone</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function DetailedPayoffDiagram({ trade }: { trade: TradeDetailModel }) {
   const yFor = detailYScale(trade);
   const zeroY = yFor(0);
@@ -1172,6 +1228,7 @@ function SignalTape({
       <div className="signal-list">
         {signals.slice(0, 12).map((signal) => {
           const signalKey = tradeKeyFor("signal", signal);
+          const tradeDetail = buildTradeDetailModel("signal", signal);
           const selectSignal = () => onSelectTrade(buildTradeDetailModel("signal", signal));
           return (
             <article
@@ -1184,56 +1241,63 @@ function SignalTape({
               role="button"
               tabIndex={0}
             >
-              <div className="signal-card-header">
-                <div className="signal-title">
-                  <span className={`action action-${signal.action}`}>{signal.action}</span>
-                  <strong>Signal #{signal.id}</strong>
-                  <span>{formatCountdown(signal.expiryMs, now)} to expiry</span>
-                </div>
-                <div className="signal-time-grid">
-                  <div>
-                    <span className="signal-label">Signal time</span>
-                    <time dateTime={signal.createdAt}>{formatTimestamp(signal.createdAt)}</time>
+              <div className="signal-card-main">
+                <div className="signal-card-details">
+                  <div className="signal-card-header">
+                    <div className="signal-title">
+                      <span className={`action action-${signal.action}`}>{signal.action}</span>
+                      <strong>Signal #{signal.id}</strong>
+                      <span>{formatCountdown(signal.expiryMs, now)} to expiry</span>
+                    </div>
+                    <div className="signal-time-grid">
+                      <div>
+                        <span className="signal-label">Signal time</span>
+                        <time dateTime={signal.createdAt}>{formatTimestamp(signal.createdAt)}</time>
+                      </div>
+                      <div>
+                        <span className="signal-label">Finalized time</span>
+                        <time dateTime={signal.updatedAt}>{formatTimestamp(signal.updatedAt)}</time>
+                      </div>
+                      <div>
+                        <span className="signal-label">Latency</span>
+                        <strong>{formatLatency(signal.createdAt, signal.updatedAt)}</strong>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <span className="signal-label">Finalized time</span>
-                    <time dateTime={signal.updatedAt}>{formatTimestamp(signal.updatedAt)}</time>
-                  </div>
-                  <div>
-                    <span className="signal-label">Latency</span>
-                    <strong>{formatLatency(signal.createdAt, signal.updatedAt)}</strong>
-                  </div>
-                </div>
-              </div>
 
-              <div className="signal-metrics">
-                <div><span className="signal-label">Premium</span><strong>{formatCents(signal.premium)}</strong></div>
-                <div><span className="signal-label">Guaranteed</span><strong className="profit">{formatCents(signal.guaranteedProfit)}</strong></div>
-                <div><span className="signal-label">Overlap</span><strong>{formatCents(signal.overlapProfit)}</strong></div>
-                <div><span className="signal-label">Gate</span><strong>{formatCents(signal.threshold)}</strong></div>
-                <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
-              </div>
+                  <div className="signal-metrics">
+                    <div><span className="signal-label">Premium</span><strong>{formatCents(signal.premium)}</strong></div>
+                    <div><span className="signal-label">Guaranteed</span><strong className="profit">{formatCents(signal.guaranteedProfit)}</strong></div>
+                    <div><span className="signal-label">Overlap</span><strong>{formatCents(signal.overlapProfit)}</strong></div>
+                    <div><span className="signal-label">Gate</span><strong>{formatCents(signal.threshold)}</strong></div>
+                    <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
+                  </div>
 
-              {signal.risk ? (
-                <>
-                  <div className="signal-risk-grid">
-                    <div><span className="signal-label">Structure</span><strong>{structureLabel(signal.risk)}</strong></div>
-                    <div><span className="signal-label">Classification</span><strong>{classificationLabel(signal.risk.classification)}</strong></div>
-                    <div><span className="signal-label">Strike Gap</span><strong>{formatDollars(signal.risk.strikeGap)}</strong></div>
-                    <div><span className="signal-label">Gap % Mid</span><strong>{formatRiskPercent(signal.risk.strikeGapPctOfMid)}</strong></div>
+                  {signal.risk ? (
+                    <>
+                      <div className="signal-risk-grid">
+                        <div><span className="signal-label">Structure</span><strong>{structureLabel(signal.risk)}</strong></div>
+                        <div><span className="signal-label">Classification</span><strong>{classificationLabel(signal.risk.classification)}</strong></div>
+                        <div><span className="signal-label">Strike Gap</span><strong>{formatDollars(signal.risk.strikeGap)}</strong></div>
+                        <div><span className="signal-label">Gap % Mid</span><strong>{formatRiskPercent(signal.risk.strikeGapPctOfMid)}</strong></div>
                     <div><span className="signal-label">Loss Window</span><strong>{formatDollars(signal.risk.lossWindowWidth)}</strong></div>
                     <div><span className="signal-label">Loss % Gap</span><strong>{formatRiskPercent(signal.risk.lossWindowPctOfStrikeGap)}</strong></div>
                   </div>
-                  <PayoffCurve risk={signal.risk} compact />
                 </>
               ) : null}
 
-              <div className="signal-leg-grid">
-                <SignalVenueRow signal={signal} venue="kalshi" />
-                <SignalVenueRow signal={signal} venue="polymarket" />
-              </div>
+                  <div className="signal-leg-grid">
+                    <SignalVenueRow signal={signal} venue="kalshi" />
+                    <SignalVenueRow signal={signal} venue="polymarket" />
+                  </div>
 
-              {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
+                  {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
+                </div>
+
+                <aside className="signal-inline-payoff" aria-label={`Inline payoff graph for Signal #${signal.id}`}>
+                  <InlineTradePayoffGraph trade={tradeDetail} variant="card" />
+                </aside>
+              </div>
             </article>
           );
         })}

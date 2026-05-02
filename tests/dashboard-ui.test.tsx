@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   DashboardTerminalView,
+  InlineTradePayoffGraph,
   TradeDetailDrawer,
   buildTradeDetailModel,
   normalizeBinaryPrice,
@@ -234,6 +235,9 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
 
   const live = renderToStaticMarkup(<DashboardTerminalView dashboardName="POK Terminal" snapshot={snapshot()} streamState="live" />);
   assert.match(live, /Opportunity Blotter/);
+  assert.match(live, /<th>Payoff<\/th>/);
+  assert.match(live, /inline-payoff-table/);
+  assert.match(live, /aria-label="Live Opportunity inline payoff graph"/);
   assert.match(live, /Synthetic Strangle Map/);
   assert.match(live, /Long Up Below \+ Long Down Above/);
   assert.match(live, /Long Up Above \+ Long Down Below/);
@@ -244,6 +248,9 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /100.0%/);
   assert.match(live, /Max loss window/);
   assert.match(live, /Payoff Curve/);
+  assert.match(live, /YES \/ UP/);
+  assert.match(live, /NO \/ DOWN/);
+  assert.match(live, /Combined P\/L/);
   assert.match(live, /aria-label="Long Up Below \+ Long Down Above payoff curve"/);
   assert.match(live, /aria-label="Long Up Above \+ Long Down Below payoff curve"/);
   assert.match(live, /payoff-bonus-zone/);
@@ -311,6 +318,9 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
 
   assert.match(markup, /Signal #42/);
   assert.match(markup, /Open payoff detail for Signal #42/);
+  assert.match(markup, /Inline payoff graph for Signal #42/);
+  assert.match(markup, /Signal #42 inline payoff graph/);
+  assert.match(markup, /inline-payoff-card/);
   assert.match(markup, /role="button"/);
   assert.match(markup, /Signal time/);
   assert.match(markup, /Finalized time/);
@@ -332,8 +342,10 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
   assert.match(markup, /Strike Gap/);
   assert.match(markup, /0.13%/);
   assert.match(markup, /Loss Window/);
-  assert.match(markup, /payoff-curve-compact/);
-  assert.match(markup, /Net P\/L by settlement zone/);
+  assert.match(markup, /inline-double-win-zone/);
+  assert.match(markup, /Lower \$1,500.00/);
+  assert.match(markup, /Upper \$1,502.00/);
+  assert.match(markup, /Combined P\/L/);
   assert.match(markup, /payoff-segment-profit/);
   assert.match(markup, /Failure: kalshi order rejected/);
 });
@@ -381,4 +393,33 @@ test("trade detail drawer renders detailed payoff diagram with protected and dea
   assert.match(deadZoneMarkup, /Dead-Zone Risk/);
   assert.match(deadZoneMarkup, /detail-dead-zone/);
   assert.match(deadZoneMarkup, /Dead-zone loss window/);
+});
+
+test("inline trade payoff graph labels protected and dead-zone structures", () => {
+  const protectedMarkup = renderToStaticMarkup(
+    <InlineTradePayoffGraph trade={buildTradeDetailModel("opportunity", candidate("inline-protected", 0.1, 1_800_000_900_000))} variant="table" />,
+  );
+  assert.match(protectedMarkup, /inline-payoff-table/);
+  assert.match(protectedMarkup, /Live Opportunity inline payoff graph/);
+  assert.match(protectedMarkup, /Protected Spread/);
+  assert.match(protectedMarkup, /True Arb/);
+  assert.match(protectedMarkup, /YES \/ UP/);
+  assert.match(protectedMarkup, /NO \/ DOWN/);
+  assert.match(protectedMarkup, /Combined P\/L/);
+  assert.match(protectedMarkup, /Below lower/);
+  assert.match(protectedMarkup, /Between strikes/);
+  assert.match(protectedMarkup, /Above upper/);
+  assert.match(protectedMarkup, /Lower \$1,500.00/);
+  assert.match(protectedMarkup, /Upper \$1,502.00/);
+  assert.match(protectedMarkup, /inline-double-win-zone/);
+  assert.doesNotMatch(protectedMarkup, /inline-dead-zone/);
+
+  const deadZoneMarkup = renderToStaticMarkup(
+    <InlineTradePayoffGraph trade={buildTradeDetailModel("opportunity", probabilisticCandidate())} variant="card" />,
+  );
+  assert.match(deadZoneMarkup, /inline-payoff-card/);
+  assert.match(deadZoneMarkup, /Flipped \/ Dead-Zone/);
+  assert.match(deadZoneMarkup, /Dead-Zone Risk/);
+  assert.match(deadZoneMarkup, /Dead-zone/);
+  assert.match(deadZoneMarkup, /inline-dead-zone/);
 });
