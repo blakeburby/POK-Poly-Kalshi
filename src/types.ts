@@ -28,6 +28,41 @@ export interface ArbLeg {
   tokenId?: string | null;
 }
 
+export type SyntheticStructureType = "long_up_below_down_above" | "long_up_above_down_below";
+export type SyntheticStructureClassification = "true_arbitrage" | "guaranteed_below_threshold" | "probabilistic_bet";
+export type PayoffRegionKey = "below_lower" | "between_strikes" | "above_higher";
+
+export interface SyntheticPayoffRegion {
+  region: PayoffRegionKey;
+  label: string;
+  fromStrike: number | null;
+  toStrike: number | null;
+  width: number | null;
+  payoff: number;
+  profit: number;
+  isMaxLoss: boolean;
+}
+
+export interface SyntheticStructureRisk {
+  structureType: SyntheticStructureType;
+  classification: SyntheticStructureClassification;
+  strikeGap: number;
+  midStrike: number;
+  strikeGapPctOfMid: number;
+  lossWindowWidth: number;
+  lossWindowPctOfStrikeGap: number;
+  lossWindowPctOfMid: number;
+  overlapWindowWidth: number;
+  overlapWindowPctOfStrikeGap: number;
+  premium: number;
+  worstCaseProfit: number;
+  bestCaseProfit: number;
+  guaranteedEdge: number | null;
+  conditionalEdge: number | null;
+  maxLossRegion: SyntheticPayoffRegion | null;
+  payoffProfile: SyntheticPayoffRegion[];
+}
+
 export interface ArbCandidate {
   pairKey: string;
   expiryMs: number;
@@ -41,6 +76,7 @@ export interface ArbCandidate {
   threshold: number;
   executable: boolean;
   reason: string | null;
+  risk?: SyntheticStructureRisk;
 }
 
 export interface ExecutionResult {
@@ -87,6 +123,7 @@ export interface DashboardSignal {
   polymarketFillId: string | null;
   kalshiFillPrice: number | null;
   polymarketFillPrice: number | null;
+  risk?: SyntheticStructureRisk;
 }
 
 export interface DashboardLogEntry {
@@ -95,6 +132,46 @@ export interface DashboardLogEntry {
   category: string;
   message: string;
   context?: Record<string, unknown>;
+}
+
+export type AnalyticsWindow = "hourly" | "daily" | "weekly";
+
+export interface DashboardAnalyticsBucket {
+  startMs: number;
+  endMs: number;
+  label: string;
+  tradeCount: number;
+  netPnl: number;
+  cumulativePnl: number;
+}
+
+export interface DashboardAnalyticsWindow {
+  window: AnalyticsWindow;
+  label: string;
+  generatedAt: number;
+  sinceMs: number;
+  bucketMs: number;
+  filledTrades: number;
+  tradesWon: number;
+  tradesLost: number;
+  breakevenTrades: number;
+  winRate: number;
+  lossRate: number;
+  grossProfit: number;
+  grossLoss: number;
+  netPnl: number;
+  profitFactor: number | null;
+  sharpeRatio: number | null;
+  averagePnl: number | null;
+  bestTradePnl: number | null;
+  worstTradePnl: number | null;
+  buckets: DashboardAnalyticsBucket[];
+}
+
+export interface DashboardAnalytics {
+  hourly: DashboardAnalyticsWindow;
+  daily: DashboardAnalyticsWindow;
+  weekly: DashboardAnalyticsWindow;
 }
 
 export type PolymarketStrikeStatus = "ready" | "pending_strike" | "missing_strike" | "invalid_market";
@@ -150,6 +227,8 @@ export interface DashboardSnapshot {
     polymarket: PolymarketDiagnostics;
   };
   liveCandidates: ArbCandidate[];
+  syntheticStructures?: ArbCandidate[];
   recentSignals: DashboardSignal[];
+  analytics?: DashboardAnalytics;
   logs: DashboardLogEntry[];
 }

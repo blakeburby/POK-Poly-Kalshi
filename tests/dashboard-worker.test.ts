@@ -28,12 +28,17 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketMissedOpenBackfill: true,
     polymarketOrderEndpoint: "",
     polymarketApiKey: "",
+    dryRunSlippageEnabled: true,
+    dryRunKalshiSlippageCents: 1,
+    dryRunPolymarketSlippageCents: 1,
+    dryRunMaxSlippageCents: 3,
+    dryRunSlippageJitterCents: 1,
     dashboardApiToken: "secret-token",
     ...input,
   };
 }
 
-function signal(): DashboardSignal {
+function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
   return {
     id: 7,
     createdAt: "2026-04-29T20:00:00.000Z",
@@ -54,6 +59,7 @@ function signal(): DashboardSignal {
     polymarketFillId: "poly-fill",
     kalshiFillPrice: 0.5,
     polymarketFillPrice: 0.4,
+    ...input,
   };
 }
 
@@ -72,7 +78,14 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   const runtime: DashboardRuntime = {
     config: config(),
     books,
-    signals: { listRecentSignals: async () => [signal()] },
+    signals: {
+      listRecentSignals: async () => [signal()],
+      listFilledSignalsSince: async () => [signal({
+        updatedAt: new Date(now - 1_000).toISOString(),
+        kalshiFillPrice: 0.51,
+        polymarketFillPrice: 0.41,
+      })],
+    },
     getScannerStatus: () => ({ scanning: false, lastScanAt: now - 500, lastCandidateCount: 1 }),
     getDiscoveryState: () => ({ lastDiscoveryAt: now - 1000, lastDiscoveryError: null }),
     getPolymarketDiagnostics: () => ({
@@ -95,8 +108,15 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);
   assert.equal(snapshot.liveCandidates.length, 1);
+  assert.equal(snapshot.syntheticStructures?.length, 2);
+  assert.equal(snapshot.syntheticStructures?.[0].risk?.classification, "true_arbitrage");
+  assert.equal(snapshot.syntheticStructures?.[1].risk?.classification, "probabilistic_bet");
   assert.equal(snapshot.diagnostics.polymarket.readyContracts, 1);
   assert.equal(snapshot.recentSignals[0].action, "filled");
+  assert.equal(snapshot.analytics?.hourly.filledTrades, 1);
+  assert.equal(snapshot.analytics?.hourly.netPnl, 0.08);
+  assert.equal(snapshot.analytics?.daily.window, "daily");
+  assert.equal(snapshot.analytics?.weekly.window, "weekly");
   assert.equal(snapshot.logs[0].category, "SCANNER");
 });
 

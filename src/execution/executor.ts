@@ -8,10 +8,12 @@ export interface ArbExecutor {
   execute(candidate: ArbCandidate): Promise<ExecutionResult>;
 }
 
-function fillPriceForVenue(candidate: ArbCandidate, venue: "kalshi" | "polymarket"): number | null {
-  if (candidate.lower.venue === venue) return candidate.lower.ask;
-  if (candidate.higher.venue === venue) return candidate.higher.ask;
-  return null;
+export interface DryRunSlippageOptions {
+  enabled: boolean;
+  kalshiSlippageCents: number;
+  polymarketSlippageCents: number;
+  maxSlippageCents: number;
+  jitterCents: number;
 }
 
 function legForVenue(candidate: ArbCandidate, venue: "kalshi" | "polymarket"): ArbLeg | null {
@@ -20,15 +22,54 @@ function legForVenue(candidate: ArbCandidate, venue: "kalshi" | "polymarket"): A
   return null;
 }
 
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function roundPrice(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+export class DryRunSlippageModel {
+  constructor(
+    private readonly options: DryRunSlippageOptions,
+    private readonly random: () => number = Math.random,
+  ) {}
+
+  static fromConfig(config: AppConfig, random?: () => number): DryRunSlippageModel {
+    return new DryRunSlippageModel({
+      enabled: config.dryRunSlippageEnabled,
+      kalshiSlippageCents: config.dryRunKalshiSlippageCents,
+      polymarketSlippageCents: config.dryRunPolymarketSlippageCents,
+      maxSlippageCents: config.dryRunMaxSlippageCents,
+      jitterCents: config.dryRunSlippageJitterCents,
+    }, random);
+  }
+
+  fillPrice(leg: ArbLeg | null): number | null {
+    if (!leg) return null;
+    if (!this.options.enabled) return roundPrice(leg.ask);
+
+    const baseCents = leg.venue === "kalshi" ? this.options.kalshiSlippageCents : this.options.polymarketSlippageCents;
+    const jitterCents = Math.max(0, this.options.jitterCents) * clampUnit(this.random());
+    const maxCents = Math.max(0, this.options.maxSlippageCents);
+    const slippageCents = Math.min(maxCents, Math.max(0, baseCents) + jitterCents);
+    return roundPrice(Math.min(1, leg.ask + slippageCents / 100));
+  }
+}
+
 export class DryRunExecutor implements ArbExecutor {
+  constructor(private readonly slippage = DryRunSlippageModel.fromConfig(loadConfig())) {}
+
   async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
     return {
       action: "filled",
       failureReason: null,
       kalshiFillId: `dry-run-kalshi-${Date.now()}`,
       polymarketFillId: `dry-run-polymarket-${Date.now()}`,
-      kalshiFillPrice: fillPriceForVenue(candidate, "kalshi"),
-      polymarketFillPrice: fillPriceForVenue(candidate, "polymarket"),
+      kalshiFillPrice: this.slippage.fillPrice(legForVenue(candidate, "kalshi")),
+      polymarketFillPrice: this.slippage.fillPrice(legForVenue(candidate, "polymarket")),
     };
   }
 }

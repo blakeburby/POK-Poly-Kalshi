@@ -128,8 +128,10 @@ input {
 
 .terminal-shell {
   display: grid;
-  gap: 14px;
-  padding: 16px;
+  gap: 18px;
+  margin: 0 auto;
+  padding: clamp(16px, 2vw, 28px);
+  width: min(100%, 1920px);
 }
 
 .loading-shell {
@@ -210,8 +212,8 @@ input {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
 }
 
 .metric {
@@ -241,10 +243,15 @@ input {
   gap: 14px;
 }
 
-.bottom-grid {
+.market-books-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(440px, 1fr));
+  gap: 18px;
+}
+
+.activity-grid {
+  display: grid;
+  gap: 18px;
 }
 
 .diagnostic-grid {
@@ -300,12 +307,25 @@ input {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border-bottom: 1px solid rgba(116, 130, 149, 0.2);
 }
 
 .table-wrap {
   overflow: auto;
+}
+
+.blotter-panel .table-wrap {
+  max-height: 430px;
+}
+
+.book-panel .table-wrap {
+  max-height: 360px;
+}
+
+.diagnostics-panel .table-wrap,
+.tape-panel .tape-list {
+  max-height: 260px;
 }
 
 table {
@@ -316,10 +336,22 @@ table {
   white-space: nowrap;
 }
 
+.blotter-panel table {
+  min-width: 980px;
+}
+
+.book-panel table {
+  min-width: 640px;
+}
+
+.diagnostics-panel table {
+  min-width: 760px;
+}
+
 th,
 td {
   border-bottom: 1px solid rgba(116, 130, 149, 0.14);
-  padding: 9px 10px;
+  padding: 10px 12px;
   text-align: right;
 }
 
@@ -358,15 +390,526 @@ tbody tr:hover {
   font-weight: 900;
 }
 
+.loss {
+  color: var(--red);
+  font-weight: 900;
+}
+
 .empty-cell {
   color: var(--muted);
   padding: 18px;
   text-align: center;
 }
 
+.analytics-panel {
+  overflow: hidden;
+}
+
+.analytics-header {
+  align-items: flex-start;
+}
+
+.analytics-subtitle {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+  max-width: 760px;
+}
+
+.window-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.window-tabs button {
+  border: 1px solid rgba(116, 130, 149, 0.28);
+  background: rgba(3, 5, 8, 0.38);
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 8px 10px;
+  text-transform: uppercase;
+}
+
+.window-tabs button.active,
+.window-tabs button:hover {
+  border-color: rgba(76, 201, 240, 0.52);
+  color: var(--cyan);
+  box-shadow: inset 0 -2px 0 rgba(76, 201, 240, 0.42);
+}
+
+.analytics-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.analytics-card,
+.pnl-chart-card {
+  border: 1px solid rgba(116, 130, 149, 0.16);
+  background:
+    linear-gradient(135deg, rgba(70, 214, 125, 0.07), transparent 42%),
+    rgba(3, 5, 8, 0.34);
+}
+
+.analytics-card {
+  display: grid;
+  gap: 8px;
+  min-height: 84px;
+  padding: 12px;
+}
+
+.analytics-card.primary {
+  border-color: rgba(76, 201, 240, 0.3);
+  box-shadow: inset 3px 0 0 rgba(76, 201, 240, 0.48);
+}
+
+.analytics-card span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.analytics-card strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 22px;
+}
+
+.pnl-chart-card {
+  display: grid;
+  gap: 14px;
+  min-height: 240px;
+  padding: 14px;
+}
+
+.pnl-chart-header {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(120px, 0.24fr));
+  gap: 12px;
+}
+
+.pnl-chart-header > div {
+  border: 1px solid rgba(116, 130, 149, 0.12);
+  background: rgba(6, 9, 13, 0.38);
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.pnl-chart-header strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pnl-chart {
+  display: grid;
+  gap: 8px;
+}
+
+.pnl-chart svg {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  background:
+    linear-gradient(rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    rgba(6, 9, 13, 0.54);
+  background-size: 100% 25%, 8.333% 100%, auto;
+  height: 180px;
+  width: 100%;
+}
+
+.pnl-zero {
+  stroke: rgba(116, 130, 149, 0.42);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.5;
+}
+
+.pnl-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.pnl-line-positive {
+  stroke: var(--green);
+}
+
+.pnl-line-negative {
+  stroke: var(--red);
+}
+
+.pnl-dot {
+  vector-effect: non-scaling-stroke;
+}
+
+.pnl-dot-positive {
+  fill: var(--green);
+}
+
+.pnl-dot-negative {
+  fill: var(--red);
+}
+
+.pnl-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.pnl-chart-axis span:nth-child(2) {
+  color: var(--text);
+}
+
+.analytics-empty {
+  align-items: center;
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  color: var(--muted);
+  display: grid;
+  font-family: var(--font-mono);
+  min-height: 120px;
+  padding: 18px;
+  text-align: center;
+}
+
+.structure-list {
+  display: grid;
+  gap: 14px;
+  max-height: 760px;
+  overflow: auto;
+  padding: 14px;
+}
+
+.structure-card {
+  border: 1px solid rgba(116, 130, 149, 0.18);
+  background:
+    linear-gradient(135deg, rgba(255, 189, 82, 0.08), transparent 38%),
+    rgba(3, 5, 8, 0.36);
+  box-shadow: inset 3px 0 0 rgba(255, 189, 82, 0.38);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.structure-card-header {
+  align-items: start;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(120px, 0.18fr);
+  gap: 12px;
+}
+
+.structure-card h3 {
+  color: var(--text);
+  font-size: 18px;
+  letter-spacing: -0.03em;
+  margin: 8px 0 4px;
+}
+
+.structure-card p {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin: 0;
+}
+
+.classification {
+  border: 1px solid rgba(116, 130, 149, 0.3);
+  border-radius: 999px;
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  padding: 5px 8px;
+}
+
+.classification-true_arbitrage {
+  border-color: rgba(70, 214, 125, 0.45);
+  color: var(--green);
+}
+
+.classification-guaranteed_below_threshold {
+  border-color: rgba(255, 189, 82, 0.45);
+  color: var(--amber);
+}
+
+.classification-probabilistic_bet {
+  border-color: rgba(255, 95, 101, 0.45);
+  color: var(--red);
+}
+
+.structure-premium,
+.structure-leg-grid > div,
+.structure-metrics > div,
+.signal-risk-grid > div {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  background: rgba(6, 9, 13, 0.42);
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.structure-premium span,
+.structure-leg-grid span,
+.structure-metrics span,
+.signal-risk-grid span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.structure-premium strong,
+.structure-leg-grid strong,
+.structure-metrics strong,
+.signal-risk-grid strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.structure-premium strong {
+  font-size: 24px;
+}
+
+.structure-leg-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.structure-leg-grid strong {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.structure-metrics,
+.signal-risk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.payoff-curve-card {
+  border: 1px solid rgba(116, 130, 149, 0.16);
+  background:
+    linear-gradient(135deg, rgba(76, 201, 240, 0.06), transparent 40%),
+    rgba(3, 5, 8, 0.36);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.payoff-curve-compact {
+  background:
+    linear-gradient(135deg, rgba(70, 214, 125, 0.06), transparent 42%),
+    rgba(3, 5, 8, 0.28);
+}
+
+.payoff-curve-header {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, 0.3fr);
+  gap: 10px;
+}
+
+.payoff-curve-header > div {
+  border: 1px solid rgba(116, 130, 149, 0.12);
+  background: rgba(6, 9, 13, 0.42);
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.payoff-curve-header strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payoff-curve-svg {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  background:
+    linear-gradient(rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    rgba(6, 9, 13, 0.54);
+  background-size: 100% 25%, 33.333% 100%, auto;
+  height: 220px;
+  overflow: visible;
+  width: 100%;
+}
+
+.payoff-curve-compact .payoff-curve-svg {
+  height: 150px;
+}
+
+.payoff-zero-line {
+  stroke: rgba(116, 130, 149, 0.48);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.55;
+  vector-effect: non-scaling-stroke;
+}
+
+.payoff-loss-zone {
+  fill: rgba(255, 95, 101, 0.16);
+  stroke: rgba(255, 95, 101, 0.34);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.payoff-bonus-zone {
+  fill: rgba(255, 189, 82, 0.14);
+  stroke: rgba(255, 189, 82, 0.32);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.payoff-step-connector {
+  fill: none;
+  stroke: rgba(216, 225, 234, 0.34);
+  stroke-dasharray: 1 2;
+  stroke-linecap: round;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.payoff-segment {
+  stroke-linecap: round;
+  stroke-width: 2.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.payoff-segment-profit {
+  stroke: var(--green);
+}
+
+.payoff-segment-loss {
+  stroke: var(--red);
+}
+
+.payoff-segment-flat {
+  stroke: var(--amber);
+}
+
+.payoff-strike-marker,
+.payoff-mid-marker {
+  stroke-width: 0.7;
+  vector-effect: non-scaling-stroke;
+}
+
+.payoff-strike-marker {
+  stroke: rgba(76, 201, 240, 0.6);
+}
+
+.payoff-mid-marker {
+  stroke: rgba(255, 189, 82, 0.5);
+  stroke-dasharray: 2 2;
+}
+
+.payoff-profit-label,
+.payoff-zone-label,
+.payoff-strike-label,
+.payoff-mid-label {
+  fill: #cdd8e4;
+  font-family: var(--font-mono);
+  font-size: 2.8px;
+  paint-order: stroke;
+  stroke: rgba(3, 5, 8, 0.88);
+  stroke-width: 0.9px;
+  text-anchor: middle;
+}
+
+.payoff-profit-label {
+  fill: var(--text);
+  font-weight: 900;
+}
+
+.payoff-zone-label,
+.payoff-strike-label {
+  fill: var(--muted);
+}
+
+.payoff-strike-label {
+  font-size: 2.35px;
+}
+
+.payoff-strike-label-right {
+  text-anchor: middle;
+}
+
+.payoff-mid-label {
+  fill: var(--amber);
+  font-size: 2.45px;
+}
+
+.payoff-curve-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.payoff-curve-legend span {
+  border: 1px solid rgba(116, 130, 149, 0.2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+
+.payoff-curve-legend .legend-profit {
+  border-color: rgba(70, 214, 125, 0.32);
+  color: var(--green);
+}
+
+.payoff-curve-legend .legend-bonus {
+  border-color: rgba(255, 189, 82, 0.32);
+  color: var(--amber);
+}
+
+.payoff-curve-legend .legend-loss {
+  border-color: rgba(255, 95, 101, 0.32);
+  color: var(--red);
+}
+
 .tape-list {
   display: grid;
-  max-height: 320px;
   overflow: auto;
 }
 
@@ -380,6 +923,133 @@ tbody tr:hover {
   font-family: var(--font-mono);
   font-size: 12px;
   padding: 10px 14px;
+}
+
+.signal-list {
+  display: grid;
+  gap: 14px;
+  max-height: 680px;
+  overflow: auto;
+  padding: 14px;
+}
+
+.signal-card {
+  border: 1px solid rgba(116, 130, 149, 0.18);
+  background:
+    linear-gradient(135deg, rgba(76, 201, 240, 0.08), transparent 44%),
+    rgba(3, 5, 8, 0.36);
+  box-shadow: inset 3px 0 0 rgba(76, 201, 240, 0.42);
+  color: #d8e1ea;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.signal-card-header {
+  align-items: start;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(480px, 1.28fr);
+  gap: 12px;
+}
+
+.signal-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.signal-title strong {
+  color: var(--text);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.signal-title span:last-child {
+  color: var(--muted);
+}
+
+.signal-time-grid,
+.signal-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+}
+
+.signal-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.signal-time-grid > div,
+.signal-metrics > div {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  background: rgba(6, 9, 13, 0.42);
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.signal-label {
+  color: var(--muted);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.signal-time-grid time,
+.signal-time-grid strong,
+.signal-metrics strong,
+.signal-leg-row strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-leg-grid {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  display: grid;
+}
+
+.signal-leg-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 112px 64px 116px 70px 70px 70px minmax(130px, 1fr) minmax(150px, 1.15fr);
+  padding: 11px 10px;
+}
+
+.signal-leg-row + .signal-leg-row {
+  border-top: 1px solid rgba(116, 130, 149, 0.14);
+}
+
+.signal-id-cell strong {
+  color: #c5d0dc;
+}
+
+.slippage-good {
+  color: var(--green) !important;
+}
+
+.slippage-bad {
+  color: var(--red) !important;
+}
+
+.signal-failure {
+  border: 1px solid rgba(255, 95, 101, 0.28);
+  background: rgba(255, 95, 101, 0.08);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px;
 }
 
 .action-filled {
@@ -405,7 +1075,7 @@ tbody tr:hover {
 
 @media (max-width: 1180px) {
   .terminal-grid,
-  .bottom-grid,
+  .market-books-grid,
   .diagnostic-grid,
   .metric-grid {
     grid-template-columns: 1fr;
@@ -418,5 +1088,62 @@ tbody tr:hover {
 
   .status-rail {
     justify-content: flex-start;
+  }
+
+  .signal-time-grid,
+  .structure-card-header,
+  .structure-leg-grid,
+  .payoff-curve-header,
+  .signal-card-header {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-header,
+  .pnl-chart-header {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .window-tabs {
+    justify-content: flex-start;
+  }
+
+  .signal-leg-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .terminal-shell {
+    padding: 12px;
+  }
+
+  .terminal-header,
+  .panel-header {
+    padding: 14px;
+  }
+
+  .metric strong,
+  .big-number {
+    font-size: 22px;
+  }
+
+  .signal-card {
+    padding: 12px;
+  }
+
+  .signal-time-grid,
+  .pnl-chart-header,
+  .structure-card-header,
+  .structure-leg-grid,
+  .payoff-curve-header,
+  .signal-metrics,
+  .signal-risk-grid,
+  .signal-leg-row {
+    grid-template-columns: 1fr;
   }
 }

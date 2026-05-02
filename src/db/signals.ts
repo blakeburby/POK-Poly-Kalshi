@@ -1,5 +1,6 @@
 import type { ArbLeg, DashboardSignal, LegDirection, SignalAction, SignalInsert, SignalUpdate, Venue } from "../types";
 import type { FilledAttempt } from "../scanner/reentry";
+import { buildSyntheticStructureRisk } from "../scanner/payoff";
 
 export interface QueryResult<T> {
   rows: T[];
@@ -60,6 +61,9 @@ function legFromRow(row: DashboardSignalRow, side: "lower" | "higher"): ArbLeg {
 }
 
 function signalFromRow(row: DashboardSignalRow): DashboardSignal {
+  const lower = legFromRow(row, "lower");
+  const higher = legFromRow(row, "higher");
+  const threshold = Number(row.threshold);
   return {
     id: Number(row.id),
     createdAt: dateString(row.created_at),
@@ -68,18 +72,19 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     expiryMs: Number(row.expiry_ms),
     kalshiContractId: row.kalshi_contract_id,
     polymarketContractId: row.polymarket_contract_id,
-    lower: legFromRow(row, "lower"),
-    higher: legFromRow(row, "higher"),
+    lower,
+    higher,
     premium: Number(row.premium),
     guaranteedProfit: Number(row.guaranteed_profit),
     overlapProfit: Number(row.overlap_profit),
-    threshold: Number(row.threshold),
+    threshold,
     action: row.action as SignalAction,
     failureReason: row.failure_reason,
     kalshiFillId: row.kalshi_fill_id,
     polymarketFillId: row.polymarket_fill_id,
     kalshiFillPrice: numberFrom(row.kalshi_fill_price),
     polymarketFillPrice: numberFrom(row.polymarket_fill_price),
+    risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
 
@@ -175,6 +180,24 @@ export class SignalStore {
       ORDER BY created_at DESC
       LIMIT $1
     `, [limit]);
+    return result.rows.map(signalFromRow);
+  }
+
+  async listFilledSignalsSince(sinceMs: number, limit = 10_000): Promise<DashboardSignal[]> {
+    const result = await this.db.query<DashboardSignalRow>(`
+      SELECT
+        id, created_at, updated_at, pair_key, expiry_ms,
+        kalshi_contract_id, polymarket_contract_id,
+        lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
+        higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
+        premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
+        kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price
+      FROM cross_venue_arb_signals
+      WHERE action = 'filled'
+        AND updated_at >= to_timestamp($1 / 1000.0)
+      ORDER BY updated_at ASC
+      LIMIT $2
+    `, [sinceMs, limit]);
     return result.rows.map(signalFromRow);
   }
 }

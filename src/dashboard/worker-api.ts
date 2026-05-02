@@ -1,14 +1,16 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AppConfig } from "../config";
+import { buildDashboardAnalytics, oldestAnalyticsSinceMs } from "../analytics/performance";
 import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
-import { pairExecutableCandidates } from "../scanner/pairing";
-import type { DashboardLogEntry, DashboardSignal, DashboardSnapshot, PolymarketDiagnostics } from "../types";
+import { enumerateCandidates } from "../scanner/pairing";
+import type { ArbCandidate, DashboardLogEntry, DashboardSignal, DashboardSnapshot, PolymarketDiagnostics } from "../types";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
+  listFilledSignalsSince?(sinceMs: number, limit?: number): Promise<DashboardSignal[]>;
 }
 
 export interface DashboardDiscoveryState {
@@ -47,11 +49,26 @@ export function dashboardRequestAuthorized(headers: IncomingMessage["headers"], 
 
 export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now()): Promise<DashboardSnapshot> {
   const books = runtime.books.snapshot();
-  const liveCandidates = pairExecutableCandidates(
+  const [recentSignals, analyticsSignals] = await Promise.all([
+    runtime.signals.listRecentSignals(100),
+    runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]),
+  ]);
+  const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
     runtime.books.getKalshiContracts(runtime.config.staleBookMs, now),
     runtime.config.minProfitDollars,
-  ).sort((left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs);
+  );
+  const liveCandidates = paired.executable.sort((left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs);
+  const syntheticStructures = [...paired.executable, ...paired.rejected].sort((left, right) => {
+    const classificationRank = (candidate: ArbCandidate): number => {
+      if (candidate.risk?.classification === "true_arbitrage") return 0;
+      if (candidate.risk?.classification === "guaranteed_below_threshold") return 1;
+      return 2;
+    };
+    return classificationRank(left) - classificationRank(right)
+      || (right.risk?.worstCaseProfit ?? right.guaranteedProfit) - (left.risk?.worstCaseProfit ?? left.guaranteedProfit)
+      || left.expiryMs - right.expiryMs;
+  });
 
   return {
     generatedAt: now,
@@ -70,7 +87,9 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       polymarket: runtime.getPolymarketDiagnostics?.(now) ?? emptyPolymarketDiagnostics(),
     },
     liveCandidates,
-    recentSignals: await runtime.signals.listRecentSignals(100),
+    syntheticStructures,
+    recentSignals,
+    analytics: buildDashboardAnalytics(analyticsSignals, now),
     logs: runtime.getLogs(150),
   };
 }

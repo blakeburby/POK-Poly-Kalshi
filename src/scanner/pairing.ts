@@ -42,6 +42,15 @@ export function pairExecutableCandidates(
   return enumerateCandidates(polymarketContracts, kalshiContracts, threshold).executable;
 }
 
+export function enumerateSyntheticStructures(
+  polymarketContracts: BinaryContract[],
+  kalshiContracts: BinaryContract[],
+  threshold: number,
+): ArbCandidate[] {
+  const { executable, rejected } = enumerateCandidates(polymarketContracts, kalshiContracts, threshold);
+  return [...executable, ...rejected];
+}
+
 export function enumerateExecutableCandidates(input: {
   polymarket: BinaryContract[];
   kalshi: BinaryContract[];

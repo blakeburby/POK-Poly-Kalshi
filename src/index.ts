@@ -8,7 +8,7 @@ import { PolymarketPriceBeatStore } from "./db/polymarket-price-beats";
 import { SignalStore } from "./db/signals";
 import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
-import { DryRunExecutor, LiveExecutor } from "./execution/executor";
+import { DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
 import { KalshiTickerClient } from "./kalshi/client";
 import { getRecentLogs, logEvent } from "./logger";
 import { PolymarketBookClient } from "./polymarket/client";
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   reentry.hydrate(await signals.loadRecentFilledAttempts());
-  const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor();
+  const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config));
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,

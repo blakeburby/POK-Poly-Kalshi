@@ -19,6 +19,11 @@ export interface AppConfig {
   polymarketMissedOpenBackfill: boolean;
   polymarketOrderEndpoint: string;
   polymarketApiKey: string;
+  dryRunSlippageEnabled: boolean;
+  dryRunKalshiSlippageCents: number;
+  dryRunPolymarketSlippageCents: number;
+  dryRunMaxSlippageCents: number;
+  dryRunSlippageJitterCents: number;
   dashboardApiToken: string;
 }
 
@@ -76,6 +81,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketMissedOpenBackfill: envBoolean(env, "POLYMARKET_MISSED_OPEN_BACKFILL", true),
     polymarketOrderEndpoint: envString(env, "POLYMARKET_ORDER_ENDPOINT"),
     polymarketApiKey: envString(env, "POLYMARKET_API_KEY"),
+    dryRunSlippageEnabled: envBoolean(env, "DRY_RUN_SLIPPAGE_ENABLED", true),
+    dryRunKalshiSlippageCents: envNumber(env, "DRY_RUN_KALSHI_SLIPPAGE_CENTS", 1),
+    dryRunPolymarketSlippageCents: envNumber(env, "DRY_RUN_POLYMARKET_SLIPPAGE_CENTS", 1),
+    dryRunMaxSlippageCents: envNumber(env, "DRY_RUN_MAX_SLIPPAGE_CENTS", 3),
+    dryRunSlippageJitterCents: envNumber(env, "DRY_RUN_SLIPPAGE_JITTER_CENTS", 1),
     dashboardApiToken: envString(env, "DASHBOARD_API_TOKEN"),
   };
 }

@@ -48,6 +48,11 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketMissedOpenBackfill: true,
     polymarketOrderEndpoint: "",
     polymarketApiKey: "",
+    dryRunSlippageEnabled: true,
+    dryRunKalshiSlippageCents: 1,
+    dryRunPolymarketSlippageCents: 1,
+    dryRunMaxSlippageCents: 3,
+    dryRunSlippageJitterCents: 1,
     dashboardApiToken: "secret-token",
     ...input,
   };
