@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DashboardTerminalView } from "../app/components/DashboardTerminal";
+import {
+  DashboardTerminalView,
+  TradeDetailDrawer,
+  buildTradeDetailModel,
+  normalizeBinaryPrice,
+} from "../app/components/DashboardTerminal";
 import { isValidDashboardSession, verifyDashboardPassword } from "../app/lib/dashboard-session";
 import { isContractStale, sortCandidatesForBlotter } from "../app/lib/dashboard-view-model";
 import { buildDashboardAnalytics } from "../src/analytics/performance";
@@ -172,6 +177,54 @@ test("opportunity blotter sorts by guaranteed profit and stale helper flags old 
   assert.equal(isContractStale(stale.books.polymarket[0], stale), true);
 });
 
+test("trade detail model normalizes protected and dead-zone payoff geometry", () => {
+  assert.equal(normalizeBinaryPrice(40), 0.4);
+  assert.equal(normalizeBinaryPrice(0.4), 0.4);
+
+  const protectedDetail = buildTradeDetailModel("opportunity", candidate("protected", 0.1, 1_800_000_900_000));
+  assert.equal(protectedDetail.structureLabel, "Protected Spread");
+  assert.equal(protectedDetail.classification, "True Arb");
+  assert.equal(protectedDetail.lowerStrike, 1500);
+  assert.equal(protectedDetail.upperStrike, 1502);
+  assert.equal(protectedDetail.strikeGap, 2);
+  assert.equal(protectedDetail.strikeGapPct, 2 / 1500);
+  assert.equal(protectedDetail.totalAskPremium, 0.9);
+  assert.equal(protectedDetail.minimumPayout, 1);
+  assert.equal(protectedDetail.worstCasePnl, 0.1);
+  assert.equal(protectedDetail.bestCasePnl, 1.1);
+  assert.equal(protectedDetail.lossWindowWidth, 0);
+  assert.equal(protectedDetail.regions.find((region) => region.key === "between_strikes")?.isDoubleWin, true);
+
+  const deadZoneDetail = buildTradeDetailModel("opportunity", probabilisticCandidate());
+  assert.equal(deadZoneDetail.structureLabel, "Flipped / Dead-Zone");
+  assert.equal(deadZoneDetail.classification, "Dead-Zone Risk");
+  assert.equal(deadZoneDetail.minimumPayout, 0);
+  assert.equal(deadZoneDetail.worstCasePnl, -0.9);
+  assert.equal(deadZoneDetail.lossWindowWidth, 2);
+  assert.equal(deadZoneDetail.regions.find((region) => region.key === "between_strikes")?.isDeadZone, true);
+});
+
+test("trade detail model uses signal fills for pnl and falls back when fields are missing", () => {
+  const filledDetail = buildTradeDetailModel("signal", signal());
+  assert.equal(filledDetail.premiumSource, "fill");
+  assert.equal(filledDetail.totalAskPremium, 0.9);
+  assert.equal(filledDetail.premiumForPnl, 0.92);
+  assert.equal(filledDetail.worstCasePnl, 0.08);
+  assert.equal(filledDetail.legA.fillPrice, 0.41);
+  assert.equal(filledDetail.legB.fillPrice, 0.51);
+
+  const missingDetail = buildTradeDetailModel("signal", {
+    ...signal(),
+    lower: { ...signal().lower, strike: Number.NaN, ask: Number.NaN },
+    kalshiFillPrice: null,
+    polymarketFillPrice: null,
+  });
+  assert.equal(missingDetail.lowerStrike, null);
+  assert.equal(missingDetail.totalAskPremium, null);
+  assert.equal(missingDetail.premiumSource, "unknown");
+  assert.equal(missingDetail.regions[0].pnl, null);
+});
+
 test("dashboard renders loading, degraded, and live terminal states", () => {
   const loading = renderToStaticMarkup(<DashboardTerminalView dashboardName="POK Terminal" snapshot={null} streamState="connecting" />);
   assert.match(loading, /Connecting to live terminal/);
@@ -216,6 +269,8 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /aria-label="Signal and runtime activity"/);
   assert.match(live, /Signal Tape/);
   assert.match(live, /Event Tape/);
+  assert.match(live, /role="button"/);
+  assert.match(live, /Open payoff detail for/);
   assert.match(live, /SSE LIVE/);
   assert.match(live, /12c/);
 });
@@ -255,6 +310,8 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
   );
 
   assert.match(markup, /Signal #42/);
+  assert.match(markup, /Open payoff detail for Signal #42/);
+  assert.match(markup, /role="button"/);
   assert.match(markup, /Signal time/);
   assert.match(markup, /Finalized time/);
   assert.match(markup, /dateTime="2026-04-29T20:00:00.000Z"/);
@@ -279,4 +336,49 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
   assert.match(markup, /Net P\/L by settlement zone/);
   assert.match(markup, /payoff-segment-profit/);
   assert.match(markup, /Failure: kalshi order rejected/);
+});
+
+test("trade detail drawer renders detailed payoff diagram with protected and dead-zone shading", () => {
+  const protectedMarkup = renderToStaticMarkup(
+    <TradeDetailDrawer
+      now={1_800_000_010_000}
+      onClose={() => undefined}
+      trade={buildTradeDetailModel("signal", signal())}
+    />,
+  );
+
+  assert.match(protectedMarkup, /Selected trade payoff detail/);
+  assert.match(protectedMarkup, /Signal #42/);
+  assert.match(protectedMarkup, /Protected Spread/);
+  assert.match(protectedMarkup, /True Arb/);
+  assert.match(protectedMarkup, /Contract A/);
+  assert.match(protectedMarkup, /YES \/ UP/);
+  assert.match(protectedMarkup, /NO \/ DOWN/);
+  assert.match(protectedMarkup, /Gap % Lower/);
+  assert.match(protectedMarkup, /P\/L Premium/);
+  assert.match(protectedMarkup, /Minimum Payout/);
+  assert.match(protectedMarkup, /Worst-case P\/L/);
+  assert.match(protectedMarkup, /Guaranteed Edge/);
+  assert.match(protectedMarkup, /detail-leg-yes/);
+  assert.match(protectedMarkup, /detail-leg-no/);
+  assert.match(protectedMarkup, /detail-combined-line/);
+  assert.match(protectedMarkup, /detail-strike-marker/);
+  assert.match(protectedMarkup, /detail-double-win-zone/);
+  assert.doesNotMatch(protectedMarkup, /detail-dead-zone/);
+  assert.match(protectedMarkup, /Below lower/);
+  assert.match(protectedMarkup, /Between strikes/);
+  assert.match(protectedMarkup, /Above upper/);
+
+  const deadZoneMarkup = renderToStaticMarkup(
+    <TradeDetailDrawer
+      now={1_800_000_010_000}
+      onClose={() => undefined}
+      trade={buildTradeDetailModel("opportunity", probabilisticCandidate())}
+    />,
+  );
+
+  assert.match(deadZoneMarkup, /Flipped \/ Dead-Zone/);
+  assert.match(deadZoneMarkup, /Dead-Zone Risk/);
+  assert.match(deadZoneMarkup, /detail-dead-zone/);
+  assert.match(deadZoneMarkup, /Dead-zone loss window/);
 });
