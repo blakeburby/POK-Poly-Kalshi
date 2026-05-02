@@ -5,8 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   DashboardTerminalView,
   InlineTradePayoffGraph,
+  RiskMeter,
   TradeDetailDrawer,
   buildTradeDetailModel,
+  buildTradeRiskIntelligence,
   normalizeBinaryPrice,
 } from "../app/components/DashboardTerminal";
 import { isValidDashboardSession, verifyDashboardPassword } from "../app/lib/dashboard-session";
@@ -226,6 +228,22 @@ test("trade detail model uses signal fills for pnl and falls back when fields ar
   assert.equal(missingDetail.regions[0].pnl, null);
 });
 
+test("risk intelligence scores protected spreads lower than dead-zone structures", () => {
+  const protectedRisk = buildTradeRiskIntelligence(buildTradeDetailModel("opportunity", candidate("risk-protected", 0.1, 1_800_000_900_000)));
+  const deadZoneRisk = buildTradeRiskIntelligence(buildTradeDetailModel("opportunity", probabilisticCandidate()));
+
+  assert.equal(protectedRisk.riskLevel, "medium");
+  assert.equal(protectedRisk.liquidityDepth, "ready");
+  assert.equal(protectedRisk.volatilitySensitivity, "low");
+  assert.ok(protectedRisk.confidence > deadZoneRisk.confidence);
+  assert.ok(deadZoneRisk.riskScore > protectedRisk.riskScore);
+
+  const meter = renderToStaticMarkup(<RiskMeter insights={{ estimatedEdge: 0.12, activeOpportunities: 2, feedLatencyMs: 500, lastScanAgeMs: 200, riskScore: 72, riskLevel: "high", staleBooks: 0 }} />);
+  assert.match(meter, /Risk Meter/);
+  assert.match(meter, /HIGH/);
+  assert.match(meter, /72\/100/);
+});
+
 test("dashboard renders loading, degraded, and live terminal states", () => {
   const loading = renderToStaticMarkup(<DashboardTerminalView dashboardName="POK Terminal" snapshot={null} streamState="connecting" />);
   assert.match(loading, /Connecting to live terminal/);
@@ -235,6 +253,30 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
 
   const live = renderToStaticMarkup(<DashboardTerminalView dashboardName="POK Terminal" snapshot={snapshot()} streamState="live" />);
   assert.match(live, /Opportunity Blotter/);
+  assert.match(live, /Estimated Edge/);
+  assert.match(live, /Active Opportunities/);
+  assert.match(live, /Feed Latency/);
+  assert.match(live, /Risk Meter/);
+  assert.match(live, /Risk View/);
+  assert.match(live, /Raw View/);
+  assert.match(live, /Execution View/);
+  assert.match(live, /Decision Engine/);
+  assert.match(live, /Is there edge\?/);
+  assert.match(live, /Where is risk\?/);
+  assert.match(live, /What should I do\?/);
+  assert.match(live, /Vol Sensitivity/);
+  assert.match(live, /Spread \/ Profit/);
+  assert.match(live, /Execution Risk/);
+  assert.match(live, /Liquidity Proxy/);
+  assert.match(live, /Latency Distribution/);
+  assert.match(live, /Y-axis: Latency \(s\)/);
+  assert.match(live, /Structure Type/);
+  assert.match(live, /Strikes Lower \/ Upper/);
+  assert.match(live, /Total Premium/);
+  assert.match(live, /Guaranteed Profit/);
+  assert.match(live, /Max Profit/);
+  assert.match(live, /Risk Score/);
+  assert.match(live, /Confidence/);
   assert.match(live, /<th>Payoff<\/th>/);
   assert.match(live, /inline-payoff-table/);
   assert.match(live, /aria-label="Live Opportunity inline payoff graph"/);
@@ -372,6 +414,15 @@ test("trade detail drawer renders detailed payoff diagram with protected and dea
   assert.match(protectedMarkup, /Minimum Payout/);
   assert.match(protectedMarkup, /Worst-case P\/L/);
   assert.match(protectedMarkup, /Guaranteed Edge/);
+  assert.match(protectedMarkup, /Risk Score/);
+  assert.match(protectedMarkup, /Confidence/);
+  assert.match(protectedMarkup, /Spread \/ Profit/);
+  assert.match(protectedMarkup, /Vol Sensitivity/);
+  assert.match(protectedMarkup, /3D Risk Mapping/);
+  assert.match(protectedMarkup, /X: price · Y: time · Z: P&amp;L/);
+  assert.match(protectedMarkup, /3D risk surface/);
+  assert.match(protectedMarkup, /Y-axis: time to expiry/);
+  assert.match(protectedMarkup, /Z-axis: P&amp;L/);
   assert.match(protectedMarkup, /detail-leg-yes/);
   assert.match(protectedMarkup, /detail-leg-no/);
   assert.match(protectedMarkup, /detail-combined-line/);

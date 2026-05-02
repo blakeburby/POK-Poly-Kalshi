@@ -1,7 +1,19 @@
 "use client";
 
 import React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import * as THREE from "three";
 import type {
   AnalyticsWindow,
   ArbCandidate,
@@ -25,12 +37,14 @@ import {
   staleContractCount,
   venueStatus,
 } from "../lib/dashboard-view-model";
+import type { RiskSurface3DProps } from "./dashboard/risk-surface-types";
 
 type StreamState = "connecting" | "live" | "degraded";
 type SignalVenue = "kalshi" | "polymarket";
 type TradeDetailSource = "opportunity" | "signal";
 type TradeDetailDirection = ArbCandidate["lower"]["direction"];
 type TradeDetailRegionKey = "below_lower" | "between_strikes" | "above_higher";
+type DashboardViewMode = "risk" | "raw" | "execution";
 
 interface TradeDetailLeg {
   label: "A" | "B";
@@ -84,6 +98,27 @@ export interface TradeDetailModel {
   regions: TradeDetailRegion[];
 }
 
+export interface TradeRiskIntelligence {
+  riskScore: number;
+  confidence: number;
+  riskLevel: "low" | "medium" | "high";
+  volatilitySensitivity: "low" | "medium" | "high";
+  spreadProfitRatio: number | null;
+  executionRisk: number;
+  liquidityDepth: "ready" | "thin" | "unknown";
+  stalePenalty: number;
+}
+
+export interface DashboardInsightModel {
+  estimatedEdge: number | null;
+  activeOpportunities: number;
+  feedLatencyMs: number | null;
+  lastScanAgeMs: number | null;
+  riskScore: number;
+  riskLevel: "low" | "medium" | "high";
+  staleBooks: number;
+}
+
 function VenueBadge({ venue }: { venue: string }) {
   return <span className={`venue venue-${venue}`}>{venue.toUpperCase()}</span>;
 }
@@ -120,6 +155,22 @@ function formatSharpe(value: number | null): string {
 
 function safeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatScore(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "--";
+  return `${Math.round(value)}`;
+}
+
+function formatCompactTime(ageMs: number | null): string {
+  if (ageMs == null || !Number.isFinite(ageMs)) return "--";
+  if (ageMs < 1000) return `${Math.round(ageMs)}ms`;
+  if (ageMs < 60_000) return `${Math.round(ageMs / 1000)}s`;
+  return `${Math.round(ageMs / 60_000)}m`;
 }
 
 export function normalizeBinaryPrice(value: number | null | undefined): number | null {
@@ -367,47 +418,471 @@ function findTradeDetailByKey(snapshot: DashboardSnapshot, key: string): TradeDe
   return null;
 }
 
+function riskLevelForScore(score: number): TradeRiskIntelligence["riskLevel"] {
+  if (score >= 70) return "high";
+  if (score >= 38) return "medium";
+  return "low";
+}
+
+export function buildTradeRiskIntelligence(trade: TradeDetailModel, stalePenalty = 0): TradeRiskIntelligence {
+  const threshold = trade.threshold || 0.05;
+  const guaranteedEdge = trade.guaranteedEdge ?? trade.worstCasePnl ?? 0;
+  const edgeMultiple = guaranteedEdge / Math.max(0.01, threshold);
+  const gapPct = trade.strikeGapPct ?? 0;
+  const deadZonePenalty = trade.regions.some((region) => region.isDeadZone) ? 45 : 0;
+  const premiumPressure = trade.premiumForPnl == null ? 16 : clamp((trade.premiumForPnl - 0.88) * 120, 0, 18);
+  const gapPenalty = clamp(gapPct * 20_000, 0, 24);
+  const edgeCredit = clamp(edgeMultiple * 18, -18, 30);
+  const riskScore = Math.round(clamp(42 + deadZonePenalty + premiumPressure + gapPenalty + stalePenalty - edgeCredit, 0, 100));
+  const confidence = Math.round(clamp(48 + edgeCredit - deadZonePenalty * 0.55 - gapPenalty * 0.7 - stalePenalty * 0.8, 0, 100));
+  const spreadProfitRatio = trade.strikeGap != null && trade.bestCasePnl != null && Math.abs(trade.bestCasePnl) > 0.0001
+    ? trade.strikeGap / Math.abs(trade.bestCasePnl)
+    : null;
+  const volatilitySensitivity = gapPct > 0.004 ? "high" : gapPct > 0.0015 ? "medium" : "low";
+  const liquidityDepth = trade.legA.ask != null && trade.legB.ask != null ? "ready" : trade.legA.ask != null || trade.legB.ask != null ? "thin" : "unknown";
+
+  return {
+    riskScore,
+    confidence,
+    riskLevel: riskLevelForScore(riskScore),
+    volatilitySensitivity,
+    spreadProfitRatio,
+    executionRisk: Math.round(clamp(riskScore * 0.7 + premiumPressure + stalePenalty, 0, 100)),
+    liquidityDepth,
+    stalePenalty,
+  };
+}
+
+function buildDashboardInsights(snapshot: DashboardSnapshot): DashboardInsightModel {
+  const books = [...snapshot.books.kalshi, ...snapshot.books.polymarket];
+  const feedLatencyMs = books.length > 0 ? Math.max(...books.map((book) => Math.max(0, snapshot.generatedAt - book.updatedAt))) : null;
+  const estimatedEdge = snapshot.liveCandidates.length > 0 ? Math.max(...snapshot.liveCandidates.map((candidate) => candidate.guaranteedProfit)) : null;
+  const lastScanAgeMs = snapshot.scanner.lastScanAt ? Math.max(0, snapshot.generatedAt - snapshot.scanner.lastScanAt) : null;
+  const staleBooks = staleContractCount(snapshot);
+  const sampleRiskScores = snapshot.liveCandidates.slice(0, 12).map((candidate) => buildTradeRiskIntelligence(buildTradeDetailModel("opportunity", candidate), staleBooks > 0 ? 10 : 0).riskScore);
+  const riskScore = sampleRiskScores.length > 0 ? Math.max(...sampleRiskScores) : staleBooks > 0 ? 48 : 18;
+
+  return {
+    estimatedEdge,
+    activeOpportunities: snapshot.liveCandidates.length,
+    feedLatencyMs,
+    lastScanAgeMs,
+    riskScore,
+    riskLevel: riskLevelForScore(riskScore),
+    staleBooks,
+  };
+}
+
+function riskSurfacePropsForTrade(trade: TradeDetailModel): RiskSurface3DProps {
+  return {
+    title: trade.title,
+    lowerStrike: trade.lowerStrike,
+    upperStrike: trade.upperStrike,
+    premium: trade.premiumForPnl,
+    worstCasePnl: trade.worstCasePnl,
+    bestCasePnl: trade.bestCasePnl,
+    guaranteedEdge: trade.guaranteedEdge,
+    regions: trade.regions.map((region) => ({
+      key: region.key,
+      label: region.label,
+      pnl: region.pnl,
+      isDeadZone: region.isDeadZone,
+      isDoubleWin: region.isDoubleWin,
+    })),
+  };
+}
+
 function handleTradeSelectKey(event: React.KeyboardEvent, onSelect: () => void) {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
   onSelect();
 }
 
-function PnlGraph({ analytics }: { analytics: DashboardAnalyticsWindow }) {
-  const values = analytics.buckets.map((bucket) => bucket.cumulativePnl);
-  const minValue = Math.min(0, ...values);
-  const maxValue = Math.max(0, ...values);
-  const range = Math.max(0.01, maxValue - minValue);
-  const points = analytics.buckets.map((bucket, index) => {
-    const x = analytics.buckets.length <= 1 ? 50 : (index / (analytics.buckets.length - 1)) * 100;
-    const y = 44 - ((bucket.cumulativePnl - minValue) / range) * 36;
-    return { x, y, bucket };
-  });
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
-  const zeroY = 44 - ((0 - minValue) / range) * 36;
+export function PnLChart({ analytics }: { analytics: DashboardAnalyticsWindow }) {
+  const data = analytics.buckets.map((bucket) => ({
+    label: bucket.label,
+    cumulativePnl: bucket.cumulativePnl,
+    netPnl: bucket.netPnl,
+  }));
 
   return (
     <div className="pnl-chart" aria-label="Estimated Guaranteed PnL graph">
-      <svg viewBox="0 0 100 52" preserveAspectRatio="none" role="img">
-        <title>Estimated Guaranteed PnL Graph</title>
-        <line className="pnl-zero" x1="0" x2="100" y1={zeroY} y2={zeroY} />
-        <path className={analytics.netPnl >= 0 ? "pnl-line pnl-line-positive" : "pnl-line pnl-line-negative"} d={path || "M 0 26 L 100 26"} />
-        {points.map((point) => (
-          <circle
-            className={point.bucket.netPnl >= 0 ? "pnl-dot pnl-dot-positive" : "pnl-dot pnl-dot-negative"}
-            cx={point.x}
-            cy={point.y}
-            key={point.bucket.startMs}
-            r="1.15"
-          />
-        ))}
-      </svg>
+      <span className="sr-only">Estimated Guaranteed PnL Graph. Y-axis: Estimated PnL dollars. X-axis: selected analytics window buckets.</span>
+      <AreaChart accessibilityLayer data={data} height={220} margin={{ top: 12, right: 20, bottom: 8, left: 12 }} width={820}>
+        <defs>
+          <linearGradient id="pnlGradient" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#46d67d" stopOpacity={0.34} />
+            <stop offset="100%" stopColor="#46d67d" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke="rgba(116, 130, 149, 0.16)" strokeDasharray="3 3" />
+        <XAxis dataKey="label" minTickGap={18} stroke="#748295" tick={{ fill: "#748295", fontSize: 11 }} tickLine={false} />
+        <YAxis
+          label={{ value: "Y-axis: Estimated PnL ($)", angle: -90, position: "insideLeft", fill: "#91a0b5", fontSize: 11 }}
+          stroke="#748295"
+          tick={{ fill: "#748295", fontSize: 11 }}
+          tickFormatter={(value) => `$${Number(value).toFixed(2)}`}
+          tickLine={false}
+        />
+        <Tooltip
+          contentStyle={{ background: "#071018", border: "1px solid rgba(116, 130, 149, 0.32)", color: "#e6edf3" }}
+          formatter={(value) => [`$${Number(value).toFixed(4)}`, "Cumulative estimated PnL"]}
+          labelFormatter={(label) => `Bucket ${label}`}
+        />
+        <Area dataKey="cumulativePnl" fill="url(#pnlGradient)" isAnimationActive={false} name="Estimated Guaranteed PnL" stroke={analytics.netPnl >= 0 ? "#46d67d" : "#ff5f65"} strokeWidth={2.4} type="monotone" />
+      </AreaChart>
       <div className="pnl-chart-axis">
         <span>{analytics.buckets[0]?.label ?? "--"}</span>
         <span>{formatSignedCents(analytics.netPnl)}</span>
         <span>{analytics.buckets.at(-1)?.label ?? "--"}</span>
       </div>
     </div>
+  );
+}
+
+function RiskSurface3DFallback({ reason = "WebGL surface unavailable" }: { reason?: string }) {
+  return (
+    <div className="risk-surface-fallback" role="img" aria-label="3D risk surface fallback">
+      <strong>3D Risk Surface</strong>
+      <span>{reason}</span>
+      <div className="risk-surface-fallback-axis">
+        <span>X-axis: BTC settlement price</span>
+        <span>Y-axis: time to expiry</span>
+        <span>Z-axis: P&L</span>
+      </div>
+    </div>
+  );
+}
+
+export function RiskSurface3D(props: RiskSurface3DProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hasData = props.lowerStrike != null && props.upperStrike != null && props.regions.some((region) => region.pnl != null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !hasData || props.lowerStrike == null || props.upperStrike == null) return;
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, canvas });
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, 1.8, 0.1, 100);
+    const group = new THREE.Group();
+    const strikeGap = Math.max(1, props.upperStrike - props.lowerStrike);
+    const minPrice = props.lowerStrike - strikeGap;
+    const maxPrice = props.upperStrike + strikeGap;
+    const pnls = props.regions.map((region) => region.pnl).filter((pnl): pnl is number => pnl != null && Number.isFinite(pnl));
+    const minPnl = Math.min(0, ...pnls);
+    const maxPnl = Math.max(0.01, ...pnls);
+    const vertices: number[] = [];
+    const colors: number[] = [];
+    const indices: number[] = [];
+    const xSegments = 36;
+    const ySegments = 14;
+    const red = new THREE.Color("#ff5f65");
+    const amber = new THREE.Color("#ffbd52");
+    const green = new THREE.Color("#46d67d");
+    const pnlForPrice = (price: number) => {
+      const below = props.regions.find((region) => region.key === "below_lower")?.pnl ?? 0;
+      const between = props.regions.find((region) => region.key === "between_strikes")?.pnl ?? 0;
+      const above = props.regions.find((region) => region.key === "above_higher")?.pnl ?? 0;
+      if (price < props.lowerStrike!) return below;
+      if (price < props.upperStrike!) return between;
+      return above;
+    };
+    const colorForPnl = (pnl: number) => {
+      if (pnl < 0) return red.clone().lerp(amber, clamp((pnl - minPnl) / Math.max(0.0001, 0 - minPnl), 0, 1));
+      return amber.clone().lerp(green, clamp(pnl / Math.max(0.0001, maxPnl), 0, 1));
+    };
+
+    for (let yIndex = 0; yIndex <= ySegments; yIndex += 1) {
+      const time = yIndex / ySegments;
+      for (let xIndex = 0; xIndex <= xSegments; xIndex += 1) {
+        const priceRatio = xIndex / xSegments;
+        const price = minPrice + priceRatio * (maxPrice - minPrice);
+        const pnl = pnlForPrice(price);
+        const x = (priceRatio - 0.5) * 5.8;
+        const y = (time - 0.5) * 3.2;
+        const z = ((pnl - minPnl) / Math.max(0.01, maxPnl - minPnl)) * 2.2 - 1.1;
+        vertices.push(x, y, z);
+        const color = colorForPnl(pnl);
+        colors.push(color.r, color.g, color.b);
+      }
+    }
+
+    for (let yIndex = 0; yIndex < ySegments; yIndex += 1) {
+      for (let xIndex = 0; xIndex < xSegments; xIndex += 1) {
+        const row = xSegments + 1;
+        const a = yIndex * row + xIndex;
+        const b = a + 1;
+        const c = a + row;
+        const d = c + 1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    const surface = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      metalness: 0.12,
+      roughness: 0.55,
+      side: THREE.DoubleSide,
+      vertexColors: true,
+    }));
+    surface.rotation.x = -0.55;
+    group.add(surface);
+    group.add(new THREE.GridHelper(6, 12, "#345166", "#1b3141"));
+    scene.add(group);
+    scene.add(new THREE.AmbientLight("#d8e5f0", 0.74));
+    const light = new THREE.DirectionalLight("#ffffff", 1.15);
+    light.position.set(2.4, -3, 4);
+    scene.add(light);
+    camera.position.set(4.3, -5.1, 3.6);
+    camera.lookAt(0, 0, 0);
+
+    let width = 640;
+    let height = 340;
+    let animationFrame = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let zoom = 1;
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(320, Math.floor(rect.width || 640));
+      height = Math.max(260, Math.floor(rect.height || 340));
+      renderer.setPixelRatio(Math.min(1.75, window.devicePixelRatio || 1));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    };
+    const render = () => {
+      if (!dragging) group.rotation.z += 0.0016;
+      camera.position.set(4.3 * zoom, -5.1 * zoom, 3.6 * zoom);
+      camera.lookAt(0, 0, 0);
+      renderer.render(scene, camera);
+      animationFrame = window.requestAnimationFrame(render);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      dragging = true;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      canvas.setPointerCapture(event.pointerId);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!dragging) return;
+      group.rotation.z += (event.clientX - lastX) * 0.008;
+      group.rotation.x += (event.clientY - lastY) * 0.004;
+      lastX = event.clientX;
+      lastY = event.clientY;
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      dragging = false;
+      canvas.releasePointerCapture(event.pointerId);
+    };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoom = clamp(zoom + event.deltaY * 0.0012, 0.62, 1.45);
+    };
+    resize();
+    render();
+    window.addEventListener("resize", resize);
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", resize);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("wheel", onWheel);
+      geometry.dispose();
+      renderer.dispose();
+    };
+  }, [hasData, props.lowerStrike, props.regions, props.upperStrike]);
+
+  if (!hasData) return <RiskSurface3DFallback reason="Insufficient strikes or P&L data to render the risk surface." />;
+  return (
+    <div className="risk-surface-shell risk-surface-css" role="img" aria-label={`${props.title} 3D risk surface. X-axis: BTC settlement price. Y-axis: time to expiry. Z-axis: P&L.`}>
+      <canvas className="risk-surface-canvas" ref={canvasRef} />
+      <div className="risk-surface-plane">
+        {props.regions.map((region, index) => {
+          const pnl = region.pnl ?? 0;
+          const maxMagnitude = Math.max(0.01, ...props.regions.map((item) => Math.abs(item.pnl ?? 0)));
+          const height = 28 + clamp(Math.abs(pnl) / maxMagnitude, 0, 1) * 74;
+          return (
+            <div
+              className={`risk-surface-column ${pnl >= 0 ? "risk-surface-profit" : "risk-surface-loss"} ${region.isDoubleWin ? "risk-surface-double" : ""} ${region.isDeadZone ? "risk-surface-dead" : ""}`}
+              key={region.key}
+              style={{ height: `${height}px`, transform: `translateX(${index * 64 - 64}px) translateY(${pnl >= 0 ? -height / 5 : height / 8}px)` }}
+            >
+              <span>{region.label}</span>
+              <strong>{formatSignedCents(region.pnl)}</strong>
+            </div>
+          );
+        })}
+      </div>
+      <div className="risk-surface-overlay" aria-hidden="true">
+        <span>X-axis: BTC settlement price</span>
+        <span>Y-axis: time to expiry</span>
+        <span>Z-axis: P&L</span>
+      </div>
+      <div className="risk-surface-axis-labels">
+        <span>Lower strike {formatDetailDollars(props.lowerStrike)}</span>
+        <span>Upper strike {formatDetailDollars(props.upperStrike)}</span>
+      </div>
+    </div>
+  );
+}
+
+export function RiskMeter({ insights }: { insights: DashboardInsightModel }) {
+  return (
+    <div className={`risk-meter risk-meter-${insights.riskLevel}`} aria-label={`Risk meter ${insights.riskLevel}`}>
+      <div className="risk-meter-header">
+        <span>Risk Meter</span>
+        <strong>{insights.riskLevel.toUpperCase()}</strong>
+      </div>
+      <div className="risk-meter-track">
+        <span style={{ width: `${insights.riskScore}%` }} />
+      </div>
+      <div className="risk-meter-footer">
+        <span>Exposure score</span>
+        <strong>{insights.riskScore}/100</strong>
+      </div>
+    </div>
+  );
+}
+
+function GlobalStateBar({
+  dashboardName,
+  snapshot,
+  streamState,
+  viewMode,
+  onViewModeChange,
+}: {
+  dashboardName: string;
+  snapshot: DashboardSnapshot;
+  streamState: StreamState;
+  viewMode: DashboardViewMode;
+  onViewModeChange: (mode: DashboardViewMode) => void;
+}) {
+  const insights = buildDashboardInsights(snapshot);
+  const mode = snapshot.health.liveTrading ? "LIVE" : "DRY-RUN";
+  const viewModes: DashboardViewMode[] = ["risk", "raw", "execution"];
+
+  return (
+    <header className="institutional-topbar">
+      <div className="topbar-brand">
+        <p className="panel-kicker">cross-venue binary arb</p>
+        <h1>{dashboardName}</h1>
+        <span>Kalshi + Polymarket BTC 15m</span>
+      </div>
+
+      <div className="topbar-kpis">
+        <div className="hero-kpi">
+          <span>Estimated Edge</span>
+          <strong className={(insights.estimatedEdge ?? 0) >= snapshot.health.minProfitDollars ? "profit" : ""}>{formatSignedCents(insights.estimatedEdge)}</strong>
+        </div>
+        <div className="topbar-kpi"><span>Active Opportunities</span><strong>{insights.activeOpportunities}</strong></div>
+        <div className="topbar-kpi"><span>Feed Latency</span><strong>{formatCompactTime(insights.feedLatencyMs)}</strong></div>
+        <div className="topbar-kpi"><span>Last Scan</span><strong>{formatCompactTime(insights.lastScanAgeMs)}</strong></div>
+      </div>
+
+      <div className="topbar-state">
+        <div className="status-rail">
+          <StatusPill label={streamState === "live" ? "SSE LIVE" : "SSE DEGRADED"} state={streamState === "live" ? "live" : "warn"} />
+          <StatusPill label={snapshot.health.arbEnabled ? "STRATEGY ON" : "STRATEGY OFF"} state={snapshot.health.arbEnabled ? "live" : "off"} />
+          <StatusPill label={mode} state={snapshot.health.liveTrading ? "warn" : "live"} />
+          <StatusPill label={insights.staleBooks > 0 ? `${insights.staleBooks} STALE BOOKS` : "BOOKS FRESH"} state={insights.staleBooks > 0 ? "stale" : "live"} />
+        </div>
+        <RiskMeter insights={insights} />
+        <div className="view-mode-tabs" role="tablist" aria-label="Dashboard view mode">
+          {viewModes.map((modeName) => (
+            <button
+              aria-selected={viewMode === modeName}
+              className={viewMode === modeName ? "active" : ""}
+              key={modeName}
+              onClick={() => onViewModeChange(modeName)}
+              role="tab"
+              type="button"
+            >
+              {modeName === "risk" ? "Risk View" : modeName === "raw" ? "Raw View" : "Execution View"}
+            </button>
+          ))}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: DashboardSnapshot; selectedTrade: TradeDetailModel | null }) {
+  const insights = buildDashboardInsights(snapshot);
+  const focusTrade = selectedTrade ?? (snapshot.liveCandidates[0] ? buildTradeDetailModel("opportunity", sortCandidatesForBlotter(snapshot.liveCandidates)[0]) : null);
+  const tradeRisk = focusTrade ? buildTradeRiskIntelligence(focusTrade, insights.staleBooks > 0 ? 10 : 0) : null;
+  const latencyData = [...snapshot.books.kalshi, ...snapshot.books.polymarket].slice(0, 12).map((book) => ({
+    name: `${book.venue.slice(0, 1).toUpperCase()} ${Math.round(book.strike)}`,
+    age: Math.max(0, Math.round((snapshot.generatedAt - book.updatedAt) / 1000)),
+  }));
+  const opportunityFrequency = snapshot.scanner.lastCandidateCount;
+
+  return (
+    <section className="panel risk-intelligence-panel">
+      <div className="panel-header">
+        <div>
+          <p className="panel-kicker">risk intelligence</p>
+          <h2>Decision Engine</h2>
+        </div>
+        <StatusPill label={tradeRisk ? `${tradeRisk.confidence}% CONF` : "WAITING"} state={tradeRisk && tradeRisk.confidence >= 65 ? "live" : tradeRisk ? "warn" : "empty"} />
+      </div>
+
+      <div className="risk-intelligence-body">
+        <div className="risk-question-grid">
+          <div><span>Is there edge?</span><strong>{formatSignedCents(insights.estimatedEdge)}</strong><small>Best guaranteed edge in live blotter</small></div>
+          <div><span>Where is risk?</span><strong>{focusTrade?.lossWindowWidth && focusTrade.lossWindowWidth > 0 ? "Dead-zone" : "Execution"}</strong><small>{focusTrade ? `${focusTrade.structureLabel}` : "No selected trade"}</small></div>
+          <div><span>What should I do?</span><strong>{focusTrade?.classification === "True Arb" ? "Monitor / dry-run fill" : "Observe only"}</strong><small>UI is read-only; no controls exposed</small></div>
+        </div>
+
+        <div className="risk-factor-grid">
+          <div><span>Vol Sensitivity</span><strong>{tradeRisk?.volatilitySensitivity.toUpperCase() ?? "--"}</strong></div>
+          <div><span>Spread / Profit</span><strong>{tradeRisk?.spreadProfitRatio == null ? "--" : `${tradeRisk.spreadProfitRatio.toFixed(2)}x`}</strong></div>
+          <div><span>Execution Risk</span><strong>{formatScore(tradeRisk?.executionRisk ?? null)}/100</strong></div>
+          <div><span>Liquidity Proxy</span><strong>{tradeRisk?.liquidityDepth.toUpperCase() ?? "UNKNOWN"}</strong></div>
+          <div><span>Opportunity Freq</span><strong>{opportunityFrequency}</strong></div>
+          <div><span>Book Staleness</span><strong>{insights.staleBooks}</strong></div>
+        </div>
+
+        <div className="latency-chart-card">
+          <div>
+            <span className="signal-label">Latency Distribution</span>
+            <strong>Book age by venue/strike</strong>
+          </div>
+          {latencyData.length > 0 ? (
+            <div className="latency-bars" role="img" aria-label="Latency distribution. Y-axis: Latency seconds. X-axis: venue strike.">
+              <span className="sr-only">Y-axis: Latency (s). X-axis: venue / strike.</span>
+              <BarChart accessibilityLayer data={latencyData} height={150} margin={{ top: 8, right: 8, bottom: 8, left: 0 }} width={360}>
+                <CartesianGrid stroke="rgba(116, 130, 149, 0.14)" strokeDasharray="3 3" />
+                <XAxis dataKey="name" stroke="#748295" tick={{ fill: "#748295", fontSize: 10 }} tickLine={false} />
+                <YAxis
+                  label={{ value: "Y-axis: Latency (s)", angle: -90, position: "insideLeft", fill: "#91a0b5", fontSize: 10 }}
+                  stroke="#748295"
+                  tick={{ fill: "#748295", fontSize: 10 }}
+                  tickLine={false}
+                />
+                <Tooltip contentStyle={{ background: "#071018", border: "1px solid rgba(116, 130, 149, 0.32)", color: "#e6edf3" }} formatter={(value) => [`${value}s`, "Book age"]} />
+                <Bar dataKey="age" fill="#4cc9f0" isAnimationActive={false} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </div>
+          ) : (
+            <div className="analytics-empty">No book latency data yet.</div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -489,7 +964,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           {noTrades ? (
             <div className="analytics-empty">No filled trades in the selected {current.label.toLowerCase()} window yet.</div>
           ) : (
-            <PnlGraph analytics={current} />
+            <PnLChart analytics={current} />
           )}
         </div>
       </div>
@@ -550,13 +1025,17 @@ function CandidateRow({
   now,
   selected,
   onSelect,
+  onPreview,
 }: {
   candidate: ArbCandidate;
   now: number;
   selected: boolean;
   onSelect: () => void;
+  onPreview: () => void;
 }) {
   const tradeDetail = buildTradeDetailModel("opportunity", candidate);
+  const risk = buildTradeRiskIntelligence(tradeDetail);
+  const structureClass = tradeDetail.structureLabel === "Protected Spread" ? "protected-spread" : tradeDetail.structureLabel === "Flipped / Dead-Zone" ? "flipped-dead-zone" : "synthetic";
   return (
     <tr
       aria-label={`Open payoff detail for ${candidate.pairKey}`}
@@ -564,19 +1043,20 @@ function CandidateRow({
       className={selected ? "clickable-row selected-trade-row" : "clickable-row"}
       onClick={onSelect}
       onKeyDown={(event) => handleTradeSelectKey(event, onSelect)}
+      onMouseEnter={onPreview}
       role="button"
       tabIndex={0}
     >
       <td>{formatCountdown(candidate.expiryMs, now)}</td>
-      <td><VenueBadge venue={candidate.lower.venue} /> {candidate.lower.direction.toUpperCase()}</td>
-      <td>{formatDollars(candidate.lower.strike)}</td>
-      <td>{formatCents(candidate.lower.ask)}</td>
-      <td><VenueBadge venue={candidate.higher.venue} /> {candidate.higher.direction.toUpperCase()}</td>
-      <td>{formatDollars(candidate.higher.strike)}</td>
-      <td>{formatCents(candidate.higher.ask)}</td>
+      <td><span className={`structure-chip structure-${structureClass}`}>{tradeDetail.structureLabel}</span></td>
+      <td>{formatDollars(candidate.lower.strike)} / {formatDollars(candidate.higher.strike)}</td>
+      <td><VenueBadge venue={candidate.lower.venue} /> {candidate.lower.direction.toUpperCase()} @ {formatCents(candidate.lower.ask)}</td>
+      <td><VenueBadge venue={candidate.higher.venue} /> {candidate.higher.direction.toUpperCase()} @ {formatCents(candidate.higher.ask)}</td>
       <td>{formatCents(candidate.premium)}</td>
       <td className="profit">{formatCents(candidate.guaranteedProfit)}</td>
       <td>{formatCents(candidate.overlapProfit)}</td>
+      <td><span className={`score-pill score-${risk.riskLevel}`}>{risk.riskScore}</span></td>
+      <td>{risk.confidence}%</td>
       <td className="payoff-cell">
         <InlineTradePayoffGraph trade={tradeDetail} variant="table" />
       </td>
@@ -595,11 +1075,12 @@ function OpportunityBlotter({
 }) {
   const candidates = sortCandidatesForBlotter(snapshot.liveCandidates);
   return (
-    <section className="panel blotter-panel">
+    <section className="panel blotter-panel opportunity-table-panel">
       <div className="panel-header">
         <div>
-          <p className="panel-kicker">live structural edge</p>
+          <p className="panel-kicker">primary decision table</p>
           <h2>Opportunity Blotter</h2>
+          <p className="panel-subtitle">Rows answer edge, risk, confidence, and the synthetic payoff shape before you click.</p>
         </div>
         <span className="big-number">{candidates.length}</span>
       </div>
@@ -608,15 +1089,15 @@ function OpportunityBlotter({
           <thead>
             <tr>
               <th>Expiry</th>
+              <th>Structure Type</th>
+              <th>Strikes Lower / Upper</th>
               <th>Lower Leg</th>
-              <th>Lower Strike</th>
-              <th>Ask</th>
               <th>Higher Leg</th>
-              <th>Higher Strike</th>
-              <th>Ask</th>
-              <th>Premium</th>
-              <th>Guaranteed</th>
-              <th>Overlap</th>
+              <th>Total Premium</th>
+              <th>Guaranteed Profit</th>
+              <th>Max Profit</th>
+              <th>Risk Score</th>
+              <th>Confidence</th>
               <th>Payoff</th>
             </tr>
           </thead>
@@ -627,6 +1108,7 @@ function OpportunityBlotter({
                 key={candidate.pairKey}
                 now={snapshot.generatedAt}
                 onSelect={() => onSelectTrade(buildTradeDetailModel("opportunity", candidate))}
+                onPreview={() => onSelectTrade(buildTradeDetailModel("opportunity", candidate))}
                 selected={selectedTradeKey === tradeKeyFor("opportunity", candidate)}
               />
             ))}
@@ -1110,9 +1592,17 @@ export function TradeDetailDrawer({
   if (!trade) return null;
   const expiry = trade.expiryMs == null ? "unknown" : `${formatCountdown(trade.expiryMs, now)} to expiry`;
   const pnlTone = trade.worstCasePnl == null ? undefined : trade.worstCasePnl < 0 ? "loss" : "profit";
+  const risk = buildTradeRiskIntelligence(trade);
 
   return (
-    <section className="panel trade-detail-drawer" aria-label="Selected trade payoff detail">
+    <motion.section
+      animate={{ opacity: 1, y: 0 }}
+      aria-label="Selected trade payoff detail"
+      className="panel trade-detail-drawer"
+      exit={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 12 }}
+      transition={{ duration: 0.18 }}
+    >
       <div className="trade-detail-header">
         <div>
           <p className="panel-kicker">selected trade payoff</p>
@@ -1140,6 +1630,10 @@ export function TradeDetailDrawer({
           <DetailMetric label="Best-case P/L" value={formatSignedCents(trade.bestCasePnl)} tone={trade.bestCasePnl != null && trade.bestCasePnl < 0 ? "loss" : "profit"} />
           <DetailMetric label="Guaranteed Edge" value={formatSignedCents(trade.guaranteedEdge)} tone={pnlTone} />
           <DetailMetric label="Loss Window" value={formatDetailDollars(trade.lossWindowWidth)} tone={trade.lossWindowWidth && trade.lossWindowWidth > 0 ? "loss" : undefined} />
+          <DetailMetric label="Risk Score" value={`${risk.riskScore}/100`} tone={risk.riskLevel === "high" ? "loss" : risk.riskLevel === "medium" ? "warn" : "profit"} />
+          <DetailMetric label="Confidence" value={`${risk.confidence}%`} tone={risk.confidence >= 65 ? "profit" : "warn"} />
+          <DetailMetric label="Spread / Profit" value={risk.spreadProfitRatio == null ? "unknown" : `${risk.spreadProfitRatio.toFixed(2)}x`} />
+          <DetailMetric label="Vol Sensitivity" value={risk.volatilitySensitivity} tone={risk.volatilitySensitivity === "high" ? "loss" : risk.volatilitySensitivity === "medium" ? "warn" : "profit"} />
           <DetailMetric label="Pair Key" value={trade.pairKey ? shortId(trade.pairKey) : "unknown"} />
         </div>
 
@@ -1148,9 +1642,24 @@ export function TradeDetailDrawer({
           <TradeDetailLegCard leg={trade.legB} />
         </div>
 
-        <DetailedPayoffDiagram trade={trade} />
+        <div className="trade-detail-visual-grid">
+          <DetailedPayoffDiagram trade={trade} />
+          <div className="trade-risk-surface-card">
+            <div className="trade-payoff-header">
+              <div>
+                <span className="signal-label">3D Risk Mapping</span>
+                <strong>X: price · Y: time · Z: P&L</strong>
+              </div>
+              <div>
+                <span className="signal-label">Floor</span>
+                <strong>{formatSignedCents(trade.guaranteedEdge)}</strong>
+              </div>
+            </div>
+            <RiskSurface3D {...riskSurfacePropsForTrade(trade)} />
+          </div>
+        </div>
       </div>
-    </section>
+    </motion.section>
   );
 }
 
@@ -1345,6 +1854,7 @@ export function DashboardTerminalView({
   streamState: StreamState;
 }) {
   const [selectedTrade, setSelectedTrade] = useState<TradeDetailModel | null>(null);
+  const [viewMode, setViewMode] = useState<DashboardViewMode>("risk");
   const selectedTradeKey = selectedTrade?.key ?? null;
 
   useEffect(() => {
@@ -1365,35 +1875,33 @@ export function DashboardTerminalView({
     );
   }
 
-  const staleCount = staleContractCount(snapshot);
-  const mode = snapshot.health.liveTrading ? "LIVE" : "DRY-RUN";
   return (
-    <main className="terminal-shell">
-      <header className="terminal-header">
-        <div>
-          <p className="panel-kicker">cross-venue binary arb</p>
-          <h1>{dashboardName}</h1>
-        </div>
-        <div className="status-rail">
-          <StatusPill label={streamState === "live" ? "SSE LIVE" : "SSE DEGRADED"} state={streamState === "live" ? "live" : "warn"} />
-          <StatusPill label={snapshot.health.arbEnabled ? "STRATEGY ON" : "STRATEGY OFF"} state={snapshot.health.arbEnabled ? "live" : "off"} />
-          <StatusPill label={mode} state={snapshot.health.liveTrading ? "warn" : "live"} />
-          <StatusPill label={staleCount > 0 ? `${staleCount} STALE BOOKS` : "BOOKS FRESH"} state={staleCount > 0 ? "stale" : "live"} />
-        </div>
-      </header>
+    <main className={`terminal-shell institutional-shell view-mode-${viewMode}`}>
+      <GlobalStateBar
+        dashboardName={dashboardName}
+        onViewModeChange={setViewMode}
+        snapshot={snapshot}
+        streamState={streamState}
+        viewMode={viewMode}
+      />
 
-      <section className="metric-grid">
+      <section className="metric-grid institutional-metrics">
         <div className="metric"><span>Guaranteed Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
         <div className="metric"><span>Re-entry Cadence</span><strong>{Math.round(snapshot.health.reentryIntervalMs / 1000)}s</strong></div>
-        <div className="metric"><span>Last Scan</span><strong>{snapshot.scanner.lastScanAt ? `${Math.max(0, Math.round((snapshot.generatedAt - snapshot.scanner.lastScanAt) / 1000))}s` : "--"}</strong></div>
-        <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? `${Math.max(0, Math.round((snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt) / 1000))}s` : "--"}</strong></div>
+        <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? formatCompactTime(Math.max(0, snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt)) : "--"}</strong></div>
+        <div className="metric"><span>Selected Mode</span><strong>{viewMode.toUpperCase()}</strong></div>
       </section>
 
-      <AnalyticsPanel snapshot={snapshot} />
+      <section className="institutional-command-grid">
+        <AnalyticsPanel snapshot={snapshot} />
+        <RiskIntelligencePanel selectedTrade={selectedTrade} snapshot={snapshot} />
+      </section>
 
       <OpportunityBlotter onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} snapshot={snapshot} />
 
-      <TradeDetailDrawer now={snapshot.generatedAt} onClose={() => setSelectedTrade(null)} trade={selectedTrade} />
+      <AnimatePresence mode="wait">
+        {selectedTrade ? <TradeDetailDrawer key={selectedTrade.key} now={snapshot.generatedAt} onClose={() => setSelectedTrade(null)} trade={selectedTrade} /> : null}
+      </AnimatePresence>
 
       <SyntheticStructureMap snapshot={snapshot} />
 

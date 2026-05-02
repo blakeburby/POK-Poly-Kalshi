@@ -5,7 +5,8 @@
     "moduleResolution": "Node",
     "lib": ["ES2022"],
     "jsx": "react-jsx",
-    "incremental": false
+    "incremental": false,
+    "plugins": []
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "app"]
