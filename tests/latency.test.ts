@@ -1,0 +1,181 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { BookStore } from "../src/books/book-store";
+import { LatencyMonitor, summarizeBookAges, summarizeLatencySamples } from "../src/latency/metrics";
+import { ReentryThrottle } from "../src/scanner/reentry";
+import { CrossVenueArbScanner } from "../src/scanner/scanner";
+import { CoalescedScanScheduler } from "../src/scanner/scheduler";
+import type { ArbCandidate, ExecutionResult } from "../src/types";
+import { contract } from "./helpers";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(assertion: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!assertion()) {
+    if (Date.now() - startedAt > 1000) throw new Error("condition timed out");
+    await sleep(5);
+  }
+}
+
+test("latency stats report latest, p50, p95, empty states, and current book ages", () => {
+  assert.deepEqual(summarizeLatencySamples([]), { latestMs: null, p50Ms: null, p95Ms: null, sampleCount: 0 });
+  assert.deepEqual(summarizeLatencySamples([1, 4, 2, 10]), { latestMs: 10, p50Ms: 2, p95Ms: 10, sampleCount: 4 });
+  assert.deepEqual(summarizeLatencySamples([1, 4, 2, 10], 99), { latestMs: 99, p50Ms: 2, p95Ms: 10, sampleCount: 4 });
+
+  const now = 10_000;
+  const ages = summarizeBookAges([
+    contract({ venue: "kalshi", contractId: "a", strike: 100, updatedAt: now - 100 }),
+    contract({ venue: "kalshi", contractId: "b", strike: 101, updatedAt: now - 500 }),
+    contract({ venue: "kalshi", contractId: "c", strike: 102, updatedAt: now - 1_000 }),
+  ], now);
+  assert.equal(ages.latestMs, 100);
+  assert.equal(ages.p50Ms, 500);
+  assert.equal(ages.p95Ms, 1000);
+});
+
+test("coalesced scan scheduler runs one immediate follow-up with the newest update", async () => {
+  let releaseFirst = () => undefined;
+  const firstScan = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const calls: number[] = [];
+  let coalesced = 0;
+  const scheduler = new CoalescedScanScheduler({
+    async scan(now = 0) {
+      calls.push(now);
+      if (calls.length === 1) await firstScan;
+    },
+  }, {
+    recordCoalescedScan: () => {
+      coalesced += 1;
+    },
+  });
+
+  scheduler.requestScan(100);
+  scheduler.requestScan(101);
+  scheduler.requestScan(102);
+  await waitFor(() => calls.length === 1);
+  assert.equal(coalesced, 2);
+  releaseFirst();
+  await waitFor(() => calls.length === 2);
+  assert.deepEqual(calls, [100, 102]);
+  assert.deepEqual(scheduler.status(), { running: false, pending: false });
+});
+
+test("scanner processes candidate executions through a bounded queue without duplicate pair overfire", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly-a", strike: 1500, yesAsk: 0.4, noAsk: 0.6, updatedAt: now }),
+    contract({ venue: "polymarket", contractId: "poly-b", strike: 1501, yesAsk: 0.4, noAsk: 0.6, updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi-a", strike: 1502, yesAsk: 0.5, noAsk: 0.5, updatedAt: now }),
+    contract({ venue: "kalshi", contractId: "kalshi-b", strike: 1503, yesAsk: 0.5, noAsk: 0.5, updatedAt: now }),
+  ]);
+
+  const order: string[] = [];
+  const signals = {
+    async insertSignal({ candidate }: { candidate: ArbCandidate }) {
+      order.push(`insert:${candidate.pairKey}`);
+      return order.length;
+    },
+    async updateSignal(_id: number, result: ExecutionResult) {
+      order.push(`update:${result.action}`);
+    },
+  };
+  let active = 0;
+  let maxActive = 0;
+  let executed = 0;
+  const executor = {
+    async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
+      order.push(`execute:${candidate.pairKey}`);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await sleep(20);
+      active -= 1;
+      executed += 1;
+      return {
+        action: "filled",
+        failureReason: null,
+        kalshiFillId: `kalshi-${executed}`,
+        polymarketFillId: `poly-${executed}`,
+        kalshiFillPrice: 0.5,
+        polymarketFillPrice: 0.4,
+      };
+    },
+  };
+  let duplicateSkips = 0;
+  const scanner = new CrossVenueArbScanner(books, signals, executor, new ReentryThrottle(15_000), {
+    enabled: true,
+    minProfitDollars: 0.05,
+    staleBookMs: 10_000,
+    executionConcurrency: 2,
+    latency: {
+      recordScanStarted: () => undefined,
+      recordScanDuration: () => undefined,
+      recordDbInsert: () => undefined,
+      recordDbUpdate: () => undefined,
+      recordExecution: () => undefined,
+      recordQueueState: () => undefined,
+      recordDuplicateCandidateSkip: () => {
+        duplicateSkips += 1;
+      },
+    },
+  });
+
+  const first = await scanner.scan(now);
+  const second = await scanner.scan(now + 1);
+  assert.equal(first.length, 4);
+  assert.equal(second.length, 4);
+  assert.equal(duplicateSkips, 4);
+  await waitFor(() => executed === 4);
+  assert.equal(maxActive, 2);
+  const insertedPairs = order.filter((entry) => entry.startsWith("insert:")).map((entry) => entry.replace("insert:", ""));
+  const executedPairs = order.filter((entry) => entry.startsWith("execute:")).map((entry) => entry.replace("execute:", ""));
+  assert.deepEqual(executedPairs.sort(), insertedPairs.sort());
+  for (const pairKey of executedPairs) {
+    assert.ok(order.indexOf(`insert:${pairKey}`) < order.indexOf(`execute:${pairKey}`));
+  }
+  assert.equal(scanner.status().queuedExecutions, 0);
+  assert.equal(scanner.status().activeExecutions, 0);
+});
+
+test("latency monitor snapshots phase timing and queue state", () => {
+  const monitor = new LatencyMonitor();
+  monitor.recordWsToBookApply("kalshi", 100, 112);
+  monitor.recordWsToBookApply("polymarket", 100, 130);
+  monitor.recordScanStarted(200);
+  monitor.recordScanDuration(7, 207);
+  monitor.recordDbInsert(3);
+  monitor.recordDbUpdate(4);
+  monitor.recordExecution(11);
+  monitor.recordQueueState(2, 1);
+  monitor.recordCoalescedScan();
+  monitor.recordDuplicateCandidateSkip();
+
+  const snapshot = monitor.snapshot({
+    kalshi: [contract({ venue: "kalshi", contractId: "kalshi", strike: 100, updatedAt: 900 })],
+    polymarket: [contract({ venue: "polymarket", contractId: "poly", strike: 99, updatedAt: 800 })],
+  }, 1000, {
+    dashboardStreamIntervalMs: 250,
+    dashboardSignalRefreshMs: 1000,
+    dashboardAnalyticsRefreshMs: 5000,
+  }, 5);
+
+  assert.equal(snapshot.books.kalshi.latestMs, 100);
+  assert.equal(snapshot.books.polymarket.latestMs, 200);
+  assert.equal(snapshot.wsToBookApplyMs.kalshi.latestMs, 12);
+  assert.equal(snapshot.scanner.scanDurationMs.latestMs, 7);
+  assert.equal(snapshot.scanner.queueDepth, 2);
+  assert.equal(snapshot.scanner.activeExecutions, 1);
+  assert.equal(snapshot.scanner.coalescedScanCount, 1);
+  assert.equal(snapshot.scanner.duplicateCandidateSkips, 1);
+  assert.equal(snapshot.persistence.insertMs.latestMs, 3);
+  assert.equal(snapshot.persistence.updateMs.latestMs, 4);
+  assert.equal(snapshot.execution.durationMs.latestMs, 11);
+  assert.equal(snapshot.dashboard.snapshotBuildMs.latestMs, 5);
+});

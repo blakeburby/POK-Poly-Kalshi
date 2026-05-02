@@ -6,7 +6,7 @@ import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
-import type { ArbCandidate, DashboardLogEntry, DashboardSignal, DashboardSnapshot, PolymarketDiagnostics } from "../types";
+import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, PolymarketDiagnostics } from "../types";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -25,7 +25,19 @@ export interface DashboardRuntime {
   getScannerStatus: () => ScannerStatus;
   getDiscoveryState: () => DashboardDiscoveryState;
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
+  getLatencySnapshot?: (now: number, snapshotBuildMs: number) => DashboardLatencySnapshot;
   getLogs: (limit?: number) => DashboardLogEntry[];
+}
+
+export interface DashboardSnapshotCache {
+  recentSignals?: {
+    refreshedAt: number;
+    value: DashboardSignal[];
+  };
+  analytics?: {
+    refreshedAt: number;
+    value: DashboardAnalytics;
+  };
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -47,11 +59,31 @@ export function dashboardRequestAuthorized(headers: IncomingMessage["headers"], 
   return scheme?.toLowerCase() === "bearer" && typeof value === "string" && safeEqual(value, token);
 }
 
-export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now()): Promise<DashboardSnapshot> {
+async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardSignal[]> {
+  if (cache?.recentSignals && now - cache.recentSignals.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
+    return cache.recentSignals.value;
+  }
+  const value = await runtime.signals.listRecentSignals(100);
+  if (cache) cache.recentSignals = { refreshedAt: now, value };
+  return value;
+}
+
+async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
+  if (cache?.analytics && now - cache.analytics.refreshedAt < runtime.config.dashboardAnalyticsRefreshMs) {
+    return cache.analytics.value;
+  }
+  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]));
+  const value = buildDashboardAnalytics(analyticsSignals, now);
+  if (cache) cache.analytics = { refreshedAt: now, value };
+  return value;
+}
+
+export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
+  const snapshotStartedAt = Date.now();
   const books = runtime.books.snapshot();
-  const [recentSignals, analyticsSignals] = await Promise.all([
-    runtime.signals.listRecentSignals(100),
-    runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]),
+  const [recentSignals, analytics] = await Promise.all([
+    cachedRecentSignals(runtime, now, cache),
+    cachedAnalytics(runtime, now, cache),
   ]);
   const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
@@ -70,6 +102,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       || left.expiryMs - right.expiryMs;
   });
 
+  const snapshotBuildMs = Math.max(0, Date.now() - snapshotStartedAt);
   return {
     generatedAt: now,
     health: {
@@ -80,6 +113,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       reentryIntervalMs: runtime.config.reentryIntervalMs,
       staleBookMs: runtime.config.staleBookMs,
     },
+    latency: runtime.getLatencySnapshot?.(now, snapshotBuildMs),
     discovery: runtime.getDiscoveryState(),
     scanner: runtime.getScannerStatus(),
     books,
@@ -89,7 +123,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     liveCandidates,
     syntheticStructures,
     recentSignals,
-    analytics: buildDashboardAnalytics(analyticsSignals, now),
+    analytics,
     logs: runtime.getLogs(150),
   };
 }
@@ -110,16 +144,17 @@ async function writeStream(response: ServerResponse, runtime: DashboardRuntime):
     "X-Accel-Buffering": "no",
   });
 
+  const cache: DashboardSnapshotCache = {};
   const send = async (): Promise<void> => {
     try {
-      response.write(formatSseEvent("snapshot", await createDashboardSnapshot(runtime)));
+      response.write(formatSseEvent("snapshot", await createDashboardSnapshot(runtime, Date.now(), cache)));
     } catch (error) {
       response.write(formatSseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
     }
   };
 
   await send();
-  const timer = setInterval(() => void send(), 1000);
+  const timer = setInterval(() => void send(), Math.max(50, runtime.config.dashboardStreamIntervalMs));
   response.on("close", () => clearInterval(timer));
 }
 

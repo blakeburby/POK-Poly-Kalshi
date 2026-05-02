@@ -7,6 +7,11 @@ export interface AppConfig {
   reentryIntervalMs: number;
   staleBookMs: number;
   marketDiscoveryIntervalMs: number;
+  dashboardStreamIntervalMs: number;
+  dashboardSignalRefreshMs: number;
+  dashboardAnalyticsRefreshMs: number;
+  executionConcurrency: number;
+  discoveryBoundaryRefreshEnabled: boolean;
   kalshiApiBase: string;
   kalshiWsUrl: string;
   kalshiSeriesTicker: string;
@@ -65,6 +70,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     reentryIntervalMs: envNumber(env, "ARB_REENTRY_INTERVAL_MS", 15_000),
     staleBookMs: envNumber(env, "STALE_BOOK_MS", 10_000),
     marketDiscoveryIntervalMs: envNumber(env, "MARKET_DISCOVERY_INTERVAL_MS", 30_000),
+    dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 250),
+    dashboardSignalRefreshMs: envNumber(env, "DASHBOARD_SIGNAL_REFRESH_MS", 1_000),
+    dashboardAnalyticsRefreshMs: envNumber(env, "DASHBOARD_ANALYTICS_REFRESH_MS", 5_000),
+    executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 2),
+    discoveryBoundaryRefreshEnabled: envBoolean(env, "DISCOVERY_BOUNDARY_REFRESH_ENABLED", true),
     kalshiApiBase: envString(env, "KALSHI_API_BASE", "https://api.elections.kalshi.com/trade-api/v2"),
     kalshiWsUrl: envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
     kalshiSeriesTicker: envString(env, "KALSHI_SERIES_TICKER", "KXBTC15M"),

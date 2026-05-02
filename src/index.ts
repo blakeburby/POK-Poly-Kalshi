@@ -10,11 +10,13 @@ import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
 import { DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
 import { KalshiTickerClient } from "./kalshi/client";
+import { LatencyMonitor } from "./latency/metrics";
 import { getRecentLogs, logEvent } from "./logger";
 import { PolymarketBookClient } from "./polymarket/client";
 import { PolymarketPriceToBeatService } from "./polymarket/price-to-beat";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
+import { CoalescedScanScheduler } from "./scanner/scheduler";
 import type { PolymarketDiagnostics } from "./types";
 
 function sendJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
@@ -31,13 +33,17 @@ async function main(): Promise<void> {
   const signals = new SignalStore(pool);
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
+  const latency = new LatencyMonitor();
   reentry.hydrate(await signals.loadRecentFilledAttempts());
   const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config));
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,
     staleBookMs: config.staleBookMs,
+    executionConcurrency: config.executionConcurrency,
+    latency,
   });
+  const scanScheduler = new CoalescedScanScheduler(scanner, latency);
 
   const kalshi = new KalshiTickerClient(config.kalshiWsUrl);
   const polymarket = new PolymarketBookClient(config.polymarketWsUrl);
@@ -54,12 +60,16 @@ async function main(): Promise<void> {
   let polymarketDiagnostics: PolymarketDiagnostics = emptyPolymarketDiagnostics();
 
   kalshi.onSnapshot((snapshot) => {
+    const appliedAt = Date.now();
     books.applyKalshiSnapshot(snapshot);
-    void scanner.scan(snapshot.timestamp);
+    latency.recordWsToBookApply("kalshi", snapshot.timestamp, appliedAt);
+    scanScheduler.requestScan(appliedAt);
   });
   polymarket.onSnapshot((snapshot) => {
+    const appliedAt = Date.now();
     books.applyPolymarketSnapshot(snapshot);
-    void scanner.scan(snapshot.timestamp);
+    latency.recordWsToBookApply("polymarket", snapshot.timestamp, appliedAt);
+    scanScheduler.requestScan(appliedAt);
   });
 
   function livePolymarketDiagnostics(now = Date.now()): PolymarketDiagnostics {
@@ -72,24 +82,49 @@ async function main(): Promise<void> {
     };
   }
 
-  async function refreshDiscovery(): Promise<void> {
-    try {
-      const [kalshiContracts, polymarketResult] = await Promise.all([
-        discoverKalshiBtcContracts(config),
-        discoverPolymarketBtcContractsWithDiagnostics(config, Date.now(), { priceBeatStore: priceBeats }),
-      ]);
-      books.setKalshiContracts(kalshiContracts);
-      books.setPolymarketContracts(polymarketResult.contracts);
-      polymarketDiagnostics = polymarketResult.diagnostics;
-      polymarketPriceToBeat.setCaptureWindows(polymarketResult.captureWindows);
-      kalshi.setSubscriptions(books.getKalshiTickers());
-      polymarket.setSubscriptions(books.getPolymarketTokenIds());
-      lastDiscoveryAt = Date.now();
-      lastDiscoveryError = null;
-    } catch (error) {
-      lastDiscoveryError = error instanceof Error ? error.message : String(error);
-      logEvent({ severity: "ERROR", category: "DISCOVERY", message: "discovery refresh failed", context: { error: lastDiscoveryError } });
-    }
+  let discoveryInFlight: Promise<void> | null = null;
+  function refreshDiscovery(): Promise<void> {
+    if (discoveryInFlight) return discoveryInFlight;
+    discoveryInFlight = (async () => {
+      try {
+        const [kalshiContracts, polymarketResult] = await Promise.all([
+          discoverKalshiBtcContracts(config),
+          discoverPolymarketBtcContractsWithDiagnostics(config, Date.now(), { priceBeatStore: priceBeats }),
+        ]);
+        books.setKalshiContracts(kalshiContracts);
+        books.setPolymarketContracts(polymarketResult.contracts);
+        polymarketDiagnostics = polymarketResult.diagnostics;
+        polymarketPriceToBeat.setCaptureWindows(polymarketResult.captureWindows);
+        kalshi.setSubscriptions(books.getKalshiTickers());
+        polymarket.setSubscriptions(books.getPolymarketTokenIds());
+        lastDiscoveryAt = Date.now();
+        lastDiscoveryError = null;
+      } catch (error) {
+        lastDiscoveryError = error instanceof Error ? error.message : String(error);
+        logEvent({ severity: "ERROR", category: "DISCOVERY", message: "discovery refresh failed", context: { error: lastDiscoveryError } });
+      } finally {
+        discoveryInFlight = null;
+      }
+    })();
+    return discoveryInFlight;
+  }
+
+  function scheduleBoundaryRefreshes(): NodeJS.Timeout[] {
+    if (!config.discoveryBoundaryRefreshEnabled) return [];
+    const timers: NodeJS.Timeout[] = [];
+    const intervalMs = 15 * 60_000;
+    const offsets = [-1_000, 250, 3_000];
+    const scheduleNext = (): void => {
+      const now = Date.now();
+      const nextBoundary = Math.ceil(now / intervalMs) * intervalMs;
+      for (const offset of offsets) {
+        const delay = Math.max(0, nextBoundary + offset - now);
+        timers.push(setTimeout(() => void refreshDiscovery(), delay));
+      }
+      timers.push(setTimeout(scheduleNext, Math.max(1_000, nextBoundary + intervalMs - now)));
+    };
+    scheduleNext();
+    return timers;
   }
 
   let rediscoveryQueued = false;
@@ -105,6 +140,7 @@ async function main(): Promise<void> {
   polymarketPriceToBeat.start();
   await refreshDiscovery();
   const discoveryTimer = setInterval(() => void refreshDiscovery(), config.marketDiscoveryIntervalMs);
+  const boundaryDiscoveryTimers = scheduleBoundaryRefreshes();
 
   const server = createServer((request, response) => {
     void (async () => {
@@ -115,6 +151,7 @@ async function main(): Promise<void> {
         getScannerStatus: () => scanner.status(),
         getDiscoveryState: () => ({ lastDiscoveryAt, lastDiscoveryError }),
         getPolymarketDiagnostics: livePolymarketDiagnostics,
+        getLatencySnapshot: (now, snapshotBuildMs) => latency.snapshot(books.snapshot(), now, config, snapshotBuildMs),
         getLogs: getRecentLogs,
       });
       if (handled) return;
@@ -150,6 +187,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     clearInterval(discoveryTimer);
+    for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();
     polymarket.close();
     polymarketPriceToBeat.close();

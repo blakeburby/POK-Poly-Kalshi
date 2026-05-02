@@ -103,7 +103,41 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       staleBookMs: 10_000,
     },
     discovery: { lastDiscoveryAt: 1_800_000_009_000, lastDiscoveryError: null },
-    scanner: { scanning: false, lastScanAt: 1_800_000_009_500, lastCandidateCount: 2 },
+    scanner: { scanning: false, lastScanAt: 1_800_000_009_500, lastCandidateCount: 2, queuedExecutions: 1, activeExecutions: 1 },
+    latency: {
+      generatedAt,
+      books: {
+        kalshi: { latestMs: 500, p50Ms: 500, p95Ms: 500, sampleCount: 1 },
+        polymarket: { latestMs: 500, p50Ms: 500, p95Ms: 500, sampleCount: 1 },
+      },
+      wsToBookApplyMs: {
+        kalshi: { latestMs: 4, p50Ms: 4, p95Ms: 4, sampleCount: 1 },
+        polymarket: { latestMs: 6, p50Ms: 6, p95Ms: 6, sampleCount: 1 },
+      },
+      scanner: {
+        scanDurationMs: { latestMs: 8, p50Ms: 8, p95Ms: 8, sampleCount: 1 },
+        queueDepth: 1,
+        activeExecutions: 1,
+        lastScanStartedAt: generatedAt - 500,
+        lastScanCompletedAt: generatedAt - 492,
+        coalescedScanCount: 2,
+        duplicateCandidateSkips: 1,
+      },
+      persistence: {
+        insertMs: { latestMs: 3, p50Ms: 3, p95Ms: 3, sampleCount: 1 },
+        updateMs: { latestMs: 4, p50Ms: 4, p95Ms: 4, sampleCount: 1 },
+      },
+      execution: {
+        durationMs: { latestMs: 11, p50Ms: 11, p95Ms: 11, sampleCount: 1 },
+      },
+      dashboard: {
+        snapshotBuildMs: { latestMs: 5, p50Ms: 5, p95Ms: 5, sampleCount: 1 },
+        streamIntervalMs: 250,
+        signalRefreshMs: 1_000,
+        analyticsRefreshMs: 5_000,
+        snapshotAgeMs: 0,
+      },
+    },
     books: {
       kalshi: [{
         venue: "kalshi",
@@ -300,6 +334,10 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Estimated Edge/);
   assert.match(live, /Active Opportunities/);
   assert.match(live, /Feed Latency/);
+  assert.match(live, /Kalshi Age/);
+  assert.match(live, /Polymarket Age/);
+  assert.match(live, /Scan p95/);
+  assert.match(live, /Exec p95/);
   assert.match(live, /Risk Meter/);
   assert.match(live, /Risk View/);
   assert.match(live, /Raw View/);
@@ -320,6 +358,9 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Spread \/ Profit/);
   assert.match(live, /Execution Risk/);
   assert.match(live, /Liquidity Proxy/);
+  assert.match(live, /Scanner p95/);
+  assert.match(live, /DB Insert p95/);
+  assert.match(live, /Snapshot Build p95/);
   assert.match(live, /Latency Distribution/);
   assert.match(live, /Y-axis: Latency \(s\)/);
   assert.match(live, /Structure Type/);
@@ -378,6 +419,8 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Avg NO Spread/);
   assert.match(live, /Best YES Ask/);
   assert.match(live, /Best NO Ask/);
+  assert.match(live, /Book p50 \/ p95/);
+  assert.match(live, /WS Apply p95/);
   assert.match(live, /Live Top-of-Book Visuals/);
   assert.match(live, /Best YES bid\/ask/);
   assert.match(live, /Best NO bid\/ask/);
@@ -486,8 +529,15 @@ test("trade detail drawer renders detailed payoff diagram with protected and dea
   assert.match(protectedMarkup, /Selected trade payoff detail/);
   assert.match(protectedMarkup, /id="trade-detail"/);
   assert.match(protectedMarkup, /Signal #42/);
+  assert.match(protectedMarkup, /Trade Snapshot/);
+  assert.match(protectedMarkup, /Venue Legs/);
+  assert.match(protectedMarkup, /2D Payoff Diagram/);
   assert.match(protectedMarkup, /Protected Spread/);
   assert.match(protectedMarkup, /True Arb/);
+  assert.match(protectedMarkup, /trade-detail-snapshot-section/);
+  assert.match(protectedMarkup, /trade-detail-legs-section/);
+  assert.match(protectedMarkup, /trade-detail-payoff-section/);
+  assert.match(protectedMarkup, /trade-detail-risk-section/);
   assert.match(protectedMarkup, /Contract A/);
   assert.match(protectedMarkup, /YES \/ UP/);
   assert.match(protectedMarkup, /NO \/ DOWN/);

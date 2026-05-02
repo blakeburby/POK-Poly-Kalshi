@@ -112,6 +112,10 @@ export interface DashboardInsightModel {
   estimatedEdge: number | null;
   activeOpportunities: number;
   feedLatencyMs: number | null;
+  kalshiLatencyMs: number | null;
+  polymarketLatencyMs: number | null;
+  scanP95Ms: number | null;
+  executionP95Ms: number | null;
   lastScanAgeMs: number | null;
   riskScore: number;
   riskLevel: "low" | "medium" | "high";
@@ -222,6 +226,10 @@ function formatCompactTime(ageMs: number | null): string {
   if (ageMs < 1000) return `${Math.round(ageMs)}ms`;
   if (ageMs < 60_000) return `${Math.round(ageMs / 1000)}s`;
   return `${Math.round(ageMs / 60_000)}m`;
+}
+
+function formatLatencyPair(p50Ms: number | null | undefined, p95Ms: number | null | undefined): string {
+  return `${formatCompactTime(p50Ms ?? null)} / ${formatCompactTime(p95Ms ?? null)}`;
 }
 
 export function normalizeBinaryPrice(value: number | null | undefined): number | null {
@@ -670,7 +678,12 @@ export function buildTradeRiskIntelligence(trade: TradeDetailModel, stalePenalty
 
 function buildDashboardInsights(snapshot: DashboardSnapshot): DashboardInsightModel {
   const books = [...snapshot.books.kalshi, ...snapshot.books.polymarket];
-  const feedLatencyMs = books.length > 0 ? Math.max(...books.map((book) => Math.max(0, snapshot.generatedAt - book.updatedAt))) : null;
+  const rawFeedLatencyMs = books.length > 0 ? Math.max(...books.map((book) => Math.max(0, snapshot.generatedAt - book.updatedAt))) : null;
+  const kalshiLatencyMs = snapshot.latency?.books.kalshi.latestMs ?? (snapshot.books.kalshi.length > 0 ? Math.min(...snapshot.books.kalshi.map((book) => Math.max(0, snapshot.generatedAt - book.updatedAt))) : null);
+  const polymarketLatencyMs = snapshot.latency?.books.polymarket.latestMs ?? (snapshot.books.polymarket.length > 0 ? Math.min(...snapshot.books.polymarket.map((book) => Math.max(0, snapshot.generatedAt - book.updatedAt))) : null);
+  const feedLatencyMs = snapshot.latency
+    ? Math.max(kalshiLatencyMs ?? 0, polymarketLatencyMs ?? 0)
+    : rawFeedLatencyMs;
   const estimatedEdge = snapshot.liveCandidates.length > 0 ? Math.max(...snapshot.liveCandidates.map((candidate) => candidate.guaranteedProfit)) : null;
   const lastScanAgeMs = snapshot.scanner.lastScanAt ? Math.max(0, snapshot.generatedAt - snapshot.scanner.lastScanAt) : null;
   const staleBooks = staleContractCount(snapshot);
@@ -681,6 +694,10 @@ function buildDashboardInsights(snapshot: DashboardSnapshot): DashboardInsightMo
     estimatedEdge,
     activeOpportunities: snapshot.liveCandidates.length,
     feedLatencyMs,
+    kalshiLatencyMs,
+    polymarketLatencyMs,
+    scanP95Ms: snapshot.latency?.scanner.scanDurationMs.p95Ms ?? null,
+    executionP95Ms: snapshot.latency?.execution.durationMs.p95Ms ?? null,
     lastScanAgeMs,
     riskScore,
     riskLevel: riskLevelForScore(riskScore),
@@ -1006,6 +1023,10 @@ function GlobalStateBar({
         <div className="topbar-kpi"><span>Active Opportunities</span><strong>{insights.activeOpportunities}</strong></div>
         <div className="topbar-kpi"><span>Feed Latency</span><strong>{formatCompactTime(insights.feedLatencyMs)}</strong></div>
         <div className="topbar-kpi"><span>Last Scan</span><strong>{formatCompactTime(insights.lastScanAgeMs)}</strong></div>
+        <div className="topbar-kpi"><span>Kalshi Age</span><strong>{formatCompactTime(insights.kalshiLatencyMs)}</strong></div>
+        <div className="topbar-kpi"><span>Polymarket Age</span><strong>{formatCompactTime(insights.polymarketLatencyMs)}</strong></div>
+        <div className="topbar-kpi"><span>Scan p95</span><strong>{formatCompactTime(insights.scanP95Ms)}</strong></div>
+        <div className="topbar-kpi"><span>Exec p95</span><strong>{formatCompactTime(insights.executionP95Ms)}</strong></div>
       </div>
 
       <div className="topbar-state">
@@ -1062,6 +1083,7 @@ function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: Dashboar
     age: Math.max(0, Math.round((snapshot.generatedAt - book.updatedAt) / 1000)),
   }));
   const opportunityFrequency = snapshot.scanner.lastCandidateCount;
+  const latency = snapshot.latency;
 
   return (
     <section className="panel risk-intelligence-panel" id="risk-intelligence">
@@ -1087,6 +1109,10 @@ function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: Dashboar
           <div><span>Liquidity Proxy</span><strong>{tradeRisk?.liquidityDepth.toUpperCase() ?? "UNKNOWN"}</strong></div>
           <div><span>Opportunity Freq</span><strong>{opportunityFrequency}</strong></div>
           <div><span>Book Staleness</span><strong>{insights.staleBooks}</strong></div>
+          <div><span>Scanner p95</span><strong>{formatCompactTime(latency?.scanner.scanDurationMs.p95Ms ?? null)}</strong></div>
+          <div><span>DB Insert p95</span><strong>{formatCompactTime(latency?.persistence.insertMs.p95Ms ?? null)}</strong></div>
+          <div><span>Execution p95</span><strong>{formatCompactTime(latency?.execution.durationMs.p95Ms ?? null)}</strong></div>
+          <div><span>Snapshot Build p95</span><strong>{formatCompactTime(latency?.dashboard.snapshotBuildMs.p95Ms ?? null)}</strong></div>
         </div>
 
         <div className="latency-chart-card">
@@ -1432,6 +1458,8 @@ function BookTable({
 }) {
   const metrics = buildBookMetrics(contracts, snapshot);
   const rows = sortContractsForBook(contracts).slice(0, 24).map((contract) => buildBookRowViewModel(contract, snapshot, candidates));
+  const venueLatency = snapshot.latency?.books[venue];
+  const wsApplyLatency = snapshot.latency?.wsToBookApplyMs[venue];
 
   return (
     <section className="panel book-panel">
@@ -1457,6 +1485,8 @@ function BookTable({
           <BookMetricTile label="Best YES Ask" value={formatCents(metrics.bestYesAsk)} tone="good" />
           <BookMetricTile label="Best NO Ask" value={formatCents(metrics.bestNoAsk)} tone="good" />
           <BookMetricTile label="Scanner Ready" value={`${metrics.scannerReadyCount}/${metrics.contractCount}`} tone={metrics.scannerReadyCount > 0 ? "good" : "warn"} />
+          <BookMetricTile label="Book p50 / p95" value={formatLatencyPair(venueLatency?.p50Ms, venueLatency?.p95Ms)} tone={venueLatency?.p95Ms && venueLatency.p95Ms > snapshot.health.staleBookMs ? "warn" : "good"} />
+          <BookMetricTile label="WS Apply p95" value={formatCompactTime(wsApplyLatency?.p95Ms ?? null)} tone={wsApplyLatency?.p95Ms && wsApplyLatency.p95Ms > 250 ? "warn" : "good"} />
         </div>
       </div>
       <BookVisualSummary metrics={metrics} rows={rows} snapshot={snapshot} />
@@ -1901,6 +1931,18 @@ function DetailMetric({ label, value, tone }: { label: string; value: string; to
   );
 }
 
+function TradeDetailSectionHeader({ eyebrow, title, note }: { eyebrow: string; title: string; note?: string }) {
+  return (
+    <div className="trade-detail-section-header">
+      <div>
+        <span>{eyebrow}</span>
+        <strong>{title}</strong>
+      </div>
+      {note ? <p>{note}</p> : null}
+    </div>
+  );
+}
+
 function TradeDetailLegCard({ leg }: { leg: TradeDetailLeg }) {
   return (
     <div className={`trade-detail-leg-card ${detailLegClass(leg)}`}>
@@ -2110,34 +2152,61 @@ export function TradeDetailDrawer({
       </div>
 
       <div className="trade-detail-body">
-        <div className="trade-detail-summary">
-          <DetailMetric label="Structure" value={trade.structureLabel} />
-          <DetailMetric label="Expiry" value={expiry} />
-          <DetailMetric label="Lower Strike" value={formatDetailDollars(trade.lowerStrike)} />
-          <DetailMetric label="Upper Strike" value={formatDetailDollars(trade.upperStrike)} />
-          <DetailMetric label="Strike Gap" value={formatDetailDollars(trade.strikeGap)} />
-          <DetailMetric label="Gap % Lower" value={formatDetailPercent(trade.strikeGapPct)} />
-          <DetailMetric label="Ask Premium" value={formatDetailCents(trade.totalAskPremium)} />
-          <DetailMetric label="P/L Premium" value={formatDetailCents(trade.premiumForPnl)} />
-          <DetailMetric label="Minimum Payout" value={formatDetailDollars(trade.minimumPayout)} />
-          <DetailMetric label="Worst-case P/L" value={formatSignedCents(trade.worstCasePnl)} tone={pnlTone} />
-          <DetailMetric label="Best-case P/L" value={formatSignedCents(trade.bestCasePnl)} tone={trade.bestCasePnl != null && trade.bestCasePnl < 0 ? "loss" : "profit"} />
-          <DetailMetric label="Guaranteed Edge" value={formatSignedCents(trade.guaranteedEdge)} tone={pnlTone} />
-          <DetailMetric label="Loss Window" value={formatDetailDollars(trade.lossWindowWidth)} tone={trade.lossWindowWidth && trade.lossWindowWidth > 0 ? "loss" : undefined} />
-          <DetailMetric label="Risk Score" value={`${risk.riskScore}/100`} tone={risk.riskLevel === "high" ? "loss" : risk.riskLevel === "medium" ? "warn" : "profit"} />
-          <DetailMetric label="Confidence" value={`${risk.confidence}%`} tone={risk.confidence >= 65 ? "profit" : "warn"} />
-          <DetailMetric label="Spread / Profit" value={risk.spreadProfitRatio == null ? "unknown" : `${risk.spreadProfitRatio.toFixed(2)}x`} />
-          <DetailMetric label="Vol Sensitivity" value={risk.volatilitySensitivity} tone={risk.volatilitySensitivity === "high" ? "loss" : risk.volatilitySensitivity === "medium" ? "warn" : "profit"} />
-          <DetailMetric label="Pair Key" value={trade.pairKey ? shortId(trade.pairKey) : "unknown"} />
-        </div>
+        <section className="trade-detail-section trade-detail-snapshot-section" aria-label="Trade Snapshot">
+          <TradeDetailSectionHeader
+            eyebrow="trade snapshot"
+            title="Trade Snapshot"
+            note="Core edge, premium, strike dispersion, and risk metrics for the selected signal."
+          />
+          <div className="trade-detail-summary">
+            <DetailMetric label="Structure" value={trade.structureLabel} />
+            <DetailMetric label="Expiry" value={expiry} />
+            <DetailMetric label="Lower Strike" value={formatDetailDollars(trade.lowerStrike)} />
+            <DetailMetric label="Upper Strike" value={formatDetailDollars(trade.upperStrike)} />
+            <DetailMetric label="Strike Gap" value={formatDetailDollars(trade.strikeGap)} />
+            <DetailMetric label="Gap % Lower" value={formatDetailPercent(trade.strikeGapPct)} />
+            <DetailMetric label="Ask Premium" value={formatDetailCents(trade.totalAskPremium)} />
+            <DetailMetric label="P/L Premium" value={formatDetailCents(trade.premiumForPnl)} />
+            <DetailMetric label="Minimum Payout" value={formatDetailDollars(trade.minimumPayout)} />
+            <DetailMetric label="Worst-case P/L" value={formatSignedCents(trade.worstCasePnl)} tone={pnlTone} />
+            <DetailMetric label="Best-case P/L" value={formatSignedCents(trade.bestCasePnl)} tone={trade.bestCasePnl != null && trade.bestCasePnl < 0 ? "loss" : "profit"} />
+            <DetailMetric label="Guaranteed Edge" value={formatSignedCents(trade.guaranteedEdge)} tone={pnlTone} />
+            <DetailMetric label="Loss Window" value={formatDetailDollars(trade.lossWindowWidth)} tone={trade.lossWindowWidth && trade.lossWindowWidth > 0 ? "loss" : undefined} />
+            <DetailMetric label="Risk Score" value={`${risk.riskScore}/100`} tone={risk.riskLevel === "high" ? "loss" : risk.riskLevel === "medium" ? "warn" : "profit"} />
+            <DetailMetric label="Confidence" value={`${risk.confidence}%`} tone={risk.confidence >= 65 ? "profit" : "warn"} />
+            <DetailMetric label="Spread / Profit" value={risk.spreadProfitRatio == null ? "unknown" : `${risk.spreadProfitRatio.toFixed(2)}x`} />
+            <DetailMetric label="Vol Sensitivity" value={risk.volatilitySensitivity} tone={risk.volatilitySensitivity === "high" ? "loss" : risk.volatilitySensitivity === "medium" ? "warn" : "profit"} />
+            <DetailMetric label="Pair Key" value={trade.pairKey ? shortId(trade.pairKey) : "unknown"} />
+          </div>
+        </section>
 
-        <div className="trade-detail-leg-stack">
-          <TradeDetailLegCard leg={trade.legA} />
-          <TradeDetailLegCard leg={trade.legB} />
-        </div>
+        <section className="trade-detail-section trade-detail-legs-section" aria-label="Venue Legs">
+          <TradeDetailSectionHeader
+            eyebrow="execution legs"
+            title="Venue Legs"
+            note="Venue, side, strike, observed ask, dry-run/live fill, and contract identifiers."
+          />
+          <div className="trade-detail-leg-stack">
+            <TradeDetailLegCard leg={trade.legA} />
+            <TradeDetailLegCard leg={trade.legB} />
+          </div>
+        </section>
 
-        <div className="trade-detail-visual-grid">
+        <section className="trade-detail-section trade-detail-payoff-section" aria-label="2D Payoff Diagram">
+          <TradeDetailSectionHeader
+            eyebrow="payoff geometry"
+            title="2D Payoff Diagram"
+            note="BTC settlement zones, individual leg payouts, and combined net P/L after premium."
+          />
           <DetailedPayoffDiagram trade={trade} />
+        </section>
+
+        <section className="trade-detail-section trade-detail-risk-section" aria-label="3D Risk Mapping">
+          <TradeDetailSectionHeader
+            eyebrow="surface model"
+            title="3D Risk Mapping"
+            note="X-axis is BTC settlement price, Y-axis is time to expiry, and Z-axis is P&L."
+          />
           <div className="trade-risk-surface-card">
             <div className="trade-payoff-header">
               <div>
@@ -2151,7 +2220,7 @@ export function TradeDetailDrawer({
             </div>
             <RiskSurface3D {...riskSurfacePropsForTrade(trade)} />
           </div>
-        </div>
+        </section>
       </div>
     </motion.section>
   );

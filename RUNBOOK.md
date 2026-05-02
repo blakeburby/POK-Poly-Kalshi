@@ -16,6 +16,11 @@ Recommended:
 - `ARB_MIN_PROFIT_DOLLARS=0.05`: guaranteed-profit threshold.
 - `ARB_REENTRY_INTERVAL_MS=15000`: cadence per pair/configuration.
 - `MARKET_DISCOVERY_INTERVAL_MS=30000`: REST discovery cadence.
+- `ARB_EXECUTION_CONCURRENCY=2`: maximum candidate executions processed at once after fast pairing.
+- `DASHBOARD_STREAM_INTERVAL_MS=250`: SSE snapshot cadence for live books/scanner state.
+- `DASHBOARD_SIGNAL_REFRESH_MS=1000`: minimum refresh interval for recent signal DB reads on dashboard streams.
+- `DASHBOARD_ANALYTICS_REFRESH_MS=5000`: minimum refresh interval for analytics DB reads on dashboard streams.
+- `DISCOVERY_BOUNDARY_REFRESH_ENABLED=true`: add extra discovery refreshes around each 15-minute market boundary.
 - `KALSHI_SERIES_TICKER=KXBTC15M`: Kalshi BTC 15-minute series.
 - `POLYMARKET_DISCOVERY_URL=https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&tag_slug=crypto`: Polymarket metadata discovery endpoint.
 - `POLYMARKET_LIVE_DATA_WS_URL=wss://ws-live-data.polymarket.com`: Polymarket live Chainlink price feed used to capture BTC 15-minute `priceToBeat`.
@@ -83,6 +88,8 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 - The worker stores Polymarket opening strikes in `polymarket_price_beats`; this lets restarts resume without approximating from late spot ticks.
 - If Polymarket appears empty on the dashboard, check `Price-To-Beat Diagnostics` for `pending_strike`, `missing_strike`, Chainlink tick age, and skipped/backfill reasons.
 - Every attempted threshold-crossing entry is inserted before execution and then updated with `filled`, `skipped`, or `failed`.
+- Scanner work is coalesced under load: if a WS update lands while a scan is active, one immediate follow-up scan runs with the newest books.
+- Dashboard latency fields are worker-observed freshness/timing metrics, not exchange-internal latency unless a venue exposes reliable exchange timestamps.
 - Dry-run fills simulate conservative buy-side slippage and persist the simulated fill prices into the audit row; live mode still records actual venue/order-service fill prices.
 - If one venue execution adapter is missing in live mode, the executor fails before placing either leg.
 - Re-entry is tracked by pair key and hydrated from filled audit rows on startup.

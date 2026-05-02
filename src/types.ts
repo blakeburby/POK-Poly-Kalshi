@@ -200,6 +200,42 @@ export interface PolymarketDiagnostics {
   markets: PolymarketMarketDiagnostic[];
 }
 
+export interface DashboardLatencyStats {
+  latestMs: number | null;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  sampleCount: number;
+}
+
+export interface DashboardLatencySnapshot {
+  generatedAt: number;
+  books: Record<Venue, DashboardLatencyStats>;
+  wsToBookApplyMs: Record<Venue, DashboardLatencyStats>;
+  scanner: {
+    scanDurationMs: DashboardLatencyStats;
+    queueDepth: number;
+    activeExecutions: number;
+    lastScanStartedAt: number | null;
+    lastScanCompletedAt: number | null;
+    coalescedScanCount: number;
+    duplicateCandidateSkips: number;
+  };
+  persistence: {
+    insertMs: DashboardLatencyStats;
+    updateMs: DashboardLatencyStats;
+  };
+  execution: {
+    durationMs: DashboardLatencyStats;
+  };
+  dashboard: {
+    snapshotBuildMs: DashboardLatencyStats;
+    streamIntervalMs: number;
+    signalRefreshMs: number;
+    analyticsRefreshMs: number;
+    snapshotAgeMs: number;
+  };
+}
+
 export interface DashboardSnapshot {
   generatedAt: number;
   health: {
@@ -210,6 +246,7 @@ export interface DashboardSnapshot {
     reentryIntervalMs: number;
     staleBookMs: number;
   };
+  latency?: DashboardLatencySnapshot;
   discovery: {
     lastDiscoveryAt: number;
     lastDiscoveryError: string | null;

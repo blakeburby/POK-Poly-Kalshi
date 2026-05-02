@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BookStore } from "../src/books/book-store";
-import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, type DashboardRuntime } from "../src/dashboard/worker-api";
+import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, type DashboardRuntime, type DashboardSnapshotCache } from "../src/dashboard/worker-api";
 import type { AppConfig } from "../src/config";
+import { LatencyMonitor } from "../src/latency/metrics";
 import type { DashboardSignal } from "../src/types";
 import { contract } from "./helpers";
 
@@ -16,6 +17,11 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     reentryIntervalMs: 15_000,
     staleBookMs: 10_000,
     marketDiscoveryIntervalMs: 30_000,
+    dashboardStreamIntervalMs: 250,
+    dashboardSignalRefreshMs: 1_000,
+    dashboardAnalyticsRefreshMs: 5_000,
+    executionConcurrency: 2,
+    discoveryBoundaryRefreshEnabled: true,
     kalshiApiBase: "",
     kalshiWsUrl: "",
     kalshiSeriesTicker: "KXBTC15M",
@@ -86,7 +92,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
         polymarketFillPrice: 0.41,
       })],
     },
-    getScannerStatus: () => ({ scanning: false, lastScanAt: now - 500, lastCandidateCount: 1 }),
+    getScannerStatus: () => ({ scanning: false, lastScanAt: now - 500, lastCandidateCount: 1, queuedExecutions: 0, activeExecutions: 0 }),
     getDiscoveryState: () => ({ lastDiscoveryAt: now - 1000, lastDiscoveryError: null }),
     getPolymarketDiagnostics: () => ({
       marketsFound: 1,
@@ -101,6 +107,12 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
       markets: [],
     }),
     getLogs: () => [{ timestamp: new Date(now).toISOString(), severity: "INFO", category: "SCANNER", message: "ok" }],
+    getLatencySnapshot: (latencyNow, snapshotBuildMs) => {
+      const latency = new LatencyMonitor();
+      latency.recordWsToBookApply("kalshi", latencyNow - 3, latencyNow);
+      latency.recordWsToBookApply("polymarket", latencyNow - 5, latencyNow);
+      return latency.snapshot(books.snapshot(), latencyNow, runtime.config, snapshotBuildMs);
+    },
   };
 
   const snapshot = await createDashboardSnapshot(runtime, now);
@@ -118,6 +130,47 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.analytics?.daily.window, "daily");
   assert.equal(snapshot.analytics?.weekly.window, "weekly");
   assert.equal(snapshot.logs[0].category, "SCANNER");
+  assert.equal(snapshot.latency?.books.kalshi.latestMs, 0);
+  assert.equal(snapshot.latency?.wsToBookApplyMs.kalshi.latestMs, 3);
+  assert.equal(snapshot.latency?.dashboard.streamIntervalMs, 250);
+});
+
+test("dashboard snapshot cache avoids querying heavy DB-backed sections on every stream tick", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  let recentCalls = 0;
+  let analyticsCalls = 0;
+  const runtime: DashboardRuntime = {
+    config: config(),
+    books,
+    signals: {
+      listRecentSignals: async () => {
+        recentCalls += 1;
+        return [signal()];
+      },
+      listFilledSignalsSince: async () => {
+        analyticsCalls += 1;
+        return [signal()];
+      },
+    },
+    getScannerStatus: () => ({ scanning: false, lastScanAt: now, lastCandidateCount: 0, queuedExecutions: 0, activeExecutions: 0 }),
+    getDiscoveryState: () => ({ lastDiscoveryAt: now, lastDiscoveryError: null }),
+    getLogs: () => [],
+  };
+  const cache: DashboardSnapshotCache = {};
+
+  await createDashboardSnapshot(runtime, now, cache);
+  await createDashboardSnapshot(runtime, now + 250, cache);
+  assert.equal(recentCalls, 1);
+  assert.equal(analyticsCalls, 1);
+
+  await createDashboardSnapshot(runtime, now + 1_001, cache);
+  assert.equal(recentCalls, 2);
+  assert.equal(analyticsCalls, 1);
+
+  await createDashboardSnapshot(runtime, now + 5_001, cache);
+  assert.equal(recentCalls, 3);
+  assert.equal(analyticsCalls, 2);
 });
 
 test("dashboard stream events are valid SSE snapshot frames", () => {
