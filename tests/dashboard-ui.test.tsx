@@ -7,6 +7,9 @@ import {
   InlineTradePayoffGraph,
   RiskMeter,
   TradeDetailDrawer,
+  buildBookMetrics,
+  buildBookRowViewModel,
+  buildCrossVenueBookComparisons,
   buildTradeDetailModel,
   buildTradeRiskIntelligence,
   normalizeBinaryPrice,
@@ -104,7 +107,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
     books: {
       kalshi: [{
         venue: "kalshi",
-        contractId: "kalshi",
+        contractId: "fast-kalshi",
         asset: "BTC",
         expiryMs: 1_800_000_900_000,
         strike: 1502,
@@ -116,7 +119,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       }],
       polymarket: [{
         venue: "polymarket",
-        contractId: "poly",
+        contractId: "fast-poly",
         asset: "BTC",
         expiryMs: 1_800_000_900_000,
         strike: 1500,
@@ -178,6 +181,47 @@ test("opportunity blotter sorts by guaranteed profit and stale helper flags old 
     },
   });
   assert.equal(isContractStale(stale.books.polymarket[0], stale), true);
+});
+
+test("book metric helpers compute spreads, freshness, readiness, and same-expiry comparisons", () => {
+  const liveSnapshot = snapshot();
+  const kalshiMetrics = buildBookMetrics(liveSnapshot.books.kalshi, liveSnapshot);
+  assert.equal(kalshiMetrics.contractCount, 1);
+  assert.equal(kalshiMetrics.freshestAgeMs, 500);
+  assert.equal(kalshiMetrics.stalestAgeMs, 500);
+  assert.equal(kalshiMetrics.staleCount, 0);
+  assert.equal(kalshiMetrics.averageYesSpread, 0.01);
+  assert.equal(kalshiMetrics.averageNoSpread, 0.01);
+  assert.equal(kalshiMetrics.bestYesAsk, 0.5);
+  assert.equal(kalshiMetrics.bestNoAsk, 0.5);
+  assert.equal(kalshiMetrics.scannerReadyCount, 1);
+  assert.equal(kalshiMetrics.health, "live");
+
+  const staleSnapshot = snapshot({
+    books: {
+      kalshi: [{ ...liveSnapshot.books.kalshi[0], updatedAt: liveSnapshot.generatedAt - 30_000 }],
+      polymarket: liveSnapshot.books.polymarket,
+    },
+  });
+  const staleMetrics = buildBookMetrics(staleSnapshot.books.kalshi, staleSnapshot);
+  assert.equal(staleMetrics.staleCount, 1);
+  assert.equal(staleMetrics.scannerReadyCount, 0);
+  assert.equal(staleMetrics.health, "stale");
+
+  const row = buildBookRowViewModel(liveSnapshot.books.polymarket[0], liveSnapshot);
+  assert.equal(row.yesSpread, 0.01);
+  assert.equal(row.noSpread, 0.01);
+  assert.equal(row.midpointProbability, 0.395);
+  assert.equal(row.scannerReady, true);
+  assert.equal(row.usedForArb, true);
+  assert.equal(row.statusLabel, "fresh");
+
+  const comparisons = buildCrossVenueBookComparisons(liveSnapshot);
+  assert.equal(comparisons.length, 1);
+  assert.equal(comparisons[0].strikeGap, 2);
+  assert.equal(comparisons[0].protectedPremium, 0.9);
+  assert.equal(comparisons[0].deadZonePremium, 1.1);
+  assert.equal(comparisons[0].classification, "protected_edge");
 });
 
 test("trade detail model normalizes protected and dead-zone payoff geometry", () => {
@@ -328,6 +372,30 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Sharpe Ratio/);
   assert.match(live, /Estimated Guaranteed PnL Graph/);
   assert.match(live, /aria-label="Live venue books"/);
+  assert.match(live, /Venue KPIs/);
+  assert.match(live, /Freshest \/ Stalest/);
+  assert.match(live, /Avg YES Spread/);
+  assert.match(live, /Avg NO Spread/);
+  assert.match(live, /Best YES Ask/);
+  assert.match(live, /Best NO Ask/);
+  assert.match(live, /Live Top-of-Book Visuals/);
+  assert.match(live, /Best YES bid\/ask/);
+  assert.match(live, /Best NO bid\/ask/);
+  assert.match(live, /aria-label="Spread-width heat strip"/);
+  assert.match(live, /aria-label="Freshness pulse indicator"/);
+  assert.match(live, /Strike Ladder/);
+  assert.match(live, /YES Spread/);
+  assert.match(live, /NO Spread/);
+  assert.match(live, /Mid Prob/);
+  assert.match(live, /scanner-ready/);
+  assert.match(live, /Used for arb leg/);
+  assert.match(live, /YES Ask Spark/);
+  assert.match(live, /NO Ask Spark/);
+  assert.match(live, /Spread Spark/);
+  assert.match(live, /Cross-Venue Book Compare/);
+  assert.match(live, /Protected premium/);
+  assert.match(live, /Dead-zone premium/);
+  assert.match(live, /protected edge/);
   assert.match(live, /Price-To-Beat Diagnostics/);
   assert.match(live, /aria-label="Signal and runtime activity"/);
   assert.match(live, /Signal Tape/);

@@ -35,7 +35,6 @@ import {
   sortCandidatesForBlotter,
   sortContractsForBook,
   staleContractCount,
-  venueStatus,
 } from "../lib/dashboard-view-model";
 import type { RiskSurface3DProps } from "./dashboard/risk-surface-types";
 
@@ -119,6 +118,58 @@ export interface DashboardInsightModel {
   staleBooks: number;
 }
 
+interface BookHistoryPoint {
+  timestamp: number;
+  yesAsk: number | null;
+  noAsk: number | null;
+  spread: number | null;
+}
+
+type BookHistory = Record<string, BookHistoryPoint[]>;
+
+export interface BookMetrics {
+  contractCount: number;
+  freshestAgeMs: number | null;
+  stalestAgeMs: number | null;
+  staleCount: number;
+  averageYesSpread: number | null;
+  averageNoSpread: number | null;
+  bestYesAsk: number | null;
+  bestNoAsk: number | null;
+  scannerReadyCount: number;
+  health: "empty" | "stale" | "live";
+}
+
+export interface BookRowViewModel {
+  contract: BinaryContract;
+  ageMs: number;
+  yesSpread: number | null;
+  noSpread: number | null;
+  midpointProbability: number | null;
+  freshnessScore: number;
+  scannerReady: boolean;
+  usedForArb: boolean;
+  statusLabel: "fresh" | "stale" | "pending";
+  spreadHeat: number;
+}
+
+export interface CrossVenueBookComparison {
+  key: string;
+  expiryMs: number;
+  kalshiContractId: string;
+  polymarketContractId: string;
+  kalshiStrike: number;
+  polymarketStrike: number;
+  lowerStrike: number;
+  upperStrike: number;
+  strikeGap: number;
+  strikeGapPctOfMid: number | null;
+  protectedPremium: number | null;
+  deadZonePremium: number | null;
+  protectedEdge: number | null;
+  classification: "protected_edge" | "protected_watch" | "dead_zone_risk" | "incomplete";
+}
+
 function VenueBadge({ venue }: { venue: string }) {
   return <span className={`venue venue-${venue}`}>{venue.toUpperCase()}</span>;
 }
@@ -177,6 +228,170 @@ export function normalizeBinaryPrice(value: number | null | undefined): number |
   const numeric = safeNumber(value);
   if (numeric == null) return null;
   return Math.abs(numeric) > 1 ? numeric / 100 : numeric;
+}
+
+function contractBookKey(contract: BinaryContract): string {
+  return `${contract.venue}:${contract.contractId}:${contract.expiryMs}:${contract.strike}`;
+}
+
+function binarySpread(bid: number | null | undefined, ask: number | null | undefined): number | null {
+  const normalizedBid = normalizeBinaryPrice(bid);
+  const normalizedAsk = normalizeBinaryPrice(ask);
+  if (normalizedBid == null || normalizedAsk == null) return null;
+  return Math.max(0, roundDetailDollars(normalizedAsk - normalizedBid));
+}
+
+function averageNullable(values: Array<number | null>): number | null {
+  const numeric = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (numeric.length === 0) return null;
+  return roundDetailDollars(numeric.reduce((total, value) => total + value, 0) / numeric.length);
+}
+
+function lowestNullable(values: Array<number | null>): number | null {
+  const numeric = values.filter((value): value is number => value != null && Number.isFinite(value));
+  return numeric.length > 0 ? Math.min(...numeric) : null;
+}
+
+function impliedYesMidpoint(contract: BinaryContract): number | null {
+  const yesBid = normalizeBinaryPrice(contract.yesBid);
+  const yesAsk = normalizeBinaryPrice(contract.yesAsk);
+  const noBid = normalizeBinaryPrice(contract.noBid);
+  const noAsk = normalizeBinaryPrice(contract.noAsk);
+  if (yesBid != null && yesAsk != null) return roundDetailDollars((yesBid + yesAsk) / 2);
+  if (yesAsk != null && noAsk != null) return roundDetailDollars((yesAsk + (1 - noAsk)) / 2);
+  if (yesAsk != null) return yesAsk;
+  if (noAsk != null) return roundDetailDollars(1 - noAsk);
+  if (yesBid != null) return yesBid;
+  if (noBid != null) return roundDetailDollars(1 - noBid);
+  return null;
+}
+
+function askForDirection(contract: BinaryContract, direction: TradeDetailDirection): number | null {
+  return direction === "yes" ? normalizeBinaryPrice(contract.yesAsk) : normalizeBinaryPrice(contract.noAsk);
+}
+
+function contractAppearsInCandidates(contract: BinaryContract, candidates: ArbCandidate[]): boolean {
+  return candidates.some((candidate) => (
+    candidate.lower.contractId === contract.contractId
+    || candidate.higher.contractId === contract.contractId
+    || candidate.kalshiContractId === contract.contractId
+    || candidate.polymarketContractId === contract.contractId
+  ));
+}
+
+export function buildBookMetrics(contracts: BinaryContract[], snapshot: DashboardSnapshot): BookMetrics {
+  const ages = contracts.map((contract) => Math.max(0, snapshot.generatedAt - contract.updatedAt));
+  const yesSpreads = contracts.map((contract) => binarySpread(contract.yesBid, contract.yesAsk));
+  const noSpreads = contracts.map((contract) => binarySpread(contract.noBid, contract.noAsk));
+  const staleCount = contracts.filter((contract) => isContractStale(contract, snapshot)).length;
+  const scannerReadyCount = contracts.filter((contract) => (
+    normalizeBinaryPrice(contract.yesAsk) != null
+    && normalizeBinaryPrice(contract.noAsk) != null
+    && !isContractStale(contract, snapshot)
+  )).length;
+
+  return {
+    contractCount: contracts.length,
+    freshestAgeMs: ages.length > 0 ? Math.min(...ages) : null,
+    stalestAgeMs: ages.length > 0 ? Math.max(...ages) : null,
+    staleCount,
+    averageYesSpread: averageNullable(yesSpreads),
+    averageNoSpread: averageNullable(noSpreads),
+    bestYesAsk: lowestNullable(contracts.map((contract) => normalizeBinaryPrice(contract.yesAsk))),
+    bestNoAsk: lowestNullable(contracts.map((contract) => normalizeBinaryPrice(contract.noAsk))),
+    scannerReadyCount,
+    health: contracts.length === 0 ? "empty" : staleCount > 0 ? "stale" : "live",
+  };
+}
+
+export function buildBookRowViewModel(
+  contract: BinaryContract,
+  snapshot: DashboardSnapshot,
+  candidates: ArbCandidate[] = snapshot.liveCandidates,
+): BookRowViewModel {
+  const ageMs = Math.max(0, snapshot.generatedAt - contract.updatedAt);
+  const yesSpread = binarySpread(contract.yesBid, contract.yesAsk);
+  const noSpread = binarySpread(contract.noBid, contract.noAsk);
+  const averageSpread = averageNullable([yesSpread, noSpread]);
+  const stale = isContractStale(contract, snapshot);
+  const scannerReady = normalizeBinaryPrice(contract.yesAsk) != null && normalizeBinaryPrice(contract.noAsk) != null && !stale;
+
+  return {
+    contract,
+    ageMs,
+    yesSpread,
+    noSpread,
+    midpointProbability: impliedYesMidpoint(contract),
+    freshnessScore: snapshot.health.staleBookMs <= 0 ? 1 : clamp(1 - ageMs / snapshot.health.staleBookMs, 0, 1),
+    scannerReady,
+    usedForArb: contractAppearsInCandidates(contract, candidates),
+    statusLabel: scannerReady ? "fresh" : stale ? "stale" : "pending",
+    spreadHeat: averageSpread == null ? 0 : clamp(averageSpread / 0.05, 0, 1),
+  };
+}
+
+export function appendBookHistory(previous: BookHistory, snapshot: DashboardSnapshot): BookHistory {
+  const next: BookHistory = {};
+  for (const contract of [...snapshot.books.kalshi, ...snapshot.books.polymarket]) {
+    const key = contractBookKey(contract);
+    const yesSpread = binarySpread(contract.yesBid, contract.yesAsk);
+    const noSpread = binarySpread(contract.noBid, contract.noAsk);
+    const point: BookHistoryPoint = {
+      timestamp: snapshot.generatedAt,
+      yesAsk: normalizeBinaryPrice(contract.yesAsk),
+      noAsk: normalizeBinaryPrice(contract.noAsk),
+      spread: averageNullable([yesSpread, noSpread]),
+    };
+    const existing = previous[key] ?? [];
+    const withoutDuplicate = existing.filter((sample) => sample.timestamp !== snapshot.generatedAt);
+    next[key] = [...withoutDuplicate, point].slice(-32);
+  }
+  return next;
+}
+
+export function buildCrossVenueBookComparisons(snapshot: DashboardSnapshot): CrossVenueBookComparison[] {
+  const comparisons: CrossVenueBookComparison[] = [];
+  for (const kalshi of snapshot.books.kalshi) {
+    for (const polymarket of snapshot.books.polymarket) {
+      if (kalshi.expiryMs !== polymarket.expiryMs) continue;
+      const lower = kalshi.strike <= polymarket.strike ? kalshi : polymarket;
+      const upper = lower === kalshi ? polymarket : kalshi;
+      const strikeGap = roundDetailDollars(Math.max(0, upper.strike - lower.strike));
+      const midStrike = (upper.strike + lower.strike) / 2;
+      const protectedAskA = askForDirection(lower, "yes");
+      const protectedAskB = askForDirection(upper, "no");
+      const deadZoneAskA = askForDirection(lower, "no");
+      const deadZoneAskB = askForDirection(upper, "yes");
+      const protectedPremium = protectedAskA == null || protectedAskB == null ? null : roundDetailDollars(protectedAskA + protectedAskB);
+      const deadZonePremium = deadZoneAskA == null || deadZoneAskB == null ? null : roundDetailDollars(deadZoneAskA + deadZoneAskB);
+      const protectedEdge = protectedPremium == null ? null : roundDetailDollars(1 - protectedPremium);
+      const classification: CrossVenueBookComparison["classification"] = protectedPremium == null
+        ? deadZonePremium == null ? "incomplete" : "dead_zone_risk"
+        : protectedEdge != null && protectedEdge >= snapshot.health.minProfitDollars
+          ? "protected_edge"
+          : protectedEdge != null && protectedEdge >= 0
+            ? "protected_watch"
+            : "dead_zone_risk";
+
+      comparisons.push({
+        key: `${kalshi.contractId}:${polymarket.contractId}`,
+        expiryMs: kalshi.expiryMs,
+        kalshiContractId: kalshi.contractId,
+        polymarketContractId: polymarket.contractId,
+        kalshiStrike: kalshi.strike,
+        polymarketStrike: polymarket.strike,
+        lowerStrike: lower.strike,
+        upperStrike: upper.strike,
+        strikeGap,
+        strikeGapPctOfMid: midStrike > 0 ? strikeGap / midStrike : null,
+        protectedPremium,
+        deadZonePremium,
+        protectedEdge,
+        classification,
+      });
+    }
+  }
+  return comparisons.sort((left, right) => left.strikeGap - right.strikeGap || left.expiryMs - right.expiryMs).slice(0, 6);
 }
 
 function roundDetailDollars(value: number): number {
@@ -990,21 +1205,261 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
   );
 }
 
-function BookTable({ title, venue, contracts, snapshot }: {
+function BookMetricTile({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "warn" }) {
+  return (
+    <div className={`book-kpi book-kpi-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ProbabilityBar({
+  label,
+  bid,
+  ask,
+  tone,
+}: {
+  label: string;
+  bid: number | null | undefined;
+  ask: number | null | undefined;
+  tone: "yes" | "no";
+}) {
+  const normalizedBid = normalizeBinaryPrice(bid);
+  const normalizedAsk = normalizeBinaryPrice(ask);
+  return (
+    <div className={`probability-bar probability-bar-${tone}`}>
+      <div className="probability-bar-label">
+        <span>{label}</span>
+        <strong>{formatCents(normalizedBid)} / {formatCents(normalizedAsk)}</strong>
+      </div>
+      <div className="probability-track" aria-label={`${label} bid ask probability bar`}>
+        <span className="probability-bid-fill" style={{ width: `${clamp((normalizedBid ?? 0) * 100, 0, 100)}%` }} />
+        <span className="probability-ask-fill" style={{ width: `${clamp((normalizedAsk ?? 0) * 100, 0, 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function SpreadHeatStrip({ yesSpread, noSpread }: { yesSpread: number | null; noSpread: number | null }) {
+  const heat = clamp(((yesSpread ?? 0) + (noSpread ?? 0)) / 0.1, 0, 1);
+  return (
+    <div className="spread-heat-strip" aria-label="Spread-width heat strip">
+      {Array.from({ length: 12 }, (_, index) => (
+        <span
+          className={index / 11 <= heat ? "active" : ""}
+          key={index}
+          style={{ opacity: index / 11 <= heat ? 0.45 + index / 24 : 0.18 }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function FreshnessPulse({ metrics }: { metrics: BookMetrics }) {
+  return (
+    <div className={`freshness-pulse freshness-${metrics.health}`} aria-label="Freshness pulse indicator">
+      <span />
+      <div>
+        <strong>{metrics.health.toUpperCase()}</strong>
+        <small>{metrics.freshestAgeMs == null ? "No samples" : `freshest ${formatCompactTime(metrics.freshestAgeMs)} · stalest ${formatCompactTime(metrics.stalestAgeMs)}`}</small>
+      </div>
+    </div>
+  );
+}
+
+function StrikeLadder({ rows, snapshot }: { rows: BookRowViewModel[]; snapshot: DashboardSnapshot }) {
+  const strikes = rows.map((row) => row.contract.strike).filter((strike) => Number.isFinite(strike));
+  const minStrike = strikes.length > 0 ? Math.min(...strikes) : null;
+  const maxStrike = strikes.length > 0 ? Math.max(...strikes) : null;
+  const range = minStrike == null || maxStrike == null ? 1 : Math.max(1, maxStrike - minStrike);
+
+  return (
+    <div className="strike-ladder" aria-label="Strike Ladder">
+      <div className="strike-ladder-header">
+        <span>Strike Ladder</span>
+        <strong>{minStrike == null ? "--" : `${formatDollars(minStrike)} - ${formatDollars(maxStrike)}`}</strong>
+      </div>
+      <div className="strike-ladder-track">
+        {rows.slice(0, 18).map((row) => {
+          const left = minStrike == null ? 50 : clamp(((row.contract.strike - minStrike) / range) * 100, 2, 98);
+          return (
+            <span
+              aria-label={`${row.contract.venue} ${formatDollars(row.contract.strike)} expires in ${formatCountdown(row.contract.expiryMs, snapshot.generatedAt)}`}
+              className={`strike-ladder-dot ${row.statusLabel}`}
+              key={row.contract.contractId}
+              style={{ left: `${left}%` }}
+              title={`${formatDollars(row.contract.strike)} · ${formatCountdown(row.contract.expiryMs, snapshot.generatedAt)}`}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BookSparkline({ label, points, field }: { label: string; points: BookHistoryPoint[]; field: "yesAsk" | "noAsk" | "spread" }) {
+  const values = points.map((point) => point[field]).filter((value): value is number => value != null && Number.isFinite(value));
+  const min = values.length > 0 ? Math.min(...values) : 0;
+  const max = values.length > 0 ? Math.max(...values) : 1;
+  const range = Math.max(0.01, max - min);
+  const path = values.map((value, index) => {
+    const x = values.length === 1 ? 58 : 8 + (index / Math.max(1, values.length - 1)) * 104;
+    const y = 28 - ((value - min) / range) * 22;
+    return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }).join(" ");
+
+  return (
+    <div className="book-sparkline">
+      <span>{label}</span>
+      <svg viewBox="0 0 120 34" role="img" aria-label={label}>
+        <title>{values.length > 1 ? `${label}: ${values.map((value) => formatCents(value)).join(" → ")}` : `${label}: waiting for rolling SSE samples`}</title>
+        <line x1="8" x2="112" y1="28" y2="28" />
+        {path ? <path d={path} /> : null}
+        {values.length <= 1 ? <text x="60" y="19">live</text> : null}
+      </svg>
+    </div>
+  );
+}
+
+function BookRowVisual({ history }: { history: BookHistoryPoint[] }) {
+  return (
+    <div className="book-row-visual" aria-label="Rolling top-of-book sparklines">
+      <BookSparkline field="yesAsk" label="YES Ask Spark" points={history} />
+      <BookSparkline field="noAsk" label="NO Ask Spark" points={history} />
+      <BookSparkline field="spread" label="Spread Spark" points={history} />
+    </div>
+  );
+}
+
+function BookVisualSummary({
+  metrics,
+  rows,
+  snapshot,
+}: {
+  metrics: BookMetrics;
+  rows: BookRowViewModel[];
+  snapshot: DashboardSnapshot;
+}) {
+  const bestYesContract = [...rows].sort((left, right) => (normalizeBinaryPrice(left.contract.yesAsk) ?? Number.POSITIVE_INFINITY) - (normalizeBinaryPrice(right.contract.yesAsk) ?? Number.POSITIVE_INFINITY))[0]?.contract;
+  const bestNoContract = [...rows].sort((left, right) => (normalizeBinaryPrice(left.contract.noAsk) ?? Number.POSITIVE_INFINITY) - (normalizeBinaryPrice(right.contract.noAsk) ?? Number.POSITIVE_INFINITY))[0]?.contract;
+
+  return (
+    <div className="book-visual-summary">
+      <div className="book-visual-title">
+        <span>Live Top-of-Book Visuals</span>
+        <strong>{metrics.scannerReadyCount}/{metrics.contractCount} scanner-ready</strong>
+      </div>
+      <div className="book-visual-grid">
+        <ProbabilityBar
+          ask={bestYesContract?.yesAsk ?? null}
+          bid={bestYesContract?.yesBid ?? null}
+          label="Best YES bid/ask"
+          tone="yes"
+        />
+        <ProbabilityBar
+          ask={bestNoContract?.noAsk ?? null}
+          bid={bestNoContract?.noBid ?? null}
+          label="Best NO bid/ask"
+          tone="no"
+        />
+        <div className="spread-heat-card">
+          <div className="strike-ladder-header">
+            <span>Spread Heat</span>
+            <strong>YES {formatCents(metrics.averageYesSpread)} · NO {formatCents(metrics.averageNoSpread)}</strong>
+          </div>
+          <SpreadHeatStrip yesSpread={metrics.averageYesSpread} noSpread={metrics.averageNoSpread} />
+        </div>
+        <FreshnessPulse metrics={metrics} />
+      </div>
+      <StrikeLadder rows={rows} snapshot={snapshot} />
+    </div>
+  );
+}
+
+function CrossVenueBookStrip({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const comparisons = buildCrossVenueBookComparisons(snapshot);
+  return (
+    <section className="panel cross-venue-book-strip" aria-label="Cross-venue book comparison">
+      <div className="panel-header">
+        <div>
+          <p className="panel-kicker">pair monitor</p>
+          <h2>Cross-Venue Book Compare</h2>
+          <p className="panel-subtitle">Closest same-expiry strikes, premium proxies, and protected/dead-zone structure hints from live top-of-book.</p>
+        </div>
+        <span className="big-number">{comparisons.length}</span>
+      </div>
+      <div className="cross-venue-card-row">
+        {comparisons.map((comparison) => (
+          <article className={`cross-venue-card comparison-${comparison.classification}`} key={comparison.key}>
+            <div className="cross-venue-card-head">
+              <span>{formatCountdown(comparison.expiryMs, snapshot.generatedAt)}</span>
+              <strong>{comparison.classification.replaceAll("_", " ")}</strong>
+            </div>
+            <div className="cross-venue-strikes">
+              <div><span>Kalshi</span><strong>{formatDollars(comparison.kalshiStrike)}</strong></div>
+              <div><span>Polymarket</span><strong>{formatDollars(comparison.polymarketStrike)}</strong></div>
+            </div>
+            <div className="cross-venue-metrics">
+              <span>Strike gap <strong>{formatDollars(comparison.strikeGap)}</strong></span>
+              <span>Gap % mid <strong>{formatDetailPercent(comparison.strikeGapPctOfMid)}</strong></span>
+              <span>Protected premium <strong>{formatCents(comparison.protectedPremium)}</strong></span>
+              <span>Dead-zone premium <strong>{formatCents(comparison.deadZonePremium)}</strong></span>
+              <span>Protected edge <strong className={(comparison.protectedEdge ?? -1) >= snapshot.health.minProfitDollars ? "profit" : ""}>{formatSignedCents(comparison.protectedEdge)}</strong></span>
+            </div>
+          </article>
+        ))}
+        {comparisons.length === 0 ? <div className="empty-cell">No same-expiry Kalshi/Polymarket book pairs are ready for comparison yet.</div> : null}
+      </div>
+    </section>
+  );
+}
+
+function BookTable({
+  title,
+  venue,
+  contracts,
+  snapshot,
+  candidates,
+  history,
+}: {
   title: string;
   venue: "kalshi" | "polymarket";
   contracts: BinaryContract[];
   snapshot: DashboardSnapshot;
+  candidates: ArbCandidate[];
+  history: BookHistory;
 }) {
+  const metrics = buildBookMetrics(contracts, snapshot);
+  const rows = sortContractsForBook(contracts).slice(0, 24).map((contract) => buildBookRowViewModel(contract, snapshot, candidates));
+
   return (
     <section className="panel book-panel">
       <div className="panel-header">
         <div>
           <p className="panel-kicker">{venue}</p>
           <h2>{title}</h2>
+          <p className="panel-subtitle">Live top-of-book, spread quality, freshness, and scanner readiness.</p>
         </div>
-        <StatusPill label={venueStatus(snapshot, venue)} state={venueStatus(snapshot, venue)} />
+        <StatusPill label={metrics.health} state={metrics.health} />
       </div>
+      <div className="book-kpi-section">
+        <div className="book-kpi-heading">
+          <span>Venue KPIs</span>
+          <strong>{metrics.health.toUpperCase()} HEALTH</strong>
+        </div>
+        <div className="book-kpi-grid">
+          <BookMetricTile label="Contracts" value={`${metrics.contractCount}`} />
+          <BookMetricTile label="Freshest / Stalest" value={`${formatCompactTime(metrics.freshestAgeMs)} / ${formatCompactTime(metrics.stalestAgeMs)}`} tone={metrics.staleCount > 0 ? "warn" : "good"} />
+          <BookMetricTile label="Stale Count" value={`${metrics.staleCount}`} tone={metrics.staleCount > 0 ? "warn" : "good"} />
+          <BookMetricTile label="Avg YES Spread" value={formatCents(metrics.averageYesSpread)} />
+          <BookMetricTile label="Avg NO Spread" value={formatCents(metrics.averageNoSpread)} />
+          <BookMetricTile label="Best YES Ask" value={formatCents(metrics.bestYesAsk)} tone="good" />
+          <BookMetricTile label="Best NO Ask" value={formatCents(metrics.bestNoAsk)} tone="good" />
+          <BookMetricTile label="Scanner Ready" value={`${metrics.scannerReadyCount}/${metrics.contractCount}`} tone={metrics.scannerReadyCount > 0 ? "good" : "warn"} />
+        </div>
+      </div>
+      <BookVisualSummary metrics={metrics} rows={rows} snapshot={snapshot} />
       <div className="table-wrap">
         <table>
           <thead>
@@ -1015,22 +1470,42 @@ function BookTable({ title, venue, contracts, snapshot }: {
               <th>Yes Ask</th>
               <th>No Bid</th>
               <th>No Ask</th>
-              <th>Age</th>
+              <th>YES Spread</th>
+              <th>NO Spread</th>
+              <th>Mid Prob</th>
+              <th>Freshness</th>
+              <th>Readiness</th>
+              <th>Live Visuals</th>
             </tr>
           </thead>
           <tbody>
-            {sortContractsForBook(contracts).slice(0, 24).map((contract) => (
-              <tr key={contract.contractId} className={isContractStale(contract, snapshot) ? "row-stale" : ""}>
-                <td data-label="Expiry">{formatCountdown(contract.expiryMs, snapshot.generatedAt)}</td>
-                <td data-label="Strike">{formatDollars(contract.strike)}</td>
-                <td data-label="Yes Bid">{formatCents(contract.yesBid)}</td>
-                <td data-label="Yes Ask">{formatCents(contract.yesAsk)}</td>
-                <td data-label="No Bid">{formatCents(contract.noBid)}</td>
-                <td data-label="No Ask">{formatCents(contract.noAsk)}</td>
-                <td data-label="Age">{Math.max(0, Math.round((snapshot.generatedAt - contract.updatedAt) / 1000))}s</td>
+            {rows.map((row) => (
+              <tr key={row.contract.contractId} className={row.statusLabel === "stale" ? "row-stale" : ""}>
+                <td data-label="Expiry">{formatCountdown(row.contract.expiryMs, snapshot.generatedAt)}</td>
+                <td data-label="Strike">{formatDollars(row.contract.strike)}</td>
+                <td data-label="Yes Bid">{formatCents(row.contract.yesBid)}</td>
+                <td data-label="Yes Ask">{formatCents(row.contract.yesAsk)}</td>
+                <td data-label="No Bid">{formatCents(row.contract.noBid)}</td>
+                <td data-label="No Ask">{formatCents(row.contract.noAsk)}</td>
+                <td data-label="YES Spread">{formatCents(row.yesSpread)}</td>
+                <td data-label="NO Spread">{formatCents(row.noSpread)}</td>
+                <td data-label="Mid Prob">{formatCents(row.midpointProbability)}</td>
+                <td data-label="Freshness">
+                  <div className="freshness-cell">
+                    <span>{formatCompactTime(row.ageMs)}</span>
+                    <div className="freshness-bar"><i style={{ width: `${row.freshnessScore * 100}%` }} /></div>
+                  </div>
+                </td>
+                <td data-label="Readiness">
+                  <span className={`scanner-ready-badge scanner-${row.statusLabel}`}>{row.scannerReady ? "scanner-ready" : row.statusLabel}</span>
+                  {row.usedForArb ? <span className="arb-used-hint">Used for arb leg</span> : null}
+                </td>
+                <td data-label="Live Visuals">
+                  <BookRowVisual history={history[contractBookKey(row.contract)] ?? []} />
+                </td>
               </tr>
             ))}
-            {contracts.length === 0 ? <tr><td colSpan={7} className="empty-cell">No live contracts discovered.</td></tr> : null}
+            {contracts.length === 0 ? <tr><td colSpan={12} className="empty-cell">No live contracts discovered.</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -1874,6 +2349,7 @@ export function DashboardTerminalView({
 }) {
   const [selectedTrade, setSelectedTrade] = useState<TradeDetailModel | null>(null);
   const [viewMode, setViewMode] = useState<DashboardViewMode>("risk");
+  const [bookHistory, setBookHistory] = useState<BookHistory>({});
   const selectedTradeKey = selectedTrade?.key ?? null;
 
   useEffect(() => {
@@ -1881,6 +2357,11 @@ export function DashboardTerminalView({
     const refreshed = findTradeDetailByKey(snapshot, selectedTradeKey);
     if (refreshed) setSelectedTrade(refreshed);
   }, [snapshot, selectedTradeKey]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    setBookHistory((current) => appendBookHistory(current, snapshot));
+  }, [snapshot]);
 
   if (!snapshot) {
     return (
@@ -1925,9 +2406,11 @@ export function DashboardTerminalView({
 
       <SyntheticStructureMap snapshot={snapshot} />
 
+      <CrossVenueBookStrip snapshot={snapshot} />
+
       <section className="market-books-grid" id="market-books" aria-label="Live venue books">
-        <BookTable title="Kalshi BTC 15m" venue="kalshi" contracts={snapshot.books.kalshi} snapshot={snapshot} />
-        <BookTable title="Polymarket BTC 15m" venue="polymarket" contracts={snapshot.books.polymarket} snapshot={snapshot} />
+        <BookTable candidates={snapshot.liveCandidates} history={bookHistory} title="Kalshi BTC 15m" venue="kalshi" contracts={snapshot.books.kalshi} snapshot={snapshot} />
+        <BookTable candidates={snapshot.liveCandidates} history={bookHistory} title="Polymarket BTC 15m" venue="polymarket" contracts={snapshot.books.polymarket} snapshot={snapshot} />
       </section>
 
       {snapshot.discovery.lastDiscoveryError ? <div className="error-banner">Discovery error: {snapshot.discovery.lastDiscoveryError}</div> : null}
