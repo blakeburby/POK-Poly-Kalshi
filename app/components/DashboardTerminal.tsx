@@ -820,6 +820,24 @@ function GlobalStateBar({
   );
 }
 
+function MobileSectionNav() {
+  const sections = [
+    ["Edge", "opportunities"],
+    ["Risk", "risk-intelligence"],
+    ["Detail", "trade-detail"],
+    ["Books", "market-books"],
+    ["Signals", "signals"],
+  ] as const;
+
+  return (
+    <nav className="mobile-section-nav" aria-label="Dashboard sections">
+      {sections.map(([label, id]) => (
+        <a href={`#${id}`} key={id}>{label}</a>
+      ))}
+    </nav>
+  );
+}
+
 function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: DashboardSnapshot; selectedTrade: TradeDetailModel | null }) {
   const insights = buildDashboardInsights(snapshot);
   const focusTrade = selectedTrade ?? (snapshot.liveCandidates[0] ? buildTradeDetailModel("opportunity", sortCandidatesForBlotter(snapshot.liveCandidates)[0]) : null);
@@ -831,7 +849,7 @@ function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: Dashboar
   const opportunityFrequency = snapshot.scanner.lastCandidateCount;
 
   return (
-    <section className="panel risk-intelligence-panel">
+    <section className="panel risk-intelligence-panel" id="risk-intelligence">
       <div className="panel-header">
         <div>
           <p className="panel-kicker">risk intelligence</p>
@@ -1003,13 +1021,13 @@ function BookTable({ title, venue, contracts, snapshot }: {
           <tbody>
             {sortContractsForBook(contracts).slice(0, 24).map((contract) => (
               <tr key={contract.contractId} className={isContractStale(contract, snapshot) ? "row-stale" : ""}>
-                <td>{formatCountdown(contract.expiryMs, snapshot.generatedAt)}</td>
-                <td>{formatDollars(contract.strike)}</td>
-                <td>{formatCents(contract.yesBid)}</td>
-                <td>{formatCents(contract.yesAsk)}</td>
-                <td>{formatCents(contract.noBid)}</td>
-                <td>{formatCents(contract.noAsk)}</td>
-                <td>{Math.max(0, Math.round((snapshot.generatedAt - contract.updatedAt) / 1000))}s</td>
+                <td data-label="Expiry">{formatCountdown(contract.expiryMs, snapshot.generatedAt)}</td>
+                <td data-label="Strike">{formatDollars(contract.strike)}</td>
+                <td data-label="Yes Bid">{formatCents(contract.yesBid)}</td>
+                <td data-label="Yes Ask">{formatCents(contract.yesAsk)}</td>
+                <td data-label="No Bid">{formatCents(contract.noBid)}</td>
+                <td data-label="No Ask">{formatCents(contract.noAsk)}</td>
+                <td data-label="Age">{Math.max(0, Math.round((snapshot.generatedAt - contract.updatedAt) / 1000))}s</td>
               </tr>
             ))}
             {contracts.length === 0 ? <tr><td colSpan={7} className="empty-cell">No live contracts discovered.</td></tr> : null}
@@ -1047,17 +1065,17 @@ function CandidateRow({
       role="button"
       tabIndex={0}
     >
-      <td>{formatCountdown(candidate.expiryMs, now)}</td>
-      <td><span className={`structure-chip structure-${structureClass}`}>{tradeDetail.structureLabel}</span></td>
-      <td>{formatDollars(candidate.lower.strike)} / {formatDollars(candidate.higher.strike)}</td>
-      <td><VenueBadge venue={candidate.lower.venue} /> {candidate.lower.direction.toUpperCase()} @ {formatCents(candidate.lower.ask)}</td>
-      <td><VenueBadge venue={candidate.higher.venue} /> {candidate.higher.direction.toUpperCase()} @ {formatCents(candidate.higher.ask)}</td>
-      <td>{formatCents(candidate.premium)}</td>
-      <td className="profit">{formatCents(candidate.guaranteedProfit)}</td>
-      <td>{formatCents(candidate.overlapProfit)}</td>
-      <td><span className={`score-pill score-${risk.riskLevel}`}>{risk.riskScore}</span></td>
-      <td>{risk.confidence}%</td>
-      <td className="payoff-cell">
+      <td data-label="Expiry">{formatCountdown(candidate.expiryMs, now)}</td>
+      <td data-label="Structure Type"><span className={`structure-chip structure-${structureClass}`}>{tradeDetail.structureLabel}</span></td>
+      <td data-label="Strikes">{formatDollars(candidate.lower.strike)} / {formatDollars(candidate.higher.strike)}</td>
+      <td data-label="Lower Leg"><VenueBadge venue={candidate.lower.venue} /> {candidate.lower.direction.toUpperCase()} @ {formatCents(candidate.lower.ask)}</td>
+      <td data-label="Higher Leg"><VenueBadge venue={candidate.higher.venue} /> {candidate.higher.direction.toUpperCase()} @ {formatCents(candidate.higher.ask)}</td>
+      <td data-label="Total Premium">{formatCents(candidate.premium)}</td>
+      <td data-label="Guaranteed Profit" className="profit">{formatCents(candidate.guaranteedProfit)}</td>
+      <td data-label="Max Profit">{formatCents(candidate.overlapProfit)}</td>
+      <td data-label="Risk Score"><span className={`score-pill score-${risk.riskLevel}`}>{risk.riskScore}</span></td>
+      <td data-label="Confidence">{risk.confidence}%</td>
+      <td className="payoff-cell" data-label="Payoff">
         <InlineTradePayoffGraph trade={tradeDetail} variant="table" />
       </td>
     </tr>
@@ -1075,7 +1093,7 @@ function OpportunityBlotter({
 }) {
   const candidates = sortCandidatesForBlotter(snapshot.liveCandidates);
   return (
-    <section className="panel blotter-panel opportunity-table-panel">
+    <section className="panel blotter-panel opportunity-table-panel" id="opportunities">
       <div className="panel-header">
         <div>
           <p className="panel-kicker">primary decision table</p>
@@ -1600,6 +1618,7 @@ export function TradeDetailDrawer({
       aria-label="Selected trade payoff detail"
       className="panel trade-detail-drawer"
       exit={{ opacity: 0, y: 12 }}
+      id="trade-detail"
       initial={{ opacity: 0, y: 12 }}
       transition={{ duration: 0.18 }}
     >
@@ -1703,11 +1722,11 @@ function PolymarketDiagnosticsPanel({ snapshot }: { snapshot: DashboardSnapshot 
           <tbody>
             {marketRows.map((market) => (
               <tr key={market.marketSlug}>
-                <td>{market.marketSlug}</td>
-                <td>{market.status}</td>
-                <td>{formatDollars(market.priceToBeat)}</td>
-                <td>{market.strikeSource ?? "--"}</td>
-                <td>{market.reason}</td>
+                <td data-label="Market">{market.marketSlug}</td>
+                <td data-label="Status">{market.status}</td>
+                <td data-label="Strike">{formatDollars(market.priceToBeat)}</td>
+                <td data-label="Source">{market.strikeSource ?? "--"}</td>
+                <td data-label="Reason">{market.reason}</td>
               </tr>
             ))}
             {marketRows.length === 0 ? <tr><td colSpan={5} className="empty-cell">No Polymarket BTC 15m markets discovered yet.</td></tr> : null}
@@ -1730,7 +1749,7 @@ function SignalTape({
   onSelectTrade: (trade: TradeDetailModel) => void;
 }) {
   return (
-    <section className="panel tape-panel">
+    <section className="panel tape-panel" id="signals">
       <div className="panel-header">
         <div>
           <p className="panel-kicker">audit log</p>
@@ -1884,6 +1903,7 @@ export function DashboardTerminalView({
         streamState={streamState}
         viewMode={viewMode}
       />
+      <MobileSectionNav />
 
       <section className="metric-grid institutional-metrics">
         <div className="metric"><span>Guaranteed Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
@@ -1905,7 +1925,7 @@ export function DashboardTerminalView({
 
       <SyntheticStructureMap snapshot={snapshot} />
 
-      <section className="market-books-grid" aria-label="Live venue books">
+      <section className="market-books-grid" id="market-books" aria-label="Live venue books">
         <BookTable title="Kalshi BTC 15m" venue="kalshi" contracts={snapshot.books.kalshi} snapshot={snapshot} />
         <BookTable title="Polymarket BTC 15m" venue="polymarket" contracts={snapshot.books.polymarket} snapshot={snapshot} />
       </section>

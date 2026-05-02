@@ -260,6 +260,14 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Risk View/);
   assert.match(live, /Raw View/);
   assert.match(live, /Execution View/);
+  assert.match(live, /aria-label="Dashboard sections"/);
+  assert.match(live, /href="#opportunities"/);
+  assert.match(live, /href="#risk-intelligence"/);
+  assert.match(live, /href="#market-books"/);
+  assert.match(live, /href="#signals"/);
+  assert.match(live, /id="opportunities"/);
+  assert.match(live, /id="risk-intelligence"/);
+  assert.match(live, /id="market-books"/);
   assert.match(live, /Decision Engine/);
   assert.match(live, /Is there edge\?/);
   assert.match(live, /Where is risk\?/);
@@ -277,6 +285,11 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Max Profit/);
   assert.match(live, /Risk Score/);
   assert.match(live, /Confidence/);
+  assert.match(live, /data-label="Structure Type"/);
+  assert.match(live, /data-label="Guaranteed Profit"/);
+  assert.match(live, /data-label="Payoff"/);
+  assert.match(live, /data-label="Yes Ask"/);
+  assert.match(live, /data-label="Reason"/);
   assert.match(live, /<th>Payoff<\/th>/);
   assert.match(live, /inline-payoff-table/);
   assert.match(live, /aria-label="Live Opportunity inline payoff graph"/);
@@ -403,6 +416,7 @@ test("trade detail drawer renders detailed payoff diagram with protected and dea
   );
 
   assert.match(protectedMarkup, /Selected trade payoff detail/);
+  assert.match(protectedMarkup, /id="trade-detail"/);
   assert.match(protectedMarkup, /Signal #42/);
   assert.match(protectedMarkup, /Protected Spread/);
   assert.match(protectedMarkup, /True Arb/);
