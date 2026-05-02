@@ -251,6 +251,7 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /YES \/ UP/);
   assert.match(live, /NO \/ DOWN/);
   assert.match(live, /Combined P\/L/);
+  assert.match(live, /Y-axis: Payout \/ Net P\/L \(\$\)/);
   assert.match(live, /aria-label="Long Up Below \+ Long Down Above payoff curve"/);
   assert.match(live, /aria-label="Long Up Above \+ Long Down Below payoff curve"/);
   assert.match(live, /payoff-bonus-zone/);
@@ -376,6 +377,8 @@ test("trade detail drawer renders detailed payoff diagram with protected and dea
   assert.match(protectedMarkup, /detail-combined-line/);
   assert.match(protectedMarkup, /detail-strike-marker/);
   assert.match(protectedMarkup, /detail-double-win-zone/);
+  assert.match(protectedMarkup, /detail-y-axis-label/);
+  assert.match(protectedMarkup, /Y-axis: Payout \/ Net P\/L \(\$\)/);
   assert.doesNotMatch(protectedMarkup, /detail-dead-zone/);
   assert.match(protectedMarkup, /Below lower/);
   assert.match(protectedMarkup, /Between strikes/);
@@ -406,6 +409,8 @@ test("inline trade payoff graph labels protected and dead-zone structures", () =
   assert.match(protectedMarkup, /YES \/ UP/);
   assert.match(protectedMarkup, /NO \/ DOWN/);
   assert.match(protectedMarkup, /Combined P\/L/);
+  assert.match(protectedMarkup, /inline-y-axis-label/);
+  assert.match(protectedMarkup, /Y-axis: Payout \/ Net P\/L \(\$\)/);
   assert.match(protectedMarkup, /Below lower/);
   assert.match(protectedMarkup, /Between strikes/);
   assert.match(protectedMarkup, /Above upper/);

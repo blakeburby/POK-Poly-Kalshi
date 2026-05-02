@@ -963,8 +963,10 @@ export function InlineTradePayoffGraph({ trade, variant = "card" }: { trade: Tra
         <strong>{trade.classification}</strong>
       </div>
       <svg className="inline-payoff-svg" viewBox="0 0 100 64" role="img" aria-label={label}>
-        <title>{`${label}: lower ${formatDetailDollars(trade.lowerStrike)}, upper ${formatDetailDollars(trade.upperStrike)}, YES / UP leg, NO / DOWN leg, combined P/L.`}</title>
+        <title>{`${label}: Y-axis is payout / net P/L in dollars. Lower ${formatDetailDollars(trade.lowerStrike)}, upper ${formatDetailDollars(trade.upperStrike)}, YES / UP leg, NO / DOWN leg, combined P/L.`}</title>
+        <text className="inline-y-axis-label" x="4" y="32" transform="rotate(-90 4 32)">Y-axis: Payout / Net P/L ($)</text>
         <line className="inline-zero-line" x1="5" x2="95" y1={zeroY} y2={zeroY} />
+        <text className="inline-y-zero-label" x="7" y={Math.max(10, zeroY - 1)}>0</text>
         {trade.regions.map((region) => {
           const { x1, x2, labelX } = regionXRange(region.key);
           return (
@@ -1020,8 +1022,10 @@ function DetailedPayoffDiagram({ trade }: { trade: TradeDetailModel }) {
         </div>
       </div>
       <svg className="trade-payoff-svg" viewBox="0 0 100 72" role="img" aria-label={`${trade.title} detailed payoff diagram`}>
-        <title>{`${trade.title}: ${trade.structureLabel}. ${trade.regions.map((region) => `${region.label} payout ${region.combinedPayout ?? "unknown"}, P/L ${region.pnl == null ? "unknown" : formatSignedCents(region.pnl)}`).join("; ")}`}</title>
+        <title>{`${trade.title}: ${trade.structureLabel}. Y-axis is payout / net P/L in dollars. ${trade.regions.map((region) => `${region.label} payout ${region.combinedPayout ?? "unknown"}, P/L ${region.pnl == null ? "unknown" : formatSignedCents(region.pnl)}`).join("; ")}`}</title>
+        <text className="detail-y-axis-label" x="4" y="36" transform="rotate(-90 4 36)">Y-axis: Payout / Net P/L ($)</text>
         <line className="detail-zero-line" x1="5" x2="95" y1={zeroY} y2={zeroY} />
+        <text className="detail-y-zero-label" x="7" y={Math.max(10, zeroY - 1)}>0</text>
         {trade.regions.map((region) => {
           const { x1, x2, labelX } = regionXRange(region.key);
           return (
