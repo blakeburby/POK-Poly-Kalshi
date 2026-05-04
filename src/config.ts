@@ -22,8 +22,15 @@ export interface AppConfig {
   polymarketDiscoveryWindowOffsets: number[];
   polymarketPriceCaptureToleranceMs: number;
   polymarketMissedOpenBackfill: boolean;
-  polymarketOrderEndpoint: string;
-  polymarketApiKey: string;
+  polymarketPrivateKey: string;
+  polymarketSignatureType: number;
+  polymarketFunderAddress: string;
+  polymarketChainId: number;
+  polymarketClobHost: string;
+  polymarketOrderType: "FOK" | "FAK";
+  liveOrderSize: number;
+  liveMaxSlippageCents: number;
+  liveMinExpiryMs: number;
   dryRunSlippageEnabled: boolean;
   dryRunKalshiSlippageCents: number;
   dryRunPolymarketSlippageCents: number;
@@ -89,8 +96,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketDiscoveryWindowOffsets: envNumberList(env, "POLYMARKET_DISCOVERY_WINDOW_OFFSETS", [-1, 0, 1, 2, 3, 4, 5, 6]),
     polymarketPriceCaptureToleranceMs: envNumber(env, "POLYMARKET_PRICE_CAPTURE_TOLERANCE_MS", 5_000),
     polymarketMissedOpenBackfill: envBoolean(env, "POLYMARKET_MISSED_OPEN_BACKFILL", true),
-    polymarketOrderEndpoint: envString(env, "POLYMARKET_ORDER_ENDPOINT"),
-    polymarketApiKey: envString(env, "POLYMARKET_API_KEY"),
+    polymarketPrivateKey: envString(env, "POLYMARKET_PRIVATE_KEY"),
+    polymarketSignatureType: envNumber(env, "POLYMARKET_SIGNATURE_TYPE", 0),
+    polymarketFunderAddress: envString(env, "POLYMARKET_FUNDER_ADDRESS"),
+    polymarketChainId: envNumber(env, "POLYMARKET_CHAIN_ID", 137),
+    polymarketClobHost: envString(env, "POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
+    polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FOK").toUpperCase() === "FAK" ? "FAK" : "FOK",
+    liveOrderSize: envNumber(env, "LIVE_ORDER_SIZE", 1),
+    liveMaxSlippageCents: envNumber(env, "LIVE_MAX_SLIPPAGE_CENTS", 1),
+    liveMinExpiryMs: envNumber(env, "LIVE_MIN_EXPIRY_MS", 30_000),
     dryRunSlippageEnabled: envBoolean(env, "DRY_RUN_SLIPPAGE_ENABLED", true),
     dryRunKalshiSlippageCents: envNumber(env, "DRY_RUN_KALSHI_SLIPPAGE_CENTS", 1),
     dryRunPolymarketSlippageCents: envNumber(env, "DRY_RUN_POLYMARKET_SLIPPAGE_CENTS", 1),

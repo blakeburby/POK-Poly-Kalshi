@@ -39,6 +39,20 @@ class FakeDb implements Queryable {
           polymarket_fill_id: values?.[4] ?? null,
           kalshi_fill_price: values?.[5] ?? null,
           polymarket_fill_price: values?.[6] ?? null,
+          execution_group_id: values?.[7] ?? null,
+          kalshi_client_order_id: values?.[8] ?? null,
+          polymarket_client_order_id: values?.[9] ?? null,
+          kalshi_status: values?.[10] ?? null,
+          polymarket_status: values?.[11] ?? null,
+          kalshi_fill_count: values?.[12] ?? null,
+          polymarket_fill_count: values?.[13] ?? null,
+          kalshi_requested_at: values?.[14] ?? null,
+          kalshi_responded_at: values?.[15] ?? null,
+          polymarket_requested_at: values?.[16] ?? null,
+          polymarket_responded_at: values?.[17] ?? null,
+          kalshi_error: values?.[18] ?? null,
+          polymarket_error: values?.[19] ?? null,
+          partial_fill: values?.[20] ?? false,
         } as T],
       };
     }
@@ -74,6 +88,20 @@ class FakeDb implements Queryable {
           polymarket_fill_id: "poly-fill",
           kalshi_fill_price: 0.51,
           polymarket_fill_price: 0.41,
+          execution_group_id: "group",
+          kalshi_client_order_id: "kalshi-client",
+          polymarket_client_order_id: "poly-client",
+          kalshi_status: "filled",
+          polymarket_status: "filled",
+          kalshi_fill_count: 1,
+          polymarket_fill_count: 1,
+          kalshi_requested_at: "2026-04-29T20:00:00.500Z",
+          kalshi_responded_at: "2026-04-29T20:00:00.800Z",
+          polymarket_requested_at: "2026-04-29T20:00:00.500Z",
+          polymarket_responded_at: "2026-04-29T20:00:00.900Z",
+          kalshi_error: null,
+          polymarket_error: null,
+          partial_fill: false,
         } as T],
       };
     }
@@ -102,10 +130,24 @@ test("signal persistence inserts threshold-crossing candidate before execution u
     polymarketFillId: "poly-fill",
     kalshiFillPrice: 0.5,
     polymarketFillPrice: 0.4,
+    executionGroupId: "group",
+    kalshiClientOrderId: "kalshi-client",
+    polymarketClientOrderId: "poly-client",
+    kalshiStatus: "filled",
+    polymarketStatus: "filled",
+    kalshiFillCount: 1,
+    polymarketFillCount: 1,
+    kalshiRequestedAt: "2026-04-29T20:00:00.500Z",
+    kalshiRespondedAt: "2026-04-29T20:00:00.800Z",
+    polymarketRequestedAt: "2026-04-29T20:00:00.500Z",
+    polymarketRespondedAt: "2026-04-29T20:00:00.900Z",
+    partialFill: false,
   });
   assert.match(db.calls[1].sql, /UPDATE cross_venue_arb_signals/);
   assert.equal(db.calls[1].values?.[0], 42);
   assert.equal(db.calls[1].values?.[1], "filled");
+  assert.equal(db.calls[1].values?.[7], "group");
+  assert.equal(db.calls[1].values?.[20], false);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -121,6 +163,8 @@ test("signal persistence exposes filled signals for analytics windows", async ()
   assert.equal(signals.length, 1);
   assert.equal(signals[0].action, "filled");
   assert.equal(signals[0].kalshiFillPrice, 0.51);
+  assert.equal(signals[0].executionGroupId, "group");
+  assert.equal(signals[0].partialFill, false);
   assert.equal(db.calls[0].values?.[0], 1_800_000_000_000);
   assert.equal(db.calls[0].values?.[1], 50);
 });

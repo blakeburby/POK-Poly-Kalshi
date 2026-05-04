@@ -86,6 +86,20 @@ export interface ExecutionResult {
   polymarketFillId: string | null;
   kalshiFillPrice: number | null;
   polymarketFillPrice: number | null;
+  executionGroupId?: string | null;
+  kalshiClientOrderId?: string | null;
+  polymarketClientOrderId?: string | null;
+  kalshiStatus?: string | null;
+  polymarketStatus?: string | null;
+  kalshiFillCount?: number | null;
+  polymarketFillCount?: number | null;
+  kalshiRequestedAt?: string | null;
+  kalshiRespondedAt?: string | null;
+  polymarketRequestedAt?: string | null;
+  polymarketRespondedAt?: string | null;
+  kalshiError?: string | null;
+  polymarketError?: string | null;
+  partialFill?: boolean;
 }
 
 export interface SignalInsert {
@@ -101,6 +115,20 @@ export interface SignalUpdate {
   polymarketFillId?: string | null;
   kalshiFillPrice?: number | null;
   polymarketFillPrice?: number | null;
+  executionGroupId?: string | null;
+  kalshiClientOrderId?: string | null;
+  polymarketClientOrderId?: string | null;
+  kalshiStatus?: string | null;
+  polymarketStatus?: string | null;
+  kalshiFillCount?: number | null;
+  polymarketFillCount?: number | null;
+  kalshiRequestedAt?: string | null;
+  kalshiRespondedAt?: string | null;
+  polymarketRequestedAt?: string | null;
+  polymarketRespondedAt?: string | null;
+  kalshiError?: string | null;
+  polymarketError?: string | null;
+  partialFill?: boolean;
 }
 
 export interface DashboardSignal {
@@ -123,7 +151,54 @@ export interface DashboardSignal {
   polymarketFillId: string | null;
   kalshiFillPrice: number | null;
   polymarketFillPrice: number | null;
+  executionGroupId?: string | null;
+  kalshiClientOrderId?: string | null;
+  polymarketClientOrderId?: string | null;
+  kalshiStatus?: string | null;
+  polymarketStatus?: string | null;
+  kalshiFillCount?: number | null;
+  polymarketFillCount?: number | null;
+  kalshiRequestedAt?: string | null;
+  kalshiRespondedAt?: string | null;
+  polymarketRequestedAt?: string | null;
+  polymarketRespondedAt?: string | null;
+  kalshiError?: string | null;
+  polymarketError?: string | null;
+  partialFill?: boolean;
   risk?: SyntheticStructureRisk;
+}
+
+export interface VenueExecutionReadiness {
+  configured: boolean;
+  ready: boolean;
+  reason: string | null;
+  balance: number | null;
+  allowance: number | null;
+  lastCheckedAt: number | null;
+}
+
+export interface LiveExecutionLastAttempt {
+  executionGroupId: string;
+  action: SignalAction;
+  partialFill: boolean;
+  failureReason: string | null;
+  kalshiStatus: string | null;
+  polymarketStatus: string | null;
+  completedAt: number;
+}
+
+export interface LiveExecutionReadiness {
+  mode: "dry_run" | "live";
+  liveTrading: boolean;
+  protectedOnly: boolean;
+  orderSize: number;
+  orderType: string;
+  maxSlippageCents: number;
+  minExpiryMs: number;
+  partialFillLocked: boolean;
+  kalshi: VenueExecutionReadiness;
+  polymarket: VenueExecutionReadiness;
+  lastAttempt: LiveExecutionLastAttempt | null;
 }
 
 export interface DashboardLogEntry {
@@ -311,5 +386,6 @@ export interface DashboardSnapshot {
   syntheticStructures?: ArbCandidate[];
   recentSignals: DashboardSignal[];
   analytics?: DashboardAnalytics;
+  execution?: LiveExecutionReadiness;
   logs: DashboardLogEntry[];
 }

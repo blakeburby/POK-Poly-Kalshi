@@ -6,7 +6,7 @@ import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
-import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, PolymarketDiagnostics } from "../types";
+import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -27,6 +27,7 @@ export interface DashboardRuntime {
   getDiscoveryState: () => DashboardDiscoveryState;
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
   getLatencySnapshot?: (now: number, snapshotBuildMs: number) => DashboardLatencySnapshot;
+  getExecutionReadiness?: (now: number) => LiveExecutionReadiness | Promise<LiveExecutionReadiness>;
   getLogs: (limit?: number) => DashboardLogEntry[];
 }
 
@@ -97,6 +98,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     cachedRecentSignals(runtime, now, cache),
     cachedAnalytics(runtime, now, cache),
   ]);
+  const execution = await runtime.getExecutionReadiness?.(now);
   const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
     runtime.books.getKalshiContracts(runtime.config.staleBookMs, now),
@@ -136,6 +138,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     syntheticStructures,
     recentSignals,
     analytics,
+    execution,
     logs: runtime.getLogs(150),
   };
 }

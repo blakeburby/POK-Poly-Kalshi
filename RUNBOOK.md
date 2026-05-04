@@ -34,10 +34,17 @@ Recommended:
 - `DRY_RUN_MAX_SLIPPAGE_CENTS=3`: maximum simulated slippage per dry-run leg.
 - `DRY_RUN_SLIPPAGE_JITTER_CENTS=1`: random extra dry-run slippage added on top of the venue base.
 
-Optional live Polymarket adapter:
+Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 
-- `POLYMARKET_ORDER_ENDPOINT`: internal order-placement service endpoint.
-- `POLYMARKET_API_KEY`: bearer token for that endpoint.
+- `POLYMARKET_PRIVATE_KEY`: dedicated low-balance bot wallet private key for official Polymarket CLOB signing.
+- `POLYMARKET_SIGNATURE_TYPE=0`: EOA signature type. Use proxy/safe types only with the matching `POLYMARKET_FUNDER_ADDRESS`.
+- `POLYMARKET_FUNDER_ADDRESS`: required for Polymarket proxy/safe wallets, optional for EOA bot wallets.
+- `POLYMARKET_CHAIN_ID=137`: Polygon mainnet.
+- `POLYMARKET_CLOB_HOST=https://clob.polymarket.com`: official Polymarket CLOB host.
+- `POLYMARKET_ORDER_TYPE=FOK`: fill-or-kill order posting for the live canary.
+- `LIVE_ORDER_SIZE=1`: fixed one contract/share per leg. Do not increase until canary evidence is clean.
+- `LIVE_MAX_SLIPPAGE_CENTS=1`: live preflight and limit-price buffer per buy leg.
+- `LIVE_MIN_EXPIRY_MS=30000`: skip entries too close to settlement.
 
 ## Enable And Disable
 
@@ -78,8 +85,10 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 6. Confirm `/dashboard/snapshot` returns `401` without a bearer token and returns a snapshot with `Authorization: Bearer $DASHBOARD_API_TOKEN`.
 7. Deploy the Vercel dashboard and log in with `DASHBOARD_PASSWORD`.
 8. Confirm `cross_venue_arb_signals` rows are being written in dry-run mode.
-9. Configure the Polymarket order endpoint.
-10. Flip `ARB_LIVE_TRADING=true` only after a small dry-run window matches manual venue quotes.
+9. Configure a dedicated Polymarket bot wallet, fund it lightly, approve CLOB trading, and set the Polymarket live env vars above.
+10. Confirm `/dashboard/snapshot` shows `execution.kalshi.ready=true`, `execution.polymarket.ready=true`, and `execution.partialFillLocked=false`.
+11. Set `ARB_EXECUTION_CONCURRENCY=1` for the first canary, then flip `ARB_LIVE_TRADING=true` only after a small dry-run window matches manual venue quotes.
+12. Watch the first live candidate. If any `partial_fill` row appears, the worker locks further live execution until operator review/restart.
 
 ## Operational Notes
 
@@ -90,10 +99,14 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 - Every attempted threshold-crossing entry is inserted before execution and then updated with `filled`, `skipped`, or `failed`.
 - Scanner work is coalesced under load: if a WS update lands while a scan is active, one immediate follow-up scan runs with the newest books.
 - Dashboard latency fields are worker-observed freshness/timing metrics, not exchange-internal latency unless a venue exposes reliable exchange timestamps.
-- Dry-run fills simulate conservative buy-side slippage and persist the simulated fill prices into the audit row; live mode still records actual venue/order-service fill prices.
-- If one venue execution adapter is missing in live mode, the executor fails before placing either leg.
+- Dry-run fills simulate conservative buy-side slippage and persist the simulated fill prices into the audit row; live mode records actual venue order IDs, statuses, fill counts, and fill prices.
+- Live mode rechecks current top-of-book freshness, expiry distance, capped edge, and the protected-spread-only guard immediately before order placement.
+- Kalshi live execution uses the V2 event-order endpoint. Buying NO is mapped onto Kalshi's YES book by sending an `ask` at the complementary YES price.
+- Polymarket live execution uses the official CLOB client with EIP-712 signing plus derived L2 API credentials.
+- If a one-sided fill is detected, the executor writes the partial-fill audit detail and locks further live execution until restart/operator acknowledgement.
 - Re-entry is tracked by pair key and hydrated from filled audit rows on startup.
 - The dashboard is read-only in v1: no threshold edits, manual orders, kill switch, or live/dry-run toggles.
+- Rotate any private key pasted into chat or logs before enabling live mode.
 
 ## Rollback
 

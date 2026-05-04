@@ -1198,6 +1198,7 @@ function GlobalStateBar({
   const insights = buildDashboardInsights(snapshot);
   const mode = snapshot.health.liveTrading ? "LIVE" : "DRY-RUN";
   const viewModes: DashboardViewMode[] = ["risk", "raw", "execution"];
+  const execution = snapshot.execution;
 
   return (
     <header className="institutional-topbar">
@@ -1226,6 +1227,8 @@ function GlobalStateBar({
           <StatusPill label={streamState === "live" ? "SSE LIVE" : "SSE DEGRADED"} state={streamState === "live" ? "live" : "warn"} />
           <StatusPill label={snapshot.health.arbEnabled ? "STRATEGY ON" : "STRATEGY OFF"} state={snapshot.health.arbEnabled ? "live" : "off"} />
           <StatusPill label={mode} state={snapshot.health.liveTrading ? "warn" : "live"} />
+          {execution?.partialFillLocked ? <StatusPill label="PARTIAL LOCK" state="stale" /> : null}
+          {snapshot.health.liveTrading && execution ? <StatusPill label={execution.polymarket.ready && execution.kalshi.ready ? "VENUES READY" : "VENUE CHECK"} state={execution.polymarket.ready && execution.kalshi.ready ? "live" : "warn"} /> : null}
           <StatusPill label={insights.staleBooks > 0 ? `${insights.staleBooks} STALE BOOKS` : "BOOKS FRESH"} state={insights.staleBooks > 0 ? "stale" : "live"} />
         </div>
         <RiskMeter insights={insights} />
@@ -2695,6 +2698,8 @@ export function DashboardTerminalView({
         <div className="metric"><span>Re-entry Cadence</span><strong>{Math.round(snapshot.health.reentryIntervalMs / 1000)}s</strong></div>
         <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? formatCompactTime(Math.max(0, snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt)) : "--"}</strong></div>
         <div className="metric"><span>Selected Mode</span><strong>{viewMode.toUpperCase()}</strong></div>
+        <div className="metric"><span>Live Venue Readiness</span><strong>{snapshot.execution ? `${snapshot.execution.kalshi.ready ? "K" : "K!"}/${snapshot.execution.polymarket.ready ? "P" : "P!"}` : "--"}</strong></div>
+        <div className="metric"><span>Partial Fill Lock</span><strong>{snapshot.execution?.partialFillLocked ? "LOCKED" : "CLEAR"}</strong></div>
       </section>
 
       <section className="institutional-command-grid">

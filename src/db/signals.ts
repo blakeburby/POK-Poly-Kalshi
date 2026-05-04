@@ -38,6 +38,20 @@ interface DashboardSignalRow {
   polymarket_fill_id: string | null;
   kalshi_fill_price: string | number | null;
   polymarket_fill_price: string | number | null;
+  execution_group_id: string | null;
+  kalshi_client_order_id: string | null;
+  polymarket_client_order_id: string | null;
+  kalshi_status: string | null;
+  polymarket_status: string | null;
+  kalshi_fill_count: string | number | null;
+  polymarket_fill_count: string | number | null;
+  kalshi_requested_at: string | Date | null;
+  kalshi_responded_at: string | Date | null;
+  polymarket_requested_at: string | Date | null;
+  polymarket_responded_at: string | Date | null;
+  kalshi_error: string | null;
+  polymarket_error: string | null;
+  partial_fill: boolean | string | null;
 }
 
 const SIGNAL_COLUMNS = `
@@ -46,7 +60,11 @@ const SIGNAL_COLUMNS = `
   lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
   higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
   premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
-  kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price
+  kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price,
+  execution_group_id, kalshi_client_order_id, polymarket_client_order_id,
+  kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
+  kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
+  kalshi_error, polymarket_error, partial_fill
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -57,6 +75,16 @@ function numberFrom(value: string | number | null): number | null {
 
 function dateString(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value;
+}
+
+function optionalDateString(value: string | Date | null): string | null {
+  if (value == null) return null;
+  return dateString(value);
+}
+
+function booleanFrom(value: boolean | string | null): boolean {
+  if (typeof value === "boolean") return value;
+  return value === "true" || value === "t" || value === "1";
 }
 
 function legFromRow(row: DashboardSignalRow, side: "lower" | "higher"): ArbLeg {
@@ -93,6 +121,20 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     polymarketFillId: row.polymarket_fill_id,
     kalshiFillPrice: numberFrom(row.kalshi_fill_price),
     polymarketFillPrice: numberFrom(row.polymarket_fill_price),
+    executionGroupId: row.execution_group_id,
+    kalshiClientOrderId: row.kalshi_client_order_id,
+    polymarketClientOrderId: row.polymarket_client_order_id,
+    kalshiStatus: row.kalshi_status,
+    polymarketStatus: row.polymarket_status,
+    kalshiFillCount: numberFrom(row.kalshi_fill_count),
+    polymarketFillCount: numberFrom(row.polymarket_fill_count),
+    kalshiRequestedAt: optionalDateString(row.kalshi_requested_at),
+    kalshiRespondedAt: optionalDateString(row.kalshi_responded_at),
+    polymarketRequestedAt: optionalDateString(row.polymarket_requested_at),
+    polymarketRespondedAt: optionalDateString(row.polymarket_responded_at),
+    kalshiError: row.kalshi_error,
+    polymarketError: row.polymarket_error,
+    partialFill: booleanFrom(row.partial_fill),
     risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
@@ -151,6 +193,20 @@ export class SignalStore {
           polymarket_fill_id = $5,
           kalshi_fill_price = $6,
           polymarket_fill_price = $7,
+          execution_group_id = $8,
+          kalshi_client_order_id = $9,
+          polymarket_client_order_id = $10,
+          kalshi_status = $11,
+          polymarket_status = $12,
+          kalshi_fill_count = $13,
+          polymarket_fill_count = $14,
+          kalshi_requested_at = CASE WHEN $15::TEXT IS NULL THEN NULL ELSE $15::TIMESTAMPTZ END,
+          kalshi_responded_at = CASE WHEN $16::TEXT IS NULL THEN NULL ELSE $16::TIMESTAMPTZ END,
+          polymarket_requested_at = CASE WHEN $17::TEXT IS NULL THEN NULL ELSE $17::TIMESTAMPTZ END,
+          polymarket_responded_at = CASE WHEN $18::TEXT IS NULL THEN NULL ELSE $18::TIMESTAMPTZ END,
+          kalshi_error = $19,
+          polymarket_error = $20,
+          partial_fill = $21,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -162,6 +218,20 @@ export class SignalStore {
       update.polymarketFillId ?? null,
       update.kalshiFillPrice ?? null,
       update.polymarketFillPrice ?? null,
+      update.executionGroupId ?? null,
+      update.kalshiClientOrderId ?? null,
+      update.polymarketClientOrderId ?? null,
+      update.kalshiStatus ?? null,
+      update.polymarketStatus ?? null,
+      update.kalshiFillCount ?? null,
+      update.polymarketFillCount ?? null,
+      update.kalshiRequestedAt ?? null,
+      update.kalshiRespondedAt ?? null,
+      update.polymarketRequestedAt ?? null,
+      update.polymarketRespondedAt ?? null,
+      update.kalshiError ?? null,
+      update.polymarketError ?? null,
+      update.partialFill ?? false,
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }

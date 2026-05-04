@@ -10,7 +10,7 @@ import { PolymarketPriceBeatStore } from "./db/polymarket-price-beats";
 import { SignalStore } from "./db/signals";
 import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
-import { DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
+import { dryRunExecutionReadiness, DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
 import { KalshiTickerClient } from "./kalshi/client";
 import { LatencyMonitor } from "./latency/metrics";
 import { getRecentLogs, logEvent } from "./logger";
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     analytics.reconcileFilledSignals(await signals.listFilledSignalsSince(oldestAnalyticsSinceMs(Date.now()), 10_000), Date.now());
   }
   await reconcileAnalytics();
-  const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config), config.minProfitDollars);
+  const executor = config.liveTrading ? new LiveExecutor(config, books) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config), config.minProfitDollars);
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,
@@ -164,6 +164,7 @@ async function main(): Promise<void> {
         getDiscoveryState: () => ({ lastDiscoveryAt, lastDiscoveryError }),
         getPolymarketDiagnostics: livePolymarketDiagnostics,
         getLatencySnapshot: (now, snapshotBuildMs) => latency.snapshot(books.snapshot(), now, config, snapshotBuildMs),
+        getExecutionReadiness: (now) => executor instanceof LiveExecutor ? executor.readiness(now) : dryRunExecutionReadiness(config, now),
         getLogs: getRecentLogs,
       });
       if (handled) return;
