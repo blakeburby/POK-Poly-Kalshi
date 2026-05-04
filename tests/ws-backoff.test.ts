@@ -5,6 +5,7 @@ import {
   buildPolymarketSubscribeMessage,
   buildPolymarketSubscriptionUpdate,
   PolymarketBookParser,
+  parsePolymarketBookSocketPayload,
 } from "../src/polymarket/client";
 import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../src/ws/reconnect";
 
@@ -84,4 +85,15 @@ test("Kalshi and Polymarket parsers expose best asks from websocket payloads", (
   }, 125);
   assert.equal(best.bestAsk, 0.43);
   assert.equal(best.bestBid, 0.42);
+});
+
+test("Polymarket CLOB websocket parser ignores heartbeat text frames", () => {
+  assert.equal(parsePolymarketBookSocketPayload(Buffer.from("PONG")), null);
+  assert.equal(parsePolymarketBookSocketPayload(Buffer.from("PING")), null);
+  assert.equal(parsePolymarketBookSocketPayload(Buffer.from(" pong \n")), null);
+  assert.deepEqual(parsePolymarketBookSocketPayload(Buffer.from('{"event_type":"best_bid_ask","asset_id":"token","best_ask":"0.45"}')), {
+    event_type: "best_bid_ask",
+    asset_id: "token",
+    best_ask: "0.45",
+  });
 });

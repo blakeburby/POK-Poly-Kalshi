@@ -97,6 +97,14 @@ export function buildPolymarketSubscriptionUpdate(
   return message;
 }
 
+export function parsePolymarketBookSocketPayload(raw: WebSocket.RawData): unknown | null {
+  const text = raw.toString().trim();
+  if (!text) return null;
+  const heartbeat = text.toUpperCase();
+  if (heartbeat === "PING" || heartbeat === "PONG") return null;
+  return JSON.parse(text);
+}
+
 export class PolymarketBookParser {
   private readonly books = new Map<string, BookLevels>();
 
@@ -246,7 +254,8 @@ export class PolymarketBookClient {
 
     socket.on("message", (raw: WebSocket.RawData) => {
       try {
-        const payload = JSON.parse(raw.toString());
+        const payload = parsePolymarketBookSocketPayload(raw);
+        if (payload == null) return;
         const snapshots = this.parser.apply(payload);
         for (const snapshot of snapshots) {
           if (!this.desired.has(snapshot.tokenId)) continue;
