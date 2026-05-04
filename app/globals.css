@@ -13,6 +13,18 @@
   --blue: #7aa2ff;
   --poly: #dfe6ee;
   --kalshi: #57d68d;
+  --surface: rgba(8, 13, 19, 0.82);
+  --surface-raised: rgba(12, 18, 27, 0.88);
+  --surface-card: rgba(4, 8, 13, 0.52);
+  --surface-glass: rgba(9, 15, 23, 0.72);
+  --panel-border: rgba(138, 160, 184, 0.18);
+  --panel-border-strong: rgba(76, 201, 240, 0.3);
+  --card-border: rgba(138, 160, 184, 0.14);
+  --shadow-soft: 0 18px 56px rgba(0, 0, 0, 0.28);
+  --shadow-lift: 0 28px 90px rgba(0, 0, 0, 0.36);
+  --radius-panel: 22px;
+  --radius-card: 16px;
+  --panel-pad: clamp(16px, 1.35vw, 24px);
   --font-display: "Aptos Display", "SF Pro Display", "Helvetica Neue", sans-serif;
   --font-mono: "Berkeley Mono", "IBM Plex Mono", "SF Mono", "Menlo", monospace;
 }
@@ -3063,6 +3075,239 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
+/* Focused visual polish pass */
+.polished-shell {
+  gap: clamp(22px, 2.2vw, 38px);
+}
+
+.polished-shell .panel,
+.polished-shell .metric,
+.polished-shell .institutional-topbar {
+  border-color: var(--panel-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 26%),
+    radial-gradient(circle at 8% 0%, rgba(76, 201, 240, 0.08), transparent 28rem),
+    var(--surface);
+  box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.polished-shell .panel {
+  border-radius: var(--radius-panel);
+}
+
+.polished-shell .panel-header,
+.polished-shell .trade-detail-header {
+  border-bottom-color: rgba(138, 160, 184, 0.16);
+  background:
+    linear-gradient(90deg, rgba(76, 201, 240, 0.065), transparent 58%),
+    rgba(255, 255, 255, 0.012);
+  padding: var(--panel-pad);
+}
+
+.polished-shell .panel h2,
+.polished-shell .trade-detail-header h2 {
+  color: #f1f6fb;
+  font-size: clamp(25px, 1.9vw, 42px);
+  line-height: 0.98;
+  text-shadow: 0 10px 34px rgba(0, 0, 0, 0.32);
+}
+
+.polished-shell .panel-kicker,
+.polished-shell .login-kicker {
+  color: #6fd8ff;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+}
+
+.polished-shell .panel-subtitle,
+.polished-shell .analytics-subtitle,
+.polished-shell .trade-detail-section-header p,
+.polished-shell .topbar-brand > span {
+  color: #8fa0b2;
+}
+
+.polished-shell .status-pill,
+.polished-shell .venue,
+.polished-shell .action,
+.polished-shell .structure-chip,
+.polished-shell .score-pill,
+.polished-shell .scanner-ready-badge,
+.polished-shell .arb-used-hint,
+.polished-shell .trade-classification {
+  border-color: rgba(138, 160, 184, 0.24);
+  background: rgba(3, 7, 12, 0.34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.polished-shell .metric,
+.polished-shell .hero-kpi,
+.polished-shell .topbar-kpi,
+.polished-shell .analytics-card,
+.polished-shell .book-kpi,
+.polished-shell .diagnostic-chip,
+.polished-shell .risk-question-grid > div,
+.polished-shell .risk-factor-grid > div,
+.polished-shell .trade-detail-metric,
+.polished-shell .trade-detail-leg-card,
+.polished-shell .trade-payoff-card,
+.polished-shell .analytics-chart-card,
+.polished-shell .pnl-chart-card,
+.polished-shell .probability-bar,
+.polished-shell .spread-heat-card,
+.polished-shell .freshness-pulse,
+.polished-shell .strike-ladder,
+.polished-shell .cross-venue-card,
+.polished-shell .inline-payoff,
+.polished-shell .signal-card {
+  border-color: var(--card-border);
+  border-radius: var(--radius-card);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 32%),
+    var(--surface-card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.032);
+}
+
+.polished-shell .hero-kpi {
+  border-color: rgba(76, 201, 240, 0.34);
+  background:
+    radial-gradient(circle at 18% 12%, rgba(76, 201, 240, 0.18), transparent 54%),
+    var(--surface-card);
+}
+
+.polished-shell .topbar-kpi,
+.polished-shell .metric,
+.polished-shell .analytics-card {
+  min-height: 92px;
+}
+
+.polished-shell .analytics-card strong,
+.polished-shell .book-kpi strong,
+.polished-shell .diagnostic-chip strong,
+.polished-shell .risk-factor-grid strong,
+.polished-shell .trade-detail-metric strong,
+.polished-shell .topbar-kpi strong,
+.polished-shell .metric strong {
+  letter-spacing: -0.035em;
+}
+
+.polished-shell .analytics-body,
+.polished-shell .risk-intelligence-body,
+.polished-shell .book-kpi-section,
+.polished-shell .book-visual-summary,
+.polished-shell .cross-venue-card-row,
+.polished-shell .signal-list {
+  padding: var(--panel-pad);
+}
+
+.polished-shell .analytics-grid,
+.polished-shell .analytics-chart-suite,
+.polished-shell .book-kpi-grid,
+.polished-shell .book-visual-grid,
+.polished-shell .risk-question-grid,
+.polished-shell .risk-factor-grid,
+.polished-shell .trade-detail-summary,
+.polished-shell .trade-detail-leg-stack,
+.polished-shell .signal-card-main,
+.polished-shell .signal-card-details,
+.polished-shell .signal-list {
+  gap: clamp(12px, 1vw, 18px);
+}
+
+.polished-shell .window-tabs button,
+.polished-shell .view-mode-tabs button,
+.polished-shell .trade-detail-header-actions button {
+  border-radius: 12px;
+  background: rgba(4, 9, 15, 0.56);
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.polished-shell .window-tabs button:hover,
+.polished-shell .window-tabs button.active,
+.polished-shell .view-mode-tabs button:hover,
+.polished-shell .view-mode-tabs button.active,
+.polished-shell .trade-detail-header-actions button:hover {
+  background: rgba(76, 201, 240, 0.08);
+  transform: translateY(-1px);
+}
+
+.polished-shell th {
+  background: rgba(14, 22, 32, 0.96);
+  color: #8f9fb2;
+  height: 44px;
+  letter-spacing: 0.16em;
+}
+
+.polished-shell td {
+  border-bottom-color: rgba(138, 160, 184, 0.105);
+  height: 48px;
+  color: #dce5ee;
+}
+
+.polished-shell tbody tr {
+  transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.polished-shell tbody tr:hover,
+.polished-shell .signal-card:hover {
+  background: rgba(76, 201, 240, 0.065);
+  box-shadow: inset 0 0 0 1px rgba(76, 201, 240, 0.16);
+}
+
+.polished-shell .clickable-row:hover {
+  transform: translateY(-1px);
+}
+
+.polished-shell .selected-trade-row td,
+.polished-shell .selected-trade-card {
+  background:
+    linear-gradient(90deg, rgba(76, 201, 240, 0.13), rgba(76, 201, 240, 0.035));
+  border-color: rgba(76, 201, 240, 0.48);
+}
+
+.polished-shell .pnl-chart svg,
+.polished-shell .trade-payoff-svg,
+.polished-shell .inline-payoff-svg,
+.polished-shell .analytics-sparkline,
+.polished-shell .book-sparkline svg {
+  border-color: rgba(138, 160, 184, 0.13);
+  background:
+    linear-gradient(rgba(138, 160, 184, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(138, 160, 184, 0.055) 1px, transparent 1px),
+    rgba(2, 6, 10, 0.58);
+}
+
+.polished-shell .detail-combined-line,
+.polished-shell .inline-combined-line {
+  filter: drop-shadow(0 0 7px rgba(76, 201, 240, 0.52));
+}
+
+.polished-shell .detail-leg-line,
+.polished-shell .inline-leg-line {
+  opacity: 0.78;
+}
+
+.polished-shell .trade-payoff-legend span,
+.polished-shell .inline-payoff-legend span,
+.polished-shell .payoff-curve-legend span {
+  border-radius: 999px;
+  background: rgba(3, 7, 12, 0.38);
+}
+
+.polished-shell .analytics-empty,
+.polished-shell .empty-cell {
+  border-color: rgba(138, 160, 184, 0.13);
+  background:
+    linear-gradient(135deg, rgba(76, 201, 240, 0.045), transparent 48%),
+    rgba(4, 8, 13, 0.34);
+  color: #8898aa;
+}
+
+.polished-shell .trade-detail-drawer {
+  box-shadow:
+    inset 4px 0 0 rgba(76, 201, 240, 0.42),
+    var(--shadow-lift);
+}
+
 @media (max-width: 1280px) {
   .institutional-topbar,
   .institutional-command-grid,
@@ -3117,6 +3362,10 @@ tbody tr:hover {
     padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   }
 
+  .polished-shell {
+    gap: 16px;
+  }
+
   .mobile-section-nav {
     position: sticky;
     top: 0;
@@ -3131,9 +3380,11 @@ tbody tr:hover {
 
   .mobile-section-nav a {
     flex: 0 0 auto;
-    border: 1px solid rgba(116, 130, 149, 0.24);
+    border: 1px solid rgba(138, 160, 184, 0.22);
     border-radius: 999px;
-    background: rgba(6, 10, 15, 0.84);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+      rgba(6, 10, 15, 0.86);
     color: #c8d5e2;
     font-family: var(--font-mono);
     font-size: 11px;
@@ -3234,6 +3485,16 @@ tbody tr:hover {
     gap: 12px;
   }
 
+  .polished-shell .panel-header,
+  .polished-shell .trade-detail-header,
+  .polished-shell .analytics-body,
+  .polished-shell .risk-intelligence-body,
+  .polished-shell .book-kpi-section,
+  .polished-shell .book-visual-summary,
+  .polished-shell .signal-list {
+    padding: 14px;
+  }
+
   .topbar-kpis,
   .institutional-metrics,
   .analytics-grid,
@@ -3306,11 +3567,12 @@ tbody tr:hover {
   .book-panel tr,
   .diagnostics-panel tr {
     display: grid;
-    border: 1px solid rgba(116, 130, 149, 0.18);
+    border: 1px solid rgba(138, 160, 184, 0.16);
     border-radius: 16px;
     background:
-      linear-gradient(135deg, rgba(76, 201, 240, 0.06), transparent 42%),
-      rgba(3, 7, 12, 0.48);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 30%),
+      linear-gradient(135deg, rgba(76, 201, 240, 0.055), transparent 42%),
+      rgba(3, 7, 12, 0.5);
     overflow: hidden;
   }
 

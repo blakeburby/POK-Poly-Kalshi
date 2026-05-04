@@ -2680,7 +2680,7 @@ export function DashboardTerminalView({
   }
 
   return (
-    <main className={`terminal-shell institutional-shell view-mode-${viewMode}`}>
+    <main className={`terminal-shell institutional-shell polished-shell view-mode-${viewMode}`}>
       <GlobalStateBar
         dashboardName={dashboardName}
         onViewModeChange={setViewMode}

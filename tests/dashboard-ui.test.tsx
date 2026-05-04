@@ -330,6 +330,7 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(degraded, /Worker stream unavailable/);
 
   const live = renderToStaticMarkup(<DashboardTerminalView dashboardName="POK Terminal" snapshot={snapshot()} streamState="live" />);
+  assert.match(live, /polished-shell/);
   assert.match(live, /Opportunity Blotter/);
   assert.match(live, /Estimated Edge/);
   assert.match(live, /Active Opportunities/);
