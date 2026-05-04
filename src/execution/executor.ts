@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config";
 import { loadConfig } from "../config";
 import { getKalshiHeaders } from "../kalshi/auth";
+import { protectedCandidateBlockReason } from "../scanner/safety";
 import type { ArbCandidate, ArbLeg, ExecutionResult } from "../types";
 
 export interface ArbExecutor {
@@ -29,6 +30,22 @@ function clampUnit(value: number): number {
 
 function roundPrice(value: number): number {
   return Math.round(value * 10_000) / 10_000;
+}
+
+function failed(reason: string): ExecutionResult {
+  return {
+    action: "failed",
+    failureReason: reason,
+    kalshiFillId: null,
+    polymarketFillId: null,
+    kalshiFillPrice: null,
+    polymarketFillPrice: null,
+  };
+}
+
+function protectedGuardFailure(candidate: ArbCandidate, minProfitDollars: number): ExecutionResult | null {
+  const blockReason = protectedCandidateBlockReason(candidate, minProfitDollars);
+  return blockReason ? failed(`protected-spread-only guard: ${blockReason}`) : null;
 }
 
 export class DryRunSlippageModel {
@@ -60,9 +77,14 @@ export class DryRunSlippageModel {
 }
 
 export class DryRunExecutor implements ArbExecutor {
-  constructor(private readonly slippage = DryRunSlippageModel.fromConfig(loadConfig())) {}
+  constructor(
+    private readonly slippage = DryRunSlippageModel.fromConfig(loadConfig()),
+    private readonly minProfitDollars = loadConfig().minProfitDollars,
+  ) {}
 
   async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
+    const guardFailure = protectedGuardFailure(candidate, this.minProfitDollars);
+    if (guardFailure) return guardFailure;
     return {
       action: "filled",
       failureReason: null,
@@ -78,6 +100,8 @@ export class LiveExecutor implements ArbExecutor {
   constructor(private readonly config: AppConfig = loadConfig()) {}
 
   async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
+    const guardFailure = protectedGuardFailure(candidate, this.config.minProfitDollars);
+    if (guardFailure) return guardFailure;
     const kalshiLeg = legForVenue(candidate, "kalshi");
     const polymarketLeg = legForVenue(candidate, "polymarket");
     if (!kalshiLeg || !polymarketLeg) return this.failed("candidate must contain one Kalshi leg and one Polymarket leg");
@@ -110,14 +134,7 @@ export class LiveExecutor implements ArbExecutor {
   }
 
   private failed(reason: string): ExecutionResult {
-    return {
-      action: "failed",
-      failureReason: reason,
-      kalshiFillId: null,
-      polymarketFillId: null,
-      kalshiFillPrice: null,
-      polymarketFillPrice: null,
-    };
+    return failed(reason);
   }
 
   private async placeKalshiOrder(leg: ArbLeg): Promise<{ fillId: string; fillPrice: number }> {

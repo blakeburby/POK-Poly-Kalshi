@@ -5,6 +5,7 @@ import type { ArbCandidate, DashboardSignal } from "../types";
 import type { SignalStore } from "../db/signals";
 import { pairExecutableCandidates } from "./pairing";
 import { ReentryThrottle } from "./reentry";
+import { protectedCandidateBlockReason } from "./safety";
 
 export type SignalWriter = {
   insertSignal: SignalStore["insertSignal"];
@@ -79,9 +80,32 @@ export class CrossVenueArbScanner {
       const polymarket = this.books.getPolymarketContracts(this.options.staleBookMs, now);
       const kalshi = this.books.getKalshiContracts(this.options.staleBookMs, now);
       const candidates = pairExecutableCandidates(polymarket, kalshi, this.options.minProfitDollars);
-      this.lastCandidateCount = candidates.length;
-      for (const candidate of candidates) this.enqueueCandidate(candidate, now);
-      return candidates;
+      const protectedCandidates: ArbCandidate[] = [];
+      for (const candidate of candidates) {
+        const blockReason = protectedCandidateBlockReason(candidate, this.options.minProfitDollars);
+        if (blockReason) {
+          logEvent({
+            severity: "WARN",
+            category: "SCANNER",
+            message: "candidate blocked by protected-spread guard",
+            context: {
+              pairKey: candidate.pairKey,
+              reason: blockReason,
+              structureType: candidate.risk?.structureType ?? null,
+              lowerDirection: candidate.lower.direction,
+              higherDirection: candidate.higher.direction,
+              lowerStrike: candidate.lower.strike,
+              higherStrike: candidate.higher.strike,
+              guaranteedProfit: candidate.guaranteedProfit,
+            },
+          });
+          continue;
+        }
+        protectedCandidates.push(candidate);
+        this.enqueueCandidate(candidate, now);
+      }
+      this.lastCandidateCount = protectedCandidates.length;
+      return protectedCandidates;
     } finally {
       this.scanning = false;
       this.options.latency?.recordScanDuration(Date.now() - startedAt, Date.now());

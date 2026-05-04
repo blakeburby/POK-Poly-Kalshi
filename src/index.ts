@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     analytics.reconcileFilledSignals(await signals.listFilledSignalsSince(oldestAnalyticsSinceMs(Date.now()), 10_000), Date.now());
   }
   await reconcileAnalytics();
-  const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config));
+  const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config), config.minProfitDollars);
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,

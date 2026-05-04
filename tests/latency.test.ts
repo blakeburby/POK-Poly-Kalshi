@@ -144,6 +144,58 @@ test("scanner processes candidate executions through a bounded queue without dup
   assert.equal(scanner.status().activeExecutions, 0);
 });
 
+test("scanner blocks equal-strike candidates before persistence or execution", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi", strike: 1500, noAsk: 0.5, updatedAt: now }),
+  ]);
+
+  let inserted = 0;
+  let executed = 0;
+  const scanner = new CrossVenueArbScanner(
+    books,
+    {
+      async insertSignal() {
+        inserted += 1;
+        return inserted;
+      },
+      async updateSignal() {
+        return undefined;
+      },
+    },
+    {
+      async execute(): Promise<ExecutionResult> {
+        executed += 1;
+        return {
+          action: "filled",
+          failureReason: null,
+          kalshiFillId: "kalshi",
+          polymarketFillId: "poly",
+          kalshiFillPrice: 0.5,
+          polymarketFillPrice: 0.4,
+        };
+      },
+    },
+    new ReentryThrottle(15_000),
+    {
+      enabled: true,
+      minProfitDollars: 0.05,
+      staleBookMs: 10_000,
+      executionConcurrency: 1,
+    },
+  );
+
+  const candidates = await scanner.scan(now);
+  assert.equal(candidates.length, 0);
+  assert.equal(inserted, 0);
+  assert.equal(executed, 0);
+  assert.equal(scanner.status().lastCandidateCount, 0);
+});
+
 test("latency monitor snapshots phase timing and queue state", () => {
   const monitor = new LatencyMonitor();
   monitor.recordWsToBookApply("kalshi", 100, 112);
