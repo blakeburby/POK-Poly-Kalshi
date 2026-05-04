@@ -1,12 +1,15 @@
 import type { BookStore } from "../books/book-store";
 import type { ArbExecutor } from "../execution/executor";
 import { logEvent } from "../logger";
-import type { ArbCandidate } from "../types";
+import type { ArbCandidate, DashboardSignal } from "../types";
 import type { SignalStore } from "../db/signals";
 import { pairExecutableCandidates } from "./pairing";
 import { ReentryThrottle } from "./reentry";
 
-export type SignalWriter = Pick<SignalStore, "insertSignal" | "updateSignal">;
+export type SignalWriter = {
+  insertSignal: SignalStore["insertSignal"];
+  updateSignal(id: number, update: Parameters<SignalStore["updateSignal"]>[1]): Promise<DashboardSignal | null | void>;
+};
 
 export interface ScannerOptions {
   enabled: boolean;
@@ -21,6 +24,9 @@ export interface ScannerOptions {
     recordExecution(durationMs: number): void;
     recordQueueState(queueDepth: number, activeExecutions: number): void;
     recordDuplicateCandidateSkip(): void;
+  };
+  analytics?: {
+    recordSignal(signal: DashboardSignal): void;
   };
 }
 
@@ -123,8 +129,9 @@ export class CrossVenueArbScanner {
       const result = await this.executor.execute(candidate);
       this.options.latency?.recordExecution(Date.now() - executionStartedAt);
       const updateStartedAt = Date.now();
-      await this.signals.updateSignal(signalId, result);
+      const updatedSignal = await this.signals.updateSignal(signalId, result);
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
+      if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
       logEvent({
         category: "SCANNER",
@@ -132,10 +139,11 @@ export class CrossVenueArbScanner {
         context: { pairKey: candidate.pairKey, action: result.action, guaranteedProfit: candidate.guaranteedProfit },
       });
     } catch (error) {
-      await this.signals.updateSignal(signalId, {
+      const updatedSignal = await this.signals.updateSignal(signalId, {
         action: "failed",
         failureReason: error instanceof Error ? error.message : String(error),
       });
+      if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
       logEvent({
         severity: "ERROR",
         category: "SCANNER",

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildAnalyticsWindow, buildDashboardAnalytics, estimatedGuaranteedPnl } from "../src/analytics/performance";
+import { AnalyticsStore } from "../src/analytics/store";
 import type { DashboardSignal } from "../src/types";
 
 function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
@@ -59,8 +60,19 @@ test("analytics computes win loss rates, profit factor, and cumulative buckets",
   assert.equal(analytics.netPnl, 0.12);
   assert.equal(analytics.profitFactor, 7);
   assert.ok(analytics.sharpeRatio != null && analytics.sharpeRatio > 0);
+  assert.equal(analytics.maxDrawdown, 0.02);
+  assert.equal(analytics.avgPremium, 0.97);
+  assert.equal(analytics.avgSlippage, 0.07);
+  assert.equal(analytics.avgFillLatencyMs, 0);
+  assert.equal(analytics.opportunityCount, 4);
+  assert.equal(analytics.fillRate, 1);
+  assert.equal(analytics.pnlDistribution.find((bucket) => bucket.label === "Loss")?.count, 1);
+  assert.equal(analytics.slippageDistribution.find((bucket) => bucket.label === "3c+")?.count, 3);
   assert.equal(analytics.buckets.at(-1)?.netPnl, 0.09);
   assert.equal(analytics.buckets.at(-1)?.cumulativePnl, 0.12);
+  assert.equal(analytics.buckets.at(-1)?.wins, 1);
+  assert.equal(analytics.buckets.at(-1)?.avgPnl, 0.09);
+  assert.equal(analytics.heatmap.at(-1)?.tradeCount, 1);
 });
 
 test("analytics exposes no-loss profit factor state and insufficient sharpe as null", () => {
@@ -83,4 +95,25 @@ test("dashboard analytics returns hourly daily and weekly windows", () => {
   assert.equal(analytics.hourly.window, "hourly");
   assert.equal(analytics.daily.window, "daily");
   assert.equal(analytics.weekly.window, "weekly");
+});
+
+test("analytics store serves hot snapshots and matches full calculator", () => {
+  const now = Date.UTC(2026, 3, 29, 20, 30);
+  const signals = [
+    signal({ id: 1, updatedAt: at(now - 1_000), kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 }),
+    signal({ id: 2, action: "failed", updatedAt: at(now - 500), kalshiFillPrice: null, polymarketFillPrice: null }),
+  ];
+  const store = new AnalyticsStore();
+  store.reconcileFilledSignals([signals[0]], now - 250);
+  store.recordSignal(signals[1], now);
+
+  const hot = store.snapshot(now, { staleAfterMs: 5_000 });
+  const full = buildDashboardAnalytics(signals, now);
+  assert.equal(hot.hourly.netPnl, full.hourly.netPnl);
+  assert.equal(hot.hourly.opportunityCount, 2);
+  assert.equal(hot.hourly.fillRate, 0.5);
+  assert.equal(hot.realtime?.mode, "hot_cache");
+  assert.equal(hot.realtime?.lastDbReconciledAt, now - 250);
+  assert.equal(hot.realtime?.sourceSignalCount, 2);
+  assert.equal(hot.realtime?.stale, false);
 });

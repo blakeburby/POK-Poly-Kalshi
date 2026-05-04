@@ -1,4 +1,13 @@
-import type { AnalyticsWindow, DashboardAnalytics, DashboardAnalyticsBucket, DashboardAnalyticsWindow, DashboardSignal } from "../types";
+import type {
+  AnalyticsWindow,
+  DashboardAnalytics,
+  DashboardAnalyticsBucket,
+  DashboardAnalyticsDistributionBucket,
+  DashboardAnalyticsHeatmapCell,
+  DashboardAnalyticsRealtime,
+  DashboardAnalyticsWindow,
+  DashboardSignal,
+} from "../types";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -39,7 +48,12 @@ const WINDOWS: Record<AnalyticsWindow, WindowDefinition> = {
 
 interface AnalyticsTrade {
   timestampMs: number;
-  pnl: number;
+  createdAtMs: number;
+  action: DashboardSignal["action"];
+  pnl: number | null;
+  premium: number | null;
+  slippage: number | null;
+  fillLatencyMs: number | null;
 }
 
 function roundMetric(value: number): number {
@@ -82,9 +96,21 @@ export function estimatedGuaranteedPnl(signal: DashboardSignal): number | null {
 
 function signalTrade(signal: DashboardSignal): AnalyticsTrade | null {
   const timestampMs = new Date(signal.updatedAt).getTime();
-  const pnl = estimatedGuaranteedPnl(signal);
-  if (!Number.isFinite(timestampMs) || pnl == null) return null;
-  return { timestampMs, pnl };
+  const createdAtMs = new Date(signal.createdAt).getTime();
+  if (!Number.isFinite(timestampMs)) return null;
+  const fillPremium = signal.kalshiFillPrice != null && signal.polymarketFillPrice != null
+    ? roundMetric(signal.kalshiFillPrice + signal.polymarketFillPrice)
+    : signal.action === "filled" ? signal.premium : null;
+  const askPremium = Number.isFinite(signal.lower.ask + signal.higher.ask) ? roundMetric(signal.lower.ask + signal.higher.ask) : signal.premium;
+  return {
+    timestampMs,
+    createdAtMs,
+    action: signal.action,
+    pnl: estimatedGuaranteedPnl(signal),
+    premium: fillPremium,
+    slippage: fillPremium == null ? null : roundMetric(fillPremium - askPremium),
+    fillLatencyMs: signal.action === "filled" && Number.isFinite(createdAtMs) ? Math.max(0, timestampMs - createdAtMs) : null,
+  };
 }
 
 function bucketLabel(window: AnalyticsWindow, startMs: number): string {
@@ -107,8 +133,17 @@ function emptyBuckets(definition: WindowDefinition, now: number): DashboardAnaly
       endMs: bucketStart + definition.bucketMs,
       label: bucketLabel(definition.window, bucketStart),
       tradeCount: 0,
+      wins: 0,
+      losses: 0,
+      breakevens: 0,
       netPnl: 0,
       cumulativePnl: 0,
+      grossProfit: 0,
+      grossLoss: 0,
+      avgPnl: null,
+      avgSlippage: null,
+      avgFillLatencyMs: null,
+      drawdown: 0,
     };
   });
 }
@@ -120,6 +155,41 @@ function sharpeRatio(pnls: number[]): number | null {
   const standardDeviation = Math.sqrt(variance);
   if (standardDeviation <= EPSILON) return null;
   return roundMetric((mean / standardDeviation) * Math.sqrt(pnls.length));
+}
+
+function average(values: Array<number | null>): number | null {
+  const numeric = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (numeric.length === 0) return null;
+  return roundMetric(numeric.reduce((sum, value) => sum + value, 0) / numeric.length);
+}
+
+function distributionBucket(label: string, values: number[], predicate: (value: number) => boolean, min: number | null, max: number | null): DashboardAnalyticsDistributionBucket {
+  return {
+    label,
+    min,
+    max,
+    count: values.filter(predicate).length,
+  };
+}
+
+function pnlDistribution(pnls: number[]): DashboardAnalyticsDistributionBucket[] {
+  return [
+    distributionBucket("Loss", pnls, (value) => value < -EPSILON, null, 0),
+    distributionBucket("Breakeven", pnls, (value) => Math.abs(value) <= EPSILON, 0, 0),
+    distributionBucket("0-5c", pnls, (value) => value > EPSILON && value < 0.05 - EPSILON, 0, 0.05),
+    distributionBucket("5-10c", pnls, (value) => value >= 0.05 - EPSILON && value < 0.1 - EPSILON, 0.05, 0.1),
+    distributionBucket("10c+", pnls, (value) => value >= 0.1 - EPSILON, 0.1, null),
+  ];
+}
+
+function slippageDistribution(slippages: number[]): DashboardAnalyticsDistributionBucket[] {
+  return [
+    distributionBucket("<=0c", slippages, (value) => value <= EPSILON, null, 0),
+    distributionBucket("0-1c", slippages, (value) => value > EPSILON && value < 0.01 - EPSILON, 0, 0.01),
+    distributionBucket("1-2c", slippages, (value) => value >= 0.01 - EPSILON && value < 0.02 - EPSILON, 0.01, 0.02),
+    distributionBucket("2-3c", slippages, (value) => value >= 0.02 - EPSILON && value < 0.03 - EPSILON, 0.02, 0.03),
+    distributionBucket("3c+", slippages, (value) => value >= 0.03 - EPSILON, 0.03, null),
+  ];
 }
 
 export function buildAnalyticsWindow(
@@ -134,28 +204,63 @@ export function buildAnalyticsWindow(
   const trades = signals
     .map(signalTrade)
     .filter((trade): trade is AnalyticsTrade => trade != null && trade.timestampMs >= sinceMs && trade.timestampMs < endMs);
+  const filledTradesForWindow = trades.filter((trade) => trade.action === "filled" && trade.pnl != null);
 
   for (const trade of trades) {
     const bucketIndex = Math.floor((trade.timestampMs - sinceMs) / definition.bucketMs);
     const bucket = buckets[bucketIndex];
     if (!bucket) continue;
+    if (trade.action !== "filled" || trade.pnl == null) continue;
     bucket.tradeCount += 1;
+    if (trade.pnl > EPSILON) {
+      bucket.wins += 1;
+      bucket.grossProfit = roundMetric(bucket.grossProfit + trade.pnl);
+    } else if (trade.pnl < -EPSILON) {
+      bucket.losses += 1;
+      bucket.grossLoss = roundMetric(bucket.grossLoss + trade.pnl);
+    } else {
+      bucket.breakevens += 1;
+    }
     bucket.netPnl = roundMetric(bucket.netPnl + trade.pnl);
   }
 
   let cumulativePnl = 0;
+  let peakPnl = 0;
+  let maxDrawdown = 0;
   for (const bucket of buckets) {
     cumulativePnl = roundMetric(cumulativePnl + bucket.netPnl);
     bucket.cumulativePnl = cumulativePnl;
+    peakPnl = Math.max(peakPnl, cumulativePnl);
+    bucket.drawdown = roundMetric(Math.max(0, peakPnl - cumulativePnl));
+    maxDrawdown = Math.max(maxDrawdown, bucket.drawdown);
+    bucket.avgPnl = bucket.tradeCount === 0 ? null : roundMetric(bucket.netPnl / bucket.tradeCount);
+    const bucketTrades = filledTradesForWindow.filter((trade) => trade.timestampMs >= bucket.startMs && trade.timestampMs < bucket.endMs);
+    bucket.avgSlippage = average(bucketTrades.map((trade) => trade.slippage));
+    bucket.avgFillLatencyMs = average(bucketTrades.map((trade) => trade.fillLatencyMs));
   }
 
-  const pnls = trades.map((trade) => trade.pnl);
+  const pnls = filledTradesForWindow.map((trade) => trade.pnl as number);
   const grossProfit = roundMetric(pnls.filter((pnl) => pnl > EPSILON).reduce((sum, pnl) => sum + pnl, 0));
   const grossLoss = roundMetric(pnls.filter((pnl) => pnl < -EPSILON).reduce((sum, pnl) => sum + pnl, 0));
   const tradesWon = pnls.filter((pnl) => pnl > EPSILON).length;
   const tradesLost = pnls.filter((pnl) => pnl < -EPSILON).length;
   const filledTrades = pnls.length;
   const netPnl = roundMetric(pnls.reduce((sum, pnl) => sum + pnl, 0));
+  const opportunityCount = trades.length;
+  const heatmap: DashboardAnalyticsHeatmapCell[] = buckets.map((bucket) => ({
+    label: bucket.label,
+    startMs: bucket.startMs,
+    tradeCount: bucket.tradeCount,
+    netPnl: bucket.netPnl,
+    winRate: bucket.tradeCount === 0 ? 0 : roundMetric(bucket.wins / bucket.tradeCount),
+  }));
+  const fillLatencySeries: DashboardAnalyticsHeatmapCell[] = buckets.map((bucket) => ({
+    label: bucket.label,
+    startMs: bucket.startMs,
+    tradeCount: bucket.tradeCount,
+    netPnl: bucket.avgFillLatencyMs ?? 0,
+    winRate: bucket.avgFillLatencyMs ?? 0,
+  }));
 
   return {
     window,
@@ -177,14 +282,25 @@ export function buildAnalyticsWindow(
     averagePnl: filledTrades === 0 ? null : roundMetric(netPnl / filledTrades),
     bestTradePnl: filledTrades === 0 ? null : roundMetric(Math.max(...pnls)),
     worstTradePnl: filledTrades === 0 ? null : roundMetric(Math.min(...pnls)),
+    maxDrawdown: roundMetric(maxDrawdown),
+    avgPremium: average(filledTradesForWindow.map((trade) => trade.premium)),
+    avgSlippage: average(filledTradesForWindow.map((trade) => trade.slippage)),
+    avgFillLatencyMs: average(filledTradesForWindow.map((trade) => trade.fillLatencyMs)),
+    opportunityCount,
+    fillRate: opportunityCount === 0 ? 0 : roundMetric(filledTrades / opportunityCount),
+    pnlDistribution: pnlDistribution(pnls),
+    slippageDistribution: slippageDistribution(filledTradesForWindow.map((trade) => trade.slippage).filter((value): value is number => value != null)),
+    fillLatencySeries,
+    heatmap,
     buckets,
   };
 }
 
-export function buildDashboardAnalytics(signals: DashboardSignal[], now = Date.now()): DashboardAnalytics {
+export function buildDashboardAnalytics(signals: DashboardSignal[], now = Date.now(), realtime?: DashboardAnalyticsRealtime): DashboardAnalytics {
   return {
     hourly: buildAnalyticsWindow(signals, "hourly", now),
     daily: buildAnalyticsWindow(signals, "daily", now),
     weekly: buildAnalyticsWindow(signals, "weekly", now),
+    realtime,
   };
 }

@@ -907,6 +907,13 @@ tbody tr:hover {
   align-items: flex-start;
 }
 
+.analytics-header-actions {
+  align-items: flex-end;
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
 .analytics-subtitle {
   color: var(--muted);
   font-family: var(--font-mono);
@@ -947,6 +954,42 @@ tbody tr:hover {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.analytics-realtime-strip {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.analytics-realtime-strip > div {
+  border: 1px solid rgba(76, 201, 240, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(76, 201, 240, 0.13), transparent 44%),
+    rgba(6, 9, 13, 0.42);
+  display: grid;
+  gap: 5px;
+  min-height: 64px;
+  padding: 10px 12px;
+}
+
+.analytics-realtime-strip span,
+.analytics-chart-heading span,
+.analytics-chart-foot,
+.distribution-row span,
+.distribution-row strong,
+.heatmap-cell small {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.analytics-realtime-strip strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 15px;
 }
 
 .analytics-grid {
@@ -994,6 +1037,142 @@ tbody tr:hover {
   gap: 14px;
   min-height: 240px;
   padding: 14px;
+}
+
+.analytics-chart-suite {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+.analytics-chart-card {
+  border: 1px solid rgba(116, 130, 149, 0.16);
+  background:
+    linear-gradient(135deg, rgba(76, 201, 240, 0.08), transparent 46%),
+    rgba(3, 5, 8, 0.34);
+  display: grid;
+  gap: 12px;
+  min-height: 220px;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.analytics-chart-heading {
+  align-items: start;
+  display: grid;
+  gap: 4px;
+}
+
+.analytics-chart-heading strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.analytics-chart-card .recharts-wrapper,
+.analytics-chart-card .recharts-surface {
+  max-width: 100%;
+}
+
+.analytics-distribution-card {
+  min-height: 220px;
+}
+
+.distribution-bars {
+  display: grid;
+  gap: 9px;
+}
+
+.distribution-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 74px 1fr 36px;
+}
+
+.distribution-row strong {
+  color: var(--text);
+  text-align: right;
+}
+
+.distribution-track {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  background: rgba(116, 130, 149, 0.07);
+  height: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.distribution-track i {
+  background: linear-gradient(90deg, rgba(76, 201, 240, 0.42), rgba(70, 214, 125, 0.78));
+  display: block;
+  height: 100%;
+}
+
+.analytics-sparkline {
+  border: 1px solid rgba(116, 130, 149, 0.14);
+  background:
+    linear-gradient(rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(116, 130, 149, 0.08) 1px, transparent 1px),
+    rgba(6, 9, 13, 0.54);
+  background-size: 100% 25%, 12.5% 100%, auto;
+  height: 150px;
+  width: 100%;
+}
+
+.analytics-axis-line {
+  stroke: rgba(116, 130, 149, 0.42);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.analytics-svg-label {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analytics-sparkline-line {
+  fill: none;
+  stroke: var(--cyan);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.analytics-sparkline-dot {
+  fill: var(--cyan);
+  stroke: rgba(3, 5, 8, 0.86);
+  stroke-width: 1.5;
+}
+
+.analytics-chart-foot {
+  display: flex;
+  justify-content: space-between;
+}
+
+.analytics-heatmap {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+}
+
+.heatmap-cell {
+  border: 1px solid rgba(116, 130, 149, 0.16);
+  display: grid;
+  gap: 5px;
+  min-height: 58px;
+  padding: 8px;
+}
+
+.heatmap-cell strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 17px;
 }
 
 .pnl-chart-header {
@@ -1091,6 +1270,11 @@ tbody tr:hover {
   min-height: 120px;
   padding: 18px;
   text-align: center;
+}
+
+.analytics-empty.compact {
+  min-height: 88px;
+  padding: 12px;
 }
 
 .structure-list {
@@ -2312,6 +2496,11 @@ tbody tr:hover {
     flex-direction: column;
   }
 
+  .analytics-header-actions {
+    align-items: flex-start;
+    justify-items: start;
+  }
+
   .window-tabs {
     justify-content: flex-start;
   }
@@ -3227,6 +3416,27 @@ tbody tr:hover {
     padding-bottom: 4px;
   }
 
+  .analytics-chart-suite {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-chart-card {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .analytics-chart-card .recharts-wrapper {
+    min-width: 520px;
+  }
+
+  .analytics-sparkline {
+    min-width: 420px;
+  }
+
+  .analytics-heatmap {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .pnl-chart .recharts-wrapper {
     min-width: 560px;
   }
@@ -3328,6 +3538,14 @@ tbody tr:hover {
 
   .trade-payoff-header,
   .pnl-chart-header {
+    grid-template-columns: 1fr;
+  }
+
+  .distribution-row {
+    grid-template-columns: 62px 1fr 28px;
+  }
+
+  .analytics-heatmap {
     grid-template-columns: 1fr;
   }
 

@@ -40,6 +40,15 @@ interface DashboardSignalRow {
   polymarket_fill_price: string | number | null;
 }
 
+const SIGNAL_COLUMNS = `
+  id, created_at, updated_at, pair_key, expiry_ms,
+  kalshi_contract_id, polymarket_contract_id,
+  lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
+  higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
+  premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
+  kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price
+`;
+
 function numberFrom(value: string | number | null): number | null {
   if (value == null) return null;
   const parsed = Number(value);
@@ -133,8 +142,8 @@ export class SignalStore {
     return id;
   }
 
-  async updateSignal(id: number, update: SignalUpdate): Promise<void> {
-    await this.db.query(`
+  async updateSignal(id: number, update: SignalUpdate): Promise<DashboardSignal | null> {
+    const result = await this.db.query<DashboardSignalRow>(`
       UPDATE cross_venue_arb_signals
       SET action = $2,
           failure_reason = $3,
@@ -144,6 +153,7 @@ export class SignalStore {
           polymarket_fill_price = $7,
           updated_at = NOW()
       WHERE id = $1
+      RETURNING ${SIGNAL_COLUMNS}
     `, [
       id,
       update.action,
@@ -153,6 +163,7 @@ export class SignalStore {
       update.kalshiFillPrice ?? null,
       update.polymarketFillPrice ?? null,
     ]);
+    return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
 
   async loadRecentFilledAttempts(): Promise<FilledAttempt[]> {
@@ -169,13 +180,7 @@ export class SignalStore {
 
   async listRecentSignals(limit = 100): Promise<DashboardSignal[]> {
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT
-        id, created_at, updated_at, pair_key, expiry_ms,
-        kalshi_contract_id, polymarket_contract_id,
-        lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
-        higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
-        premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
-        kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price
+      SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       ORDER BY created_at DESC
       LIMIT $1
@@ -185,13 +190,7 @@ export class SignalStore {
 
   async listFilledSignalsSince(sinceMs: number, limit = 10_000): Promise<DashboardSignal[]> {
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT
-        id, created_at, updated_at, pair_key, expiry_ms,
-        kalshi_contract_id, polymarket_contract_id,
-        lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
-        higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
-        premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
-        kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price
+      SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
         AND updated_at >= to_timestamp($1 / 1000.0)

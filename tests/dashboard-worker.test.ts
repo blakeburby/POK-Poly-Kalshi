@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BookStore } from "../src/books/book-store";
+import { buildDashboardAnalytics } from "../src/analytics/performance";
 import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, type DashboardRuntime, type DashboardSnapshotCache } from "../src/dashboard/worker-api";
 import type { AppConfig } from "../src/config";
 import { LatencyMonitor } from "../src/latency/metrics";
@@ -171,6 +172,43 @@ test("dashboard snapshot cache avoids querying heavy DB-backed sections on every
   await createDashboardSnapshot(runtime, now + 5_001, cache);
   assert.equal(recentCalls, 3);
   assert.equal(analyticsCalls, 2);
+});
+
+test("dashboard snapshot uses hot analytics provider without polling filled signals", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  let analyticsCalls = 0;
+  let hotAnalyticsCalls = 0;
+  const runtime: DashboardRuntime = {
+    config: config(),
+    books,
+    signals: {
+      listRecentSignals: async () => [],
+      listFilledSignalsSince: async () => {
+        analyticsCalls += 1;
+        return [signal()];
+      },
+    },
+    getAnalytics: (snapshotNow) => {
+      hotAnalyticsCalls += 1;
+      return buildDashboardAnalytics([signal()], snapshotNow, {
+        mode: "hot_cache",
+        lastUpdatedAt: snapshotNow,
+        lastDbReconciledAt: snapshotNow - 500,
+        computeMs: 1,
+        sourceSignalCount: 1,
+        stale: false,
+      });
+    },
+    getScannerStatus: () => ({ scanning: false, lastScanAt: now, lastCandidateCount: 0, queuedExecutions: 0, activeExecutions: 0 }),
+    getDiscoveryState: () => ({ lastDiscoveryAt: now, lastDiscoveryError: null }),
+    getLogs: () => [],
+  };
+
+  await createDashboardSnapshot(runtime, now);
+  await createDashboardSnapshot(runtime, now + 250);
+  assert.equal(analyticsCalls, 0);
+  assert.equal(hotAnalyticsCalls, 2);
 });
 
 test("dashboard stream events are valid SSE snapshot frames", () => {

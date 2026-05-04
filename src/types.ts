@@ -141,8 +141,32 @@ export interface DashboardAnalyticsBucket {
   endMs: number;
   label: string;
   tradeCount: number;
+  wins: number;
+  losses: number;
+  breakevens: number;
   netPnl: number;
   cumulativePnl: number;
+  grossProfit: number;
+  grossLoss: number;
+  avgPnl: number | null;
+  avgSlippage: number | null;
+  avgFillLatencyMs: number | null;
+  drawdown: number;
+}
+
+export interface DashboardAnalyticsDistributionBucket {
+  label: string;
+  count: number;
+  min: number | null;
+  max: number | null;
+}
+
+export interface DashboardAnalyticsHeatmapCell {
+  label: string;
+  startMs: number;
+  tradeCount: number;
+  netPnl: number;
+  winRate: number;
 }
 
 export interface DashboardAnalyticsWindow {
@@ -165,13 +189,33 @@ export interface DashboardAnalyticsWindow {
   averagePnl: number | null;
   bestTradePnl: number | null;
   worstTradePnl: number | null;
+  maxDrawdown: number;
+  avgPremium: number | null;
+  avgSlippage: number | null;
+  avgFillLatencyMs: number | null;
+  opportunityCount: number;
+  fillRate: number;
+  pnlDistribution: DashboardAnalyticsDistributionBucket[];
+  slippageDistribution: DashboardAnalyticsDistributionBucket[];
+  fillLatencySeries: DashboardAnalyticsHeatmapCell[];
+  heatmap: DashboardAnalyticsHeatmapCell[];
   buckets: DashboardAnalyticsBucket[];
+}
+
+export interface DashboardAnalyticsRealtime {
+  mode: "hot_cache" | "fallback_db";
+  lastUpdatedAt: number | null;
+  lastDbReconciledAt: number | null;
+  computeMs: number;
+  sourceSignalCount: number;
+  stale: boolean;
 }
 
 export interface DashboardAnalytics {
   hourly: DashboardAnalyticsWindow;
   daily: DashboardAnalyticsWindow;
   weekly: DashboardAnalyticsWindow;
+  realtime?: DashboardAnalyticsRealtime;
 }
 
 export type PolymarketStrikeStatus = "ready" | "pending_strike" | "missing_strike" | "invalid_market";

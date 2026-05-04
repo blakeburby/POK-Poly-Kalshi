@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { oldestAnalyticsSinceMs } from "./analytics/performance";
+import { AnalyticsStore } from "./analytics/store";
 import { BookStore } from "./books/book-store";
 import { loadConfig } from "./config";
 import { handleDashboardRequest } from "./dashboard/worker-api";
@@ -35,6 +37,11 @@ async function main(): Promise<void> {
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
   reentry.hydrate(await signals.loadRecentFilledAttempts());
+  const analytics = new AnalyticsStore();
+  async function reconcileAnalytics(): Promise<void> {
+    analytics.reconcileFilledSignals(await signals.listFilledSignalsSince(oldestAnalyticsSinceMs(Date.now()), 10_000), Date.now());
+  }
+  await reconcileAnalytics();
   const executor = config.liveTrading ? new LiveExecutor(config) : new DryRunExecutor(DryRunSlippageModel.fromConfig(config));
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
@@ -42,6 +49,7 @@ async function main(): Promise<void> {
     staleBookMs: config.staleBookMs,
     executionConcurrency: config.executionConcurrency,
     latency,
+    analytics,
   });
   const scanScheduler = new CoalescedScanScheduler(scanner, latency);
 
@@ -140,6 +148,9 @@ async function main(): Promise<void> {
   polymarketPriceToBeat.start();
   await refreshDiscovery();
   const discoveryTimer = setInterval(() => void refreshDiscovery(), config.marketDiscoveryIntervalMs);
+  const analyticsTimer = setInterval(() => void reconcileAnalytics().catch((error) => {
+    logEvent({ severity: "ERROR", category: "DB", message: "analytics reconciliation failed", context: { error: error instanceof Error ? error.message : String(error) } });
+  }), Math.max(1_000, config.dashboardAnalyticsRefreshMs));
   const boundaryDiscoveryTimers = scheduleBoundaryRefreshes();
 
   const server = createServer((request, response) => {
@@ -148,6 +159,7 @@ async function main(): Promise<void> {
         config,
         books,
         signals,
+        getAnalytics: (now) => analytics.snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
         getScannerStatus: () => scanner.status(),
         getDiscoveryState: () => ({ lastDiscoveryAt, lastDiscoveryError }),
         getPolymarketDiagnostics: livePolymarketDiagnostics,
@@ -187,6 +199,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     clearInterval(discoveryTimer);
+    clearInterval(analyticsTimer);
     for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();
     polymarket.close();

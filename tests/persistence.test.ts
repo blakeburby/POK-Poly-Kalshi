@@ -9,6 +9,39 @@ class FakeDb implements Queryable {
 
   async query<T = Record<string, unknown>>(sql: string, values?: unknown[]): Promise<{ rows: T[] }> {
     this.calls.push({ sql, values });
+    if (/UPDATE cross_venue_arb_signals/.test(sql)) {
+      return {
+        rows: [{
+          id: values?.[0] ?? 42,
+          created_at: "2026-04-29T20:00:00.000Z",
+          updated_at: "2026-04-29T20:00:01.000Z",
+          pair_key: "pair",
+          expiry_ms: 1_800_000_000_000,
+          kalshi_contract_id: "kalshi",
+          polymarket_contract_id: "poly",
+          lower_venue: "polymarket",
+          lower_contract_id: "poly",
+          lower_strike: 1500,
+          lower_direction: "yes",
+          lower_ask: 0.4,
+          higher_venue: "kalshi",
+          higher_contract_id: "kalshi",
+          higher_strike: 1502,
+          higher_direction: "no",
+          higher_ask: 0.5,
+          premium: 0.9,
+          guaranteed_profit: 0.1,
+          overlap_profit: 1.1,
+          threshold: 0.05,
+          action: values?.[1] ?? "filled",
+          failure_reason: values?.[2] ?? null,
+          kalshi_fill_id: values?.[3] ?? null,
+          polymarket_fill_id: values?.[4] ?? null,
+          kalshi_fill_price: values?.[5] ?? null,
+          polymarket_fill_price: values?.[6] ?? null,
+        } as T],
+      };
+    }
     if (/RETURNING id/.test(sql)) return { rows: [{ id: 42 } as T] };
     if (/GROUP BY pair_key/.test(sql)) return { rows: [{ pair_key: "pair", filled_at_ms: "123000" } as T] };
     if (/updated_at >= to_timestamp/.test(sql)) {

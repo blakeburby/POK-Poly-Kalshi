@@ -22,6 +22,7 @@ export interface DashboardRuntime {
   config: AppConfig;
   books: BookStore;
   signals: SignalReader;
+  getAnalytics?: (now: number) => DashboardAnalytics | Promise<DashboardAnalytics>;
   getScannerStatus: () => ScannerStatus;
   getDiscoveryState: () => DashboardDiscoveryState;
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
@@ -69,11 +70,22 @@ async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache
 }
 
 async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
+  if (runtime.getAnalytics) return runtime.getAnalytics(now);
   if (cache?.analytics && now - cache.analytics.refreshedAt < runtime.config.dashboardAnalyticsRefreshMs) {
     return cache.analytics.value;
   }
   const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]));
-  const value = buildDashboardAnalytics(analyticsSignals, now);
+  const value = buildDashboardAnalytics(analyticsSignals, now, {
+    mode: "fallback_db",
+    lastUpdatedAt: analyticsSignals
+      .map((signal) => new Date(signal.updatedAt).getTime())
+      .filter((timestamp) => Number.isFinite(timestamp))
+      .reduce<number | null>((latest, timestamp) => latest == null ? timestamp : Math.max(latest, timestamp), null),
+    lastDbReconciledAt: now,
+    computeMs: 0,
+    sourceSignalCount: analyticsSignals.length,
+    stale: false,
+  });
   if (cache) cache.analytics = { refreshedAt: now, value };
   return value;
 }

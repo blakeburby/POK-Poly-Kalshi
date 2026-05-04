@@ -232,6 +232,11 @@ function formatLatencyPair(p50Ms: number | null | undefined, p95Ms: number | nul
   return `${formatCompactTime(p50Ms ?? null)} / ${formatCompactTime(p95Ms ?? null)}`;
 }
 
+function formatRealtimeAge(now: number, timestampMs: number | null | undefined): string {
+  if (timestampMs == null || !Number.isFinite(timestampMs)) return "--";
+  return formatCompactTime(Math.max(0, now - timestampMs));
+}
+
 export function normalizeBinaryPrice(value: number | null | undefined): number | null {
   const numeric = safeNumber(value);
   if (numeric == null) return null;
@@ -772,6 +777,193 @@ export function PnLChart({ analytics }: { analytics: DashboardAnalyticsWindow })
   );
 }
 
+function BucketPnlBars({ analytics }: { analytics: DashboardAnalyticsWindow }) {
+  const data = analytics.buckets.map((bucket) => ({
+    label: bucket.label,
+    netPnl: bucket.netPnl,
+    tradeCount: bucket.tradeCount ?? 0,
+  }));
+
+  return (
+    <div className="analytics-chart-card" aria-label="Bucket PnL bars">
+      <div className="analytics-chart-heading">
+        <span className="signal-label">Bucket PnL Bars</span>
+        <strong>Net edge by bucket</strong>
+      </div>
+      <span className="sr-only">Bucket PnL bars. Y-axis: Bucket PnL ($). X-axis: selected analytics buckets.</span>
+      <BarChart accessibilityLayer data={data} height={180} margin={{ top: 14, right: 16, bottom: 4, left: 0 }} width={520}>
+        <CartesianGrid stroke="rgba(116, 130, 149, 0.14)" strokeDasharray="3 3" />
+        <XAxis dataKey="label" minTickGap={14} stroke="#748295" tick={{ fill: "#748295", fontSize: 10 }} tickLine={false} />
+        <YAxis
+          label={{ value: "Y-axis: Bucket PnL ($)", angle: -90, position: "insideLeft", fill: "#91a0b5", fontSize: 10 }}
+          stroke="#748295"
+          tick={{ fill: "#748295", fontSize: 10 }}
+          tickFormatter={(value) => `$${Number(value).toFixed(2)}`}
+          tickLine={false}
+        />
+        <Tooltip
+          contentStyle={{ background: "#071018", border: "1px solid rgba(116, 130, 149, 0.32)", color: "#e6edf3" }}
+          formatter={(value, name) => [name === "tradeCount" ? Number(value).toFixed(0) : `$${Number(value).toFixed(4)}`, name === "tradeCount" ? "Filled trades" : "Net PnL"]}
+          labelFormatter={(label) => `Bucket ${label}`}
+        />
+        <Bar dataKey="netPnl" fill="#4cc9f0" isAnimationActive={false} name="Net PnL" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="tradeCount" fill="rgba(145, 160, 181, 0.45)" isAnimationActive={false} name="Filled trades" radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </div>
+  );
+}
+
+function DrawdownChart({ analytics }: { analytics: DashboardAnalyticsWindow }) {
+  const data = analytics.buckets.map((bucket) => ({
+    label: bucket.label,
+    drawdown: bucket.drawdown ?? 0,
+  }));
+
+  return (
+    <div className="analytics-chart-card" aria-label="Drawdown chart">
+      <div className="analytics-chart-heading">
+        <span className="signal-label">Drawdown Chart</span>
+        <strong>Peak-to-trough estimated PnL</strong>
+      </div>
+      <span className="sr-only">Drawdown chart. Y-axis: Drawdown ($). X-axis: selected analytics buckets.</span>
+      <AreaChart accessibilityLayer data={data} height={180} margin={{ top: 14, right: 16, bottom: 4, left: 0 }} width={520}>
+        <defs>
+          <linearGradient id="drawdownGradient" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#ff5f65" stopOpacity={0.32} />
+            <stop offset="100%" stopColor="#ff5f65" stopOpacity={0.03} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke="rgba(116, 130, 149, 0.14)" strokeDasharray="3 3" />
+        <XAxis dataKey="label" minTickGap={14} stroke="#748295" tick={{ fill: "#748295", fontSize: 10 }} tickLine={false} />
+        <YAxis
+          label={{ value: "Y-axis: Drawdown ($)", angle: -90, position: "insideLeft", fill: "#91a0b5", fontSize: 10 }}
+          stroke="#748295"
+          tick={{ fill: "#748295", fontSize: 10 }}
+          tickFormatter={(value) => `$${Number(value).toFixed(2)}`}
+          tickLine={false}
+        />
+        <Tooltip
+          contentStyle={{ background: "#071018", border: "1px solid rgba(116, 130, 149, 0.32)", color: "#e6edf3" }}
+          formatter={(value) => [`$${Number(value).toFixed(4)}`, "Drawdown"]}
+          labelFormatter={(label) => `Bucket ${label}`}
+        />
+        <Area dataKey="drawdown" fill="url(#drawdownGradient)" isAnimationActive={false} name="Drawdown" stroke="#ff5f65" strokeWidth={2.2} type="monotone" />
+      </AreaChart>
+    </div>
+  );
+}
+
+function DistributionBars({
+  buckets,
+  title,
+  subtitle,
+  ariaLabel,
+}: {
+  buckets: Array<{ label: string; count: number }>;
+  title: string;
+  subtitle: string;
+  ariaLabel: string;
+}) {
+  const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  return (
+    <div className="analytics-chart-card analytics-distribution-card" aria-label={ariaLabel}>
+      <div className="analytics-chart-heading">
+        <span className="signal-label">{title}</span>
+        <strong>{subtitle}</strong>
+      </div>
+      <div className="distribution-bars">
+        {buckets.length === 0 ? (
+          <div className="analytics-empty compact">No distribution samples yet.</div>
+        ) : buckets.map((bucket) => (
+          <div className="distribution-row" key={bucket.label}>
+            <span>{bucket.label}</span>
+            <div className="distribution-track" aria-label={`${bucket.label}: ${bucket.count} trades`}>
+              <i style={{ width: `${Math.max(4, (bucket.count / maxCount) * 100)}%` }} />
+            </div>
+            <strong>{bucket.count}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LatencySparkline({ analytics }: { analytics: DashboardAnalyticsWindow }) {
+  const series = (analytics.fillLatencySeries ?? []).map((point, index) => ({
+    label: point.label,
+    value: point.winRate ?? point.netPnl ?? 0,
+    index,
+  }));
+  const maxLatency = Math.max(1, ...series.map((point) => point.value));
+  const width = 420;
+  const height = 120;
+  const points = series.map((point) => {
+    const x = series.length <= 1 ? width / 2 : (point.index / (series.length - 1)) * width;
+    const y = height - (point.value / maxLatency) * (height - 18) - 8;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+
+  return (
+    <div className="analytics-chart-card" aria-label="Fill latency sparkline">
+      <div className="analytics-chart-heading">
+        <span className="signal-label">Latency Sparkline</span>
+        <strong>Average fill latency by bucket</strong>
+      </div>
+      <svg className="analytics-sparkline" role="img" viewBox={`0 0 ${width} ${height}`} aria-label="Fill latency sparkline. Y-axis: fill latency milliseconds. X-axis: selected analytics buckets.">
+        <title>Fill latency sparkline. Y-axis: fill latency milliseconds. X-axis: selected analytics buckets.</title>
+        <line className="analytics-axis-line" x1="0" x2="420" y1="112" y2="112" />
+        <line className="analytics-axis-line" x1="0" x2="0" y1="8" y2="112" />
+        <text className="analytics-svg-label" x="8" y="18">Y: fill latency</text>
+        <text className="analytics-svg-label" x="292" y="106">X: buckets</text>
+        <polyline className="analytics-sparkline-line" points={points} />
+        {series.map((point) => {
+          const [x, y] = points.split(" ")[point.index]?.split(",").map(Number) ?? [0, height];
+          return <circle className="analytics-sparkline-dot" cx={x} cy={y} key={`${point.label}-${point.index}`} r="2.8" />;
+        })}
+      </svg>
+      <div className="analytics-chart-foot">
+        <span>Avg {formatCompactTime(analytics.avgFillLatencyMs ?? null)}</span>
+        <span>Samples {analytics.filledTrades}</span>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsHeatmap({ analytics }: { analytics: DashboardAnalyticsWindow }) {
+  const cells = analytics.heatmap ?? [];
+  const maxAbsPnl = Math.max(0.01, ...cells.map((cell) => Math.abs(cell.netPnl ?? 0)));
+  return (
+    <div className="analytics-chart-card" aria-label="Opportunity heatmap">
+      <div className="analytics-chart-heading">
+        <span className="signal-label">Hourly/Day Heatmap</span>
+        <strong>Opportunity frequency and edge density</strong>
+      </div>
+      <div className="analytics-heatmap" role="img" aria-label="Heatmap. Color shows estimated PnL, label shows trade count.">
+        {cells.length === 0 ? (
+          <div className="analytics-empty compact">No heatmap buckets yet.</div>
+        ) : cells.map((cell) => {
+          const pnl = cell.netPnl ?? 0;
+          const intensity = clamp(Math.abs(pnl) / maxAbsPnl, 0.08, 1);
+          const color = pnl >= 0
+            ? `rgba(70, 214, 125, ${0.18 + intensity * 0.58})`
+            : `rgba(255, 95, 101, ${0.18 + intensity * 0.58})`;
+          return (
+            <span
+              className="heatmap-cell"
+              key={`${cell.startMs}-${cell.label}`}
+              style={{ background: color }}
+              title={`${cell.label}: ${cell.tradeCount} trades, ${formatSignedCents(pnl)}`}
+            >
+              <small>{cell.label}</small>
+              <strong>{cell.tradeCount}</strong>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function RiskSurface3DFallback({ reason = "WebGL surface unavailable" }: { reason?: string }) {
   return (
     <div className="risk-surface-fallback" role="img" aria-label="3D risk surface fallback">
@@ -1169,6 +1361,9 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
 
   const windows: AnalyticsWindow[] = ["hourly", "daily", "weekly"];
   const noTrades = current.filledTrades === 0;
+  const realtime = analytics.realtime;
+  const realtimeMode = realtime?.mode === "fallback_db" ? "Fallback DB" : "Hot-cache";
+  const realtimeState = realtime?.stale ? "STALE" : "REALTIME";
   return (
     <section className="panel analytics-panel">
       <div className="panel-header analytics-header">
@@ -1177,23 +1372,34 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <h2>Estimated Guaranteed PnL</h2>
           <p className="analytics-subtitle">Dry-run/live audit fills, conservative $1.00 payoff floor, not settlement-final PnL.</p>
         </div>
-        <div className="window-tabs" role="tablist" aria-label="Analytics window">
-          {windows.map((window) => (
-            <button
-              aria-selected={selected === window}
-              className={selected === window ? "active" : ""}
-              key={window}
-              onClick={() => setSelected(window)}
-              role="tab"
-              type="button"
-            >
-              {analytics[window].label}
-            </button>
-          ))}
+        <div className="analytics-header-actions">
+          <StatusPill label={realtimeState} state={realtime?.stale ? "warn" : "live"} />
+          <div className="window-tabs" role="tablist" aria-label="Analytics window">
+            {windows.map((window) => (
+              <button
+                aria-selected={selected === window}
+                className={selected === window ? "active" : ""}
+                key={window}
+                onClick={() => setSelected(window)}
+                role="tab"
+                type="button"
+              >
+                {analytics[window].label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="analytics-body">
+        <div className="analytics-realtime-strip" aria-label="Realtime analytics freshness">
+          <div><span>Mode</span><strong>{realtime ? realtimeMode : "Legacy snapshot"}</strong></div>
+          <div><span>Last Fill Update</span><strong>{formatRealtimeAge(snapshot.generatedAt, realtime?.lastUpdatedAt)}</strong></div>
+          <div><span>DB Reconcile Age</span><strong>{formatRealtimeAge(snapshot.generatedAt, realtime?.lastDbReconciledAt)}</strong></div>
+          <div><span>Compute Time</span><strong>{formatCompactTime(realtime?.computeMs ?? null)}</strong></div>
+          <div><span>Source Signals</span><strong>{realtime?.sourceSignalCount ?? "--"}</strong></div>
+        </div>
+
         <div className="analytics-grid">
           <div className="analytics-card primary"><span>Net PnL</span><strong className={current.netPnl >= 0 ? "profit" : "loss"}>{formatSignedCents(current.netPnl)}</strong></div>
           <div className="analytics-card"><span>Win Rate</span><strong>{formatPercent(current.winRate)}</strong></div>
@@ -1203,6 +1409,14 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <div className="analytics-card"><span>Profit Factor</span><strong>{formatRatio(current.profitFactor, current)}</strong></div>
           <div className="analytics-card"><span>Sharpe Ratio</span><strong>{formatSharpe(current.sharpeRatio)}</strong></div>
           <div className="analytics-card"><span>Filled Trades</span><strong>{current.filledTrades}</strong></div>
+          <div className="analytics-card"><span>Max Drawdown</span><strong className="loss">{formatCents(current.maxDrawdown ?? 0)}</strong></div>
+          <div className="analytics-card"><span>Avg Premium</span><strong>{formatCents(current.avgPremium ?? null)}</strong></div>
+          <div className="analytics-card"><span>Avg Slippage</span><strong>{formatSignedCents(current.avgSlippage ?? null)}</strong></div>
+          <div className="analytics-card"><span>Avg Fill Latency</span><strong>{formatCompactTime(current.avgFillLatencyMs ?? null)}</strong></div>
+          <div className="analytics-card"><span>Opportunities</span><strong>{current.opportunityCount ?? current.filledTrades}</strong></div>
+          <div className="analytics-card"><span>Fill Rate</span><strong>{formatPercent(current.fillRate ?? 0)}</strong></div>
+          <div className="analytics-card"><span>Best Trade</span><strong className="profit">{formatSignedCents(current.bestTradePnl)}</strong></div>
+          <div className="analytics-card"><span>Worst Trade</span><strong className="loss">{formatSignedCents(current.worstTradePnl)}</strong></div>
         </div>
 
         <div className="pnl-chart-card">
@@ -1226,6 +1440,27 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <PnLChart analytics={current} />
           )}
         </div>
+
+        {!noTrades && (
+          <div className="analytics-chart-suite" aria-label="Realtime rich analytics charts">
+            <BucketPnlBars analytics={current} />
+            <DrawdownChart analytics={current} />
+            <DistributionBars
+              ariaLabel="Win loss PnL distribution"
+              buckets={current.pnlDistribution ?? []}
+              subtitle="Wins, losses, breakevens, and edge bands"
+              title="Win/Loss Distribution"
+            />
+            <DistributionBars
+              ariaLabel="Slippage histogram"
+              buckets={current.slippageDistribution ?? []}
+              subtitle="Dry-run/live fill slippage vs observed asks"
+              title="Slippage Histogram"
+            />
+            <LatencySparkline analytics={current} />
+            <AnalyticsHeatmap analytics={current} />
+          </div>
+        )}
       </div>
     </section>
   );
