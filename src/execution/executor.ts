@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config";
 import { loadConfig } from "../config";
 import { protectedCandidateBlockReason } from "../scanner/safety";
@@ -198,26 +199,48 @@ export class LiveExecutor implements ArbExecutor {
     const prepared = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
     if (typeof prepared === "string") return skipped(prepared);
 
-    const executionGroupId = `pok-${this.now()}`;
+    const executionGroupId = randomUUID();
     const requestedAt = this.now();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
-    const [kalshi, polymarket] = await Promise.all([
-      this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, {
-        executionGroupId,
-        clientOrderId: kalshiClientOrderId,
-        size: this.config.liveOrderSize,
-        maxBuyPrice: prepared.kalshi.maxBuyPrice,
-        requestedAt,
-      }),
-      this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, {
-        executionGroupId,
-        clientOrderId: polymarketClientOrderId,
-        size: this.config.liveOrderSize,
-        maxBuyPrice: prepared.polymarket.maxBuyPrice,
-        requestedAt,
-      }),
+    const kalshiContext = {
+      executionGroupId,
+      clientOrderId: kalshiClientOrderId,
+      size: this.config.liveOrderSize,
+      maxBuyPrice: prepared.kalshi.maxBuyPrice,
+      requestedAt,
+    };
+    const polymarketContext = {
+      executionGroupId,
+      clientOrderId: polymarketClientOrderId,
+      size: this.config.liveOrderSize,
+      maxBuyPrice: prepared.polymarket.maxBuyPrice,
+      requestedAt,
+    };
+    const preflightFailure = await this.preflightVenueOrders([
+      { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
+      { client: this.polymarketClient, leg: prepared.polymarket.leg, context: polymarketContext },
     ]);
+    if (preflightFailure) return skipped(preflightFailure);
+    // Submit Kalshi first during live canary. A read-only Kalshi key returns a
+    // write-scope 403; placing Polymarket in parallel would create a one-sided
+    // position. If Kalshi is not accepted exactly, abort before Polymarket.
+    const kalshi = await this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, kalshiContext);
+    if (!this.isExactVenueFill(kalshi)) {
+      return this.resultFromVenueOrders(executionGroupId, kalshi, {
+        venue: "polymarket",
+        clientOrderId: polymarketClientOrderId,
+        orderId: null,
+        status: "not_submitted",
+        fillPrice: null,
+        fillCount: null,
+        requestedAt: new Date(requestedAt).toISOString(),
+        respondedAt: new Date(this.now()).toISOString(),
+        error: "not submitted because Kalshi leg did not fill exactly",
+      });
+    }
+
+    const polymarket = await this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext);
 
     return this.resultFromVenueOrders(executionGroupId, kalshi, polymarket);
   }
@@ -228,7 +251,7 @@ export class LiveExecutor implements ArbExecutor {
 
   private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg): PreparedExecution | string {
     const now = this.now();
-    if (this.config.liveOrderSize !== 1) return "LIVE_ORDER_SIZE must remain 1 for the protected-spread canary";
+    if (!Number.isFinite(this.config.liveOrderSize) || this.config.liveOrderSize <= 0) return "LIVE_ORDER_SIZE must be greater than 0";
     if (candidate.expiryMs - now < this.config.liveMinExpiryMs) return "candidate too close to expiry for live execution";
     const kalshi = this.prepareLeg(kalshiLeg, now);
     if (typeof kalshi === "string") return kalshi;
@@ -247,7 +270,11 @@ export class LiveExecutor implements ArbExecutor {
     if (now - current.updatedAt > this.config.staleBookMs) return `${leg.venue} contract ${leg.contractId} is stale`;
     const currentAsk = leg.direction === "yes" ? current.yesAsk : current.noAsk;
     if (currentAsk == null || !Number.isFinite(currentAsk)) return `${leg.venue} ${leg.direction} ask is unavailable`;
-    const maxBuyPrice = roundPrice(Math.min(1, currentAsk + this.config.liveMaxSlippageCents / 100));
+    // Polymarket exact-size buys must not use a higher slippage limit because
+    // notional-style matching can convert price improvement into extra shares.
+    const maxBuyPrice = leg.venue === "polymarket"
+      ? roundPrice(currentAsk)
+      : roundPrice(Math.min(1, currentAsk + this.config.liveMaxSlippageCents / 100));
     if (currentAsk > leg.ask + this.config.liveMaxSlippageCents / 100) {
       return `${leg.venue} ${leg.direction} ask moved beyond live slippage cap`;
     }
@@ -280,9 +307,29 @@ export class LiveExecutor implements ArbExecutor {
     }
   }
 
+  private async preflightVenueOrders(
+    orders: Array<{ client: VenueOrderClient; leg: ArbLeg; context: LiveOrderContext }>,
+  ): Promise<string | null> {
+    for (const order of orders) {
+      try {
+        const reason = await order.client.preflightOrder?.(order.leg, order.context);
+        if (reason) return reason;
+      } catch (error) {
+        return `${order.client.venue} live preflight failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    return null;
+  }
+
+  private isExactVenueFill(result: VenueOrderResult): boolean {
+    return !result.error
+      && (result.fillCount ?? 0) >= this.config.liveOrderSize
+      && Math.abs((result.fillCount ?? 0) - this.config.liveOrderSize) <= 0.000001;
+  }
+
   private resultFromVenueOrders(executionGroupId: string, kalshi: VenueOrderResult, polymarket: VenueOrderResult): ExecutionResult {
-    const kalshiFilled = (kalshi.fillCount ?? 0) >= this.config.liveOrderSize;
-    const polymarketFilled = (polymarket.fillCount ?? 0) >= this.config.liveOrderSize;
+    const kalshiFilled = this.isExactVenueFill(kalshi);
+    const polymarketFilled = this.isExactVenueFill(polymarket);
     const partialFill = kalshiFilled !== polymarketFilled || (kalshiFilled && polymarketFilled && (
       Math.abs((kalshi.fillCount ?? 0) - this.config.liveOrderSize) > 0.000001
       || Math.abs((polymarket.fillCount ?? 0) - this.config.liveOrderSize) > 0.000001

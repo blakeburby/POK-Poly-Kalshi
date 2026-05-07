@@ -157,6 +157,7 @@ export class CrossVenueArbScanner {
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
       if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
+      else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
       logEvent({
         category: "SCANNER",
         message: "candidate processed",

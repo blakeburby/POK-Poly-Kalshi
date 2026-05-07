@@ -4,7 +4,7 @@ export interface FilledAttempt {
 }
 
 export class ReentryThrottle {
-  private readonly lastFillByPair = new Map<string, number>();
+  private readonly lastEntryByPair = new Map<string, number>();
 
   constructor(private readonly intervalMs: number) {}
 
@@ -13,17 +13,21 @@ export class ReentryThrottle {
   }
 
   canEnter(pairKey: string, now = Date.now()): boolean {
-    const lastFill = this.lastFillByPair.get(pairKey);
-    return lastFill == null || now - lastFill >= this.intervalMs;
+    const lastEntry = this.lastEntryByPair.get(pairKey);
+    return lastEntry == null || now - lastEntry >= this.intervalMs;
+  }
+
+  recordAttempt(pairKey: string, attemptedAtMs = Date.now()): void {
+    const previous = this.lastEntryByPair.get(pairKey) ?? 0;
+    if (attemptedAtMs >= previous) this.lastEntryByPair.set(pairKey, attemptedAtMs);
   }
 
   recordFill(pairKey: string, filledAtMs = Date.now()): void {
-    const previous = this.lastFillByPair.get(pairKey) ?? 0;
-    if (filledAtMs >= previous) this.lastFillByPair.set(pairKey, filledAtMs);
+    this.recordAttempt(pairKey, filledAtMs);
   }
 
   nextAllowedAt(pairKey: string): number | null {
-    const lastFill = this.lastFillByPair.get(pairKey);
-    return lastFill == null ? null : lastFill + this.intervalMs;
+    const lastEntry = this.lastEntryByPair.get(pairKey);
+    return lastEntry == null ? null : lastEntry + this.intervalMs;
   }
 }

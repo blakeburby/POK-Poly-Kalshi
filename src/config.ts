@@ -23,10 +23,14 @@ export interface AppConfig {
   polymarketPriceCaptureToleranceMs: number;
   polymarketMissedOpenBackfill: boolean;
   polymarketPrivateKey: string;
+  polymarketApiKey: string;
+  polymarketApiSecret: string;
+  polymarketApiPassphrase: string;
   polymarketSignatureType: number;
   polymarketFunderAddress: string;
   polymarketChainId: number;
   polymarketClobHost: string;
+  polymarketGeoblockUrl: string;
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
   liveMaxSlippageCents: number;
@@ -97,10 +101,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketPriceCaptureToleranceMs: envNumber(env, "POLYMARKET_PRICE_CAPTURE_TOLERANCE_MS", 5_000),
     polymarketMissedOpenBackfill: envBoolean(env, "POLYMARKET_MISSED_OPEN_BACKFILL", true),
     polymarketPrivateKey: envString(env, "POLYMARKET_PRIVATE_KEY"),
+    polymarketApiKey: envString(env, "POLYMARKET_API_KEY"),
+    polymarketApiSecret: envString(env, "POLYMARKET_API_SECRET"),
+    polymarketApiPassphrase: envString(env, "POLYMARKET_API_PASSPHRASE"),
     polymarketSignatureType: envNumber(env, "POLYMARKET_SIGNATURE_TYPE", 0),
     polymarketFunderAddress: envString(env, "POLYMARKET_FUNDER_ADDRESS"),
     polymarketChainId: envNumber(env, "POLYMARKET_CHAIN_ID", 137),
     polymarketClobHost: envString(env, "POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
+    polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FOK").toUpperCase() === "FAK" ? "FAK" : "FOK",
     liveOrderSize: envNumber(env, "LIVE_ORDER_SIZE", 1),
     liveMaxSlippageCents: envNumber(env, "LIVE_MAX_SLIPPAGE_CENTS", 1),

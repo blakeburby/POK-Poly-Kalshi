@@ -34,10 +34,14 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketPriceCaptureToleranceMs: 5_000,
     polymarketMissedOpenBackfill: true,
     polymarketPrivateKey: "",
+    polymarketApiKey: "",
+    polymarketApiSecret: "",
+    polymarketApiPassphrase: "",
     polymarketSignatureType: 0,
     polymarketFunderAddress: "",
     polymarketChainId: 137,
     polymarketClobHost: "https://clob.polymarket.com",
+    polymarketGeoblockUrl: "https://polymarket.com/api/geoblock",
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
     liveMaxSlippageCents: 1,
@@ -114,6 +118,34 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
       skippedReasons: [],
       markets: [],
     }),
+    getExecutionReadiness: () => ({
+      mode: "live",
+      liveTrading: false,
+      protectedOnly: true,
+      orderSize: 1,
+      orderType: "FOK",
+      maxSlippageCents: 1,
+      minExpiryMs: 30_000,
+      partialFillLocked: false,
+      kalshi: { configured: true, ready: true, reason: null, balance: null, allowance: null, lastCheckedAt: now },
+      polymarket: {
+        configured: true,
+        ready: false,
+        reason: "Polymarket collateral balance 0 is below required canary collateral 1",
+        balance: 0,
+        allowance: 10,
+        lastCheckedAt: now,
+        signerAddress: "0x1111...2222",
+        funderAddress: "0x3333...4444",
+        signatureType: 2,
+        collateralBalanceRaw: 0,
+        collateralBalanceNormalized: 0,
+        collateralAllowanceRaw: 10_000_000,
+        collateralAllowanceNormalized: 10,
+        requiredCollateral: 1,
+      },
+      lastAttempt: null,
+    }),
     getLogs: () => [{ timestamp: new Date(now).toISOString(), severity: "INFO", category: "SCANNER", message: "ok" }],
     getLatencySnapshot: (latencyNow, snapshotBuildMs) => {
       const latency = new LatencyMonitor();
@@ -137,6 +169,9 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.analytics?.hourly.netPnl, 0.08);
   assert.equal(snapshot.analytics?.daily.window, "daily");
   assert.equal(snapshot.analytics?.weekly.window, "weekly");
+  assert.equal(snapshot.execution?.polymarket.ready, false);
+  assert.equal(snapshot.execution?.polymarket.funderAddress, "0x3333...4444");
+  assert.equal(snapshot.execution?.polymarket.collateralBalanceNormalized, 0);
   assert.equal(snapshot.logs[0].category, "SCANNER");
   assert.equal(snapshot.latency?.books.kalshi.latestMs, 0);
   assert.equal(snapshot.latency?.wsToBookApplyMs.kalshi.latestMs, 3);

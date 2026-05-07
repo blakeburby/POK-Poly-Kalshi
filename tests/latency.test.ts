@@ -184,7 +184,7 @@ test("scanner blocks equal-strike candidates before persistence or execution", a
     {
       enabled: true,
       minProfitDollars: 0.05,
-      staleBookMs: 10_000,
+      staleBookMs: 30_000,
       executionConcurrency: 1,
     },
   );
@@ -194,6 +194,64 @@ test("scanner blocks equal-strike candidates before persistence or execution", a
   assert.equal(inserted, 0);
   assert.equal(executed, 0);
   assert.equal(scanner.status().lastCandidateCount, 0);
+});
+
+test("scanner throttles failed live execution attempts for the same pair", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
+  ]);
+
+  let inserted = 0;
+  let executed = 0;
+  const scanner = new CrossVenueArbScanner(
+    books,
+    {
+      async insertSignal() {
+        inserted += 1;
+        return inserted;
+      },
+      async updateSignal() {
+        return undefined;
+      },
+    },
+    {
+      async execute(): Promise<ExecutionResult> {
+        executed += 1;
+        return {
+          action: "failed",
+          failureReason: "exchange rejected",
+          kalshiFillId: null,
+          polymarketFillId: null,
+          kalshiFillPrice: null,
+          polymarketFillPrice: null,
+          executionGroupId: "00000000-0000-4000-8000-000000000000",
+        };
+      },
+    },
+    new ReentryThrottle(15_000),
+    {
+      enabled: true,
+      minProfitDollars: 0.05,
+      staleBookMs: 30_000,
+      executionConcurrency: 1,
+    },
+  );
+
+  await scanner.scan(now);
+  await waitFor(() => executed === 1);
+  await scanner.scan(now + 1_000);
+  await sleep(10);
+  assert.equal(inserted, 1);
+  assert.equal(executed, 1);
+
+  await scanner.scan(now + 15_000);
+  await waitFor(() => executed === 2);
+  assert.equal(inserted, 2);
 });
 
 test("latency monitor snapshots phase timing and queue state", () => {

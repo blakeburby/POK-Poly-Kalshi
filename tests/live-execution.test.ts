@@ -6,8 +6,12 @@ import { BookStore } from "../src/books/book-store";
 import { LiveExecutor } from "../src/execution/executor";
 import {
   buildKalshiV2OrderBody,
+  checkPolymarketGeoblock,
+  deriveOrCreatePolymarketApiCreds,
+  polymarketApiCredsFromConfig,
   PolymarketOrderClient,
   type LiveOrderContext,
+  type PolymarketGeoblockChecker,
   type PolymarketClobLike,
   type VenueOrderClient,
   type VenueOrderResult,
@@ -42,10 +46,14 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketPriceCaptureToleranceMs: 5_000,
     polymarketMissedOpenBackfill: true,
     polymarketPrivateKey: "0xabc",
+    polymarketApiKey: "",
+    polymarketApiSecret: "",
+    polymarketApiPassphrase: "",
     polymarketSignatureType: 0,
     polymarketFunderAddress: "",
     polymarketChainId: 137,
     polymarketClobHost: "https://clob.polymarket.com",
+    polymarketGeoblockUrl: "https://polymarket.com/api/geoblock",
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
     liveMaxSlippageCents: 1,
@@ -59,6 +67,14 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     ...input,
   };
 }
+
+const allowedGeoblock: PolymarketGeoblockChecker = async (now) => ({
+  blocked: false,
+  country: "US",
+  region: "CA",
+  checkedAt: now,
+  reason: null,
+});
 
 function ready(venue: Venue): VenueExecutionReadiness {
   return { configured: true, ready: true, reason: null, balance: venue === "polymarket" ? 10 : null, allowance: venue === "polymarket" ? 10 : null, lastCheckedAt: 1_800_000_000_000 };
@@ -84,7 +100,7 @@ class FakeVenueClient implements VenueOrderClient {
       orderId: `${this.venue}-order`,
       status: "filled",
       fillPrice: leg.ask,
-      fillCount: 1,
+      fillCount: context.size,
       requestedAt: "2026-04-29T20:00:00.000Z",
       respondedAt: "2026-04-29T20:00:00.050Z",
       error: null,
@@ -115,6 +131,7 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
   assert.equal(yes.price, "0.4100");
   assert.equal(yes.count, "1.00");
   assert.equal(yes.time_in_force, "fill_or_kill");
+  assert.equal("order_group_id" in yes, false);
 
   const no = buildKalshiV2OrderBody({
     venue: "kalshi",
@@ -126,9 +143,10 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
 
   assert.equal(no.side, "ask");
   assert.equal(no.price, "0.4900");
+  assert.equal("order_group_id" in no, false);
 });
 
-test("Polymarket order client builds an exact-size marketable FOK buy for the selected token", async () => {
+test("Polymarket order client builds an exact-size marketable buy for the selected token", async () => {
   class FakeClob implements PolymarketClobLike {
     createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
     postedType: OrderType | undefined;
@@ -147,12 +165,18 @@ test("Polymarket order client builds an exact-size marketable FOK buy for the se
       return { success: true, orderID: "poly-order", status: "filled", takingAmount: "1", makingAmount: "0.41" };
     }
 
+    async cancelOrder(): Promise<unknown> {
+      throw new Error("exact fill should not cancel");
+    }
+
     async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
       return { balance: "10", allowance: "10" };
     }
+
+    async updateBalanceAllowance(): Promise<void> {}
   }
   const fake = new FakeClob();
-  const client = new PolymarketOrderClient(config(), async () => fake);
+  const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
   const result = await client.placeOrder({
     venue: "polymarket",
     contractId: "poly",
@@ -166,7 +190,7 @@ test("Polymarket order client builds an exact-size marketable FOK buy for the se
   assert.equal(fake.createdOrder?.price, 0.41);
   assert.equal(fake.createdOrder?.size, 1);
   assert.equal(fake.createdOrder?.side, Side.BUY);
-  assert.equal(fake.postedType, OrderType.FOK);
+  assert.equal(fake.postedType, OrderType.GTC);
   assert.equal(result.fillPrice, 0.41);
   assert.equal(result.fillCount, 1);
 
@@ -174,6 +198,309 @@ test("Polymarket order client builds an exact-size marketable FOK buy for the se
   assert.equal(readiness.ready, true);
   assert.equal(readiness.balance, 10);
   assert.equal(readiness.allowance, 10);
+});
+
+test("Polymarket order client cancels open remainders and flags non-exact fills", async () => {
+  class FakeClob implements PolymarketClobLike {
+    cancelCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(): Promise<SignedOrder> {
+      return { tokenId: "yes-token" } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "live", takingAmount: "115", makingAmount: "1.15" };
+    }
+
+    async cancelOrder(): Promise<unknown> {
+      this.cancelCalls += 1;
+      return { canceled: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+
+  const fake = new FakeClob();
+  const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
+  const result = await client.placeOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  }, { executionGroupId: "group", clientOrderId: "client", size: 5, maxBuyPrice: 0.23 });
+
+  assert.equal(fake.cancelCalls, 1);
+  assert.equal(result.status, "unexpected_fill_count");
+  assert.equal(result.fillCount, 115);
+  assert.equal(result.fillPrice, 0.01);
+  assert.match(result.error ?? "", /filled 115 shares for requested exact size 5/);
+});
+
+test("Polymarket direct API creds are preferred when all relayer fields are present", () => {
+  const creds = polymarketApiCredsFromConfig(config({
+    polymarketApiKey: "api-key",
+    polymarketApiSecret: "api-secret",
+    polymarketApiPassphrase: "api-passphrase",
+  }));
+
+  assert.deepEqual(creds, {
+    key: "api-key",
+    secret: "api-secret",
+    passphrase: "api-passphrase",
+  });
+
+  assert.equal(polymarketApiCredsFromConfig(config({
+    polymarketApiKey: "api-key",
+    polymarketApiSecret: "",
+    polymarketApiPassphrase: "api-passphrase",
+  })), null);
+});
+
+test("Polymarket API credentials derive before creating new keys", async () => {
+  let deriveCalls = 0;
+  let createCalls = 0;
+  const derived = await deriveOrCreatePolymarketApiCreds({
+    async deriveApiKey() {
+      deriveCalls += 1;
+      return { key: "derived-key", secret: "derived-secret", passphrase: "derived-passphrase" };
+    },
+    async createApiKey() {
+      createCalls += 1;
+      throw new Error("create should not run");
+    },
+  });
+
+  assert.equal(derived.source, "derived");
+  assert.equal(derived.creds.key, "derived-key");
+  assert.equal(deriveCalls, 1);
+  assert.equal(createCalls, 0);
+
+  const created = await deriveOrCreatePolymarketApiCreds({
+    async deriveApiKey() {
+      throw new Error("no existing key");
+    },
+    async createApiKey() {
+      return { key: "created-key", secret: "created-secret", passphrase: "created-passphrase" };
+    },
+  });
+
+  assert.equal(created.source, "created");
+  assert.equal(created.creds.key, "created-key");
+});
+
+test("Polymarket geoblock check parses allowed, blocked, and unknown responses", async () => {
+  const allowed = await checkPolymarketGeoblock(config(), (async () => new Response(JSON.stringify({
+    blocked: false,
+    country: "US",
+    region: "CA",
+  }))) as typeof fetch, 123);
+
+  assert.equal(allowed.blocked, false);
+  assert.equal(allowed.country, "US");
+  assert.equal(allowed.region, "CA");
+  assert.equal(allowed.checkedAt, 123);
+  assert.equal(allowed.reason, null);
+
+  const blocked = await checkPolymarketGeoblock(config(), (async () => new Response(JSON.stringify({
+    blocked: true,
+    country: "GB",
+    region: "ENG",
+  }))) as typeof fetch, 456);
+
+  assert.equal(blocked.blocked, true);
+  assert.match(blocked.reason ?? "", /blocked from worker egress/);
+
+  const unknown = await checkPolymarketGeoblock(config(), (async () => new Response("{}", { status: 200 })) as typeof fetch, 789);
+  assert.equal(unknown.blocked, null);
+  assert.match(unknown.reason ?? "", /boolean blocked field/);
+});
+
+test("Polymarket readiness requires proxy funder and funded collateral", async () => {
+  class FakeClob implements PolymarketClobLike {
+    updateCalls = 0;
+
+    constructor(
+      private balance: string,
+      private allowance: string | null = "10000000",
+      private readonly balanceAfterUpdate?: string,
+      private readonly allowanceAfterUpdate?: string | null,
+    ) {}
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: this.balance, allowance: this.allowance };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {
+      this.updateCalls += 1;
+      if (this.balanceAfterUpdate !== undefined) this.balance = this.balanceAfterUpdate;
+      if (this.allowanceAfterUpdate !== undefined) this.allowance = this.allowanceAfterUpdate;
+    }
+  }
+
+  let factoryCalls = 0;
+  const missingFunder = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "",
+  }), async () => {
+    factoryCalls += 1;
+    return new FakeClob("9000000");
+  }, allowedGeoblock);
+  const missingFunderReadiness = await missingFunder.readiness();
+  assert.equal(missingFunderReadiness.ready, false);
+  assert.match(missingFunderReadiness.reason ?? "", /POLYMARKET_FUNDER_ADDRESS/);
+  assert.equal(factoryCalls, 0);
+
+  const zeroBalance = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => new FakeClob("0", "10000000"), allowedGeoblock);
+  const zeroBalanceReadiness = await zeroBalance.readiness();
+  assert.equal(zeroBalanceReadiness.ready, false);
+  assert.match(zeroBalanceReadiness.reason ?? "", /collateral balance/);
+  assert.equal(zeroBalanceReadiness.balance, 0);
+  assert.equal(zeroBalanceReadiness.signatureType, 2);
+  assert.equal(zeroBalanceReadiness.funderAddress, "0xAC3b...F2B0");
+  assert.equal(zeroBalanceReadiness.clobBalanceSynced, true);
+
+  const funded = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => new FakeClob("9000000", "10000000"), allowedGeoblock);
+  const fundedReadiness = await funded.readiness();
+  assert.equal(fundedReadiness.ready, true);
+  assert.equal(fundedReadiness.balance, 9);
+  assert.equal(fundedReadiness.allowance, 10);
+  assert.equal(fundedReadiness.collateralBalanceRaw, 9_000_000);
+  assert.equal(fundedReadiness.collateralBalanceNormalized, 9);
+  assert.equal(fundedReadiness.clobCredentialsSource, "configured");
+  assert.equal(fundedReadiness.clobCredentialsDerived, false);
+  assert.equal(fundedReadiness.clobBalanceSynced, null);
+});
+
+test("Polymarket readiness is not ready when worker egress is geoblocked or unknown", async () => {
+  class FakeClob implements PolymarketClobLike {
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "9000000", allowance: "10000000" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+
+  let factoryCalls = 0;
+  const blocked = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => {
+    factoryCalls += 1;
+    return new FakeClob();
+  }, async (now) => ({
+    blocked: true,
+    country: "US",
+    region: "NY",
+    checkedAt: now,
+    reason: "Polymarket CLOB trading blocked from worker egress",
+  }));
+  const blockedReadiness = await blocked.readiness(1_800_000_000_000);
+
+  assert.equal(blockedReadiness.ready, false);
+  assert.match(blockedReadiness.reason ?? "", /blocked from worker egress/);
+  assert.equal(blockedReadiness.geoblockBlocked, true);
+  assert.equal(blockedReadiness.geoblockCountry, "US");
+  assert.equal(blockedReadiness.geoblockRegion, "NY");
+  assert.equal(blockedReadiness.geoblockCheckedAt, 1_800_000_000_000);
+  assert.equal(factoryCalls, 0);
+
+  const unknown = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => new FakeClob(), async (now) => ({
+    blocked: null,
+    country: null,
+    region: null,
+    checkedAt: now,
+    reason: "Polymarket geoblock check failed: timeout",
+  }));
+  const unknownReadiness = await unknown.readiness(1_800_000_000_500);
+
+  assert.equal(unknownReadiness.ready, false);
+  assert.equal(unknownReadiness.geoblockBlocked, null);
+  assert.match(unknownReadiness.reason ?? "", /timeout/);
+});
+
+test("Polymarket readiness syncs CLOB balance allowance before deciding readiness", async () => {
+  class SyncingFakeClob implements PolymarketClobLike {
+    updateCalls = 0;
+    private balance = "0";
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: this.balance, allowance: null };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {
+      this.updateCalls += 1;
+      this.balance = "9000000";
+    }
+  }
+
+  const fake = new SyncingFakeClob();
+  const client = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => ({ client: fake, credentialsSource: "derived" }), allowedGeoblock);
+  const readiness = await client.readiness();
+
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.balance, 9);
+  assert.equal(readiness.clobCredentialsSource, "derived");
+  assert.equal(readiness.clobCredentialsDerived, true);
+  assert.equal(readiness.clobBalanceSynced, true);
+  assert.equal(fake.updateCalls, 1);
 });
 
 test("live executor fills only protected candidates after stale book and capped-edge preflight", async () => {
@@ -188,12 +515,110 @@ test("live executor fills only protected candidates after stale book and capped-
 
   const result = await executor.execute(candidate);
   assert.equal(result.action, "filled");
-  assert.equal(result.executionGroupId?.startsWith("pok-"), true);
+  assert.match(result.executionGroupId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   assert.equal(result.partialFill, false);
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed.length, 1);
   assert.equal(kalshi.placed[0].context.maxBuyPrice, 0.51);
-  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.41);
+  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.4);
+});
+
+test("live executor supports configured venue minimum size when both venues fill exactly", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.kalshiFillCount, 5);
+  assert.equal(result.polymarketFillCount, 5);
+  assert.equal(kalshi.placed[0].context.size, 5);
+  assert.equal(polymarket.placed[0].context.size, 5);
+});
+
+test("live executor does not submit Polymarket when Kalshi fails first", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", {
+    status: "failed",
+    fillCount: null,
+    error: "Kalshi order failed 403: insufficient scope: write required",
+  });
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, false);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 0);
+  assert.match(result.failureReason ?? "", /write required/);
+  assert.match(result.polymarketError ?? "", /not submitted because Kalshi leg did not fill exactly/);
+});
+
+test("live executor preflights Polymarket minimum size before placing Kalshi", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  class MinSizePolymarketClient extends FakeVenueClient {
+    async preflightOrder(_leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
+      return `Polymarket min order size 5 exceeds configured live order size ${context.size}`;
+    }
+  }
+  const polymarket = new MinSizePolymarketClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 1 }), books, kalshi, polymarket, () => now);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /min order size 5/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+});
+
+test("live executor blocks Kalshi placement when Polymarket worker egress is geoblocked", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  let polymarketFactoryCalls = 0;
+  const polymarket = new PolymarketOrderClient(config({
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => {
+    polymarketFactoryCalls += 1;
+    throw new Error("geoblock preflight should stop before CLOB client construction");
+  }, async (checkedAt) => ({
+    blocked: true,
+    country: "US",
+    region: "NY",
+    checkedAt,
+    reason: "Polymarket CLOB trading blocked from worker egress",
+  }));
+  const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /blocked from worker egress/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarketFactoryCalls, 0);
 });
 
 test("live executor skips stale or below-threshold capped live books before placing orders", async () => {

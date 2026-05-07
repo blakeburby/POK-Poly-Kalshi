@@ -175,6 +175,21 @@ export interface VenueExecutionReadiness {
   balance: number | null;
   allowance: number | null;
   lastCheckedAt: number | null;
+  signerAddress?: string | null;
+  funderAddress?: string | null;
+  signatureType?: number | null;
+  collateralBalanceRaw?: number | null;
+  collateralBalanceNormalized?: number | null;
+  collateralAllowanceRaw?: number | null;
+  collateralAllowanceNormalized?: number | null;
+  clobCredentialsSource?: "configured" | "derived" | "created" | null;
+  clobCredentialsDerived?: boolean | null;
+  clobBalanceSynced?: boolean | null;
+  requiredCollateral?: number | null;
+  geoblockBlocked?: boolean | null;
+  geoblockCountry?: string | null;
+  geoblockRegion?: string | null;
+  geoblockCheckedAt?: number | null;
 }
 
 export interface LiveExecutionLastAttempt {

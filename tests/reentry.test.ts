@@ -17,3 +17,10 @@ test("re-entry throttle hydrates filled attempts from persistence", () => {
   assert.equal(throttle.canEnter("pair", 214_999), false);
   assert.equal(throttle.canEnter("pair", 215_000), true);
 });
+
+test("re-entry throttle can block after failed live attempts", () => {
+  const throttle = new ReentryThrottle(15_000);
+  throttle.recordAttempt("pair", 300_000);
+  assert.equal(throttle.canEnter("pair", 314_999), false);
+  assert.equal(throttle.canEnter("pair", 315_000), true);
+});

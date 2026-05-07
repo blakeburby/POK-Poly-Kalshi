@@ -37,14 +37,21 @@ Recommended:
 Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 
 - `POLYMARKET_PRIVATE_KEY`: dedicated low-balance bot wallet private key for official Polymarket CLOB signing.
-- `POLYMARKET_SIGNATURE_TYPE=0`: EOA signature type. Use proxy/safe types only with the matching `POLYMARKET_FUNDER_ADDRESS`.
+- `POLYMARKET_SIGNATURE_TYPE=3`: current Polymarket deposit-wallet / API-wallet mode for the configured account. Use `0` only for a plain EOA bot wallet.
 - `POLYMARKET_FUNDER_ADDRESS`: required for Polymarket proxy/safe wallets, optional for EOA bot wallets.
 - `POLYMARKET_CHAIN_ID=137`: Polygon mainnet.
 - `POLYMARKET_CLOB_HOST=https://clob.polymarket.com`: official Polymarket CLOB host.
-- `POLYMARKET_ORDER_TYPE=FOK`: fill-or-kill order posting for the live canary.
-- `LIVE_ORDER_SIZE=1`: fixed one contract/share per leg. Do not increase until canary evidence is clean.
+- `POLYMARKET_GEOBLOCK_URL=https://polymarket.com/api/geoblock`: official worker-egress geoblock preflight. Unknown or blocked status makes Polymarket not ready.
+- `POLYMARKET_ORDER_TYPE=FOK`: retained for readiness/status; Polymarket live buys use exact-size marketable limits because CLOB FOK/FAK BUYs are notional-based.
+- `LIVE_ORDER_SIZE=5`: first practical Polymarket BTC 15m live canary size because current CLOB markets commonly reject smaller orders with `min_order_size=5`.
 - `LIVE_MAX_SLIPPAGE_CENTS=1`: live preflight and limit-price buffer per buy leg.
 - `LIVE_MIN_EXPIRY_MS=30000`: skip entries too close to settlement.
+
+Polymarket execution note: CLOB FOK/FAK BUY orders are notional-based, so the
+worker uses an exact-size marketable limit order and immediately cancels any
+unfilled remainder. If Polymarket reports a fill count different from
+`LIVE_ORDER_SIZE`, the worker marks the attempt failed and engages the
+partial-fill lock.
 
 ## Enable And Disable
 
@@ -86,9 +93,59 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 7. Deploy the Vercel dashboard and log in with `DASHBOARD_PASSWORD`.
 8. Confirm `cross_venue_arb_signals` rows are being written in dry-run mode.
 9. Configure a dedicated Polymarket bot wallet, fund it lightly, approve CLOB trading, and set the Polymarket live env vars above.
-10. Confirm `/dashboard/snapshot` shows `execution.kalshi.ready=true`, `execution.polymarket.ready=true`, and `execution.partialFillLocked=false`.
+10. Confirm `/dashboard/snapshot` shows `execution.kalshi.ready=true`, `execution.polymarket.ready=true`, `execution.polymarket.geoblockBlocked=false`, and `execution.partialFillLocked=false`.
 11. Set `ARB_EXECUTION_CONCURRENCY=1` for the first canary, then flip `ARB_LIVE_TRADING=true` only after a small dry-run window matches manual venue quotes.
 12. Watch the first live candidate. If any `partial_fill` row appears, the worker locks further live execution until operator review/restart.
+
+## VPS Worker Cutover
+
+Use this path when Railway egress is blocked by Polymarket. Keep Railway live-off
+and move only the order-submitting worker to a compliant VPS/runtime.
+
+1. Create a small Ubuntu VPS in a jurisdiction/network where you are allowed to trade Polymarket.
+2. SSH into the VPS and check the official Polymarket geoblock endpoint before installing anything:
+
+```bash
+curl -sS https://polymarket.com/api/geoblock
+```
+
+Continue only if it returns `"blocked": false`. If it returns blocked or cannot
+be checked, destroy that VPS and use a different compliant host/region.
+
+3. Install the worker:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/blakeburby/POK-Poly-Kalshi.git /tmp/pok-poly-kalshi
+cd /tmp/pok-poly-kalshi
+sudo bash scripts/vps-install-ubuntu.sh
+```
+
+4. Fill `/etc/pok-poly-kalshi/worker.env` from `deploy/vps/pok-worker.env.example`.
+   Keep `ARB_LIVE_TRADING=false`.
+5. Run:
+
+```bash
+cd /opt/pok-poly-kalshi
+sudo -u pok bash scripts/vps-preflight.sh
+sudo systemctl start pok-worker
+sudo systemctl status pok-worker --no-pager
+```
+
+6. Verify dry-run readiness:
+
+```bash
+export DASHBOARD_API_TOKEN="<same token used by Vercel>"
+export WORKER_API_BASE="http://127.0.0.1:8080"
+bash /opt/pok-poly-kalshi/scripts/verify-live-readiness.sh
+```
+
+7. Put the VPS behind HTTPS, then update Vercel `WORKER_API_BASE` to the VPS
+   HTTPS URL. Keep the same `DASHBOARD_API_TOKEN` and redeploy Vercel.
+8. Only after the dashboard shows `geoblockBlocked=false`, both venues ready,
+   both books live, and dry-run signals matching manual quotes, flip the VPS
+   env to `ARB_LIVE_TRADING=true` for the 5-share canary.
 
 ## Operational Notes
 
@@ -103,6 +160,7 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 - Live mode rechecks current top-of-book freshness, expiry distance, capped edge, and the protected-spread-only guard immediately before order placement.
 - Kalshi live execution uses the V2 event-order endpoint. Buying NO is mapped onto Kalshi's YES book by sending an `ask` at the complementary YES price.
 - Polymarket live execution uses the official CLOB client with EIP-712 signing plus derived L2 API credentials.
+- Polymarket readiness includes the worker's own geoblock preflight. If `execution.polymarket.geoblockBlocked` is `true` or `null`, live execution is blocked before any Kalshi order can be placed. Move the worker to a compliant egress region/host and verify `geoblockBlocked=false` before live canary.
 - If a one-sided fill is detected, the executor writes the partial-fill audit detail and locks further live execution until restart/operator acknowledgement.
 - Re-entry is tracked by pair key and hydrated from filled audit rows on startup.
 - The dashboard is read-only in v1: no threshold edits, manual orders, kill switch, or live/dry-run toggles.
