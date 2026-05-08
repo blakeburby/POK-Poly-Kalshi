@@ -46,15 +46,21 @@ function normalizedOrderStatus(message: Record<string, unknown>): string {
   return type.toLowerCase() || "unknown";
 }
 
-export function buildPolymarketUserSubscribeMessage(creds: ApiKeyCreds, conditionIds: Iterable<string>): Record<string, unknown> {
+export function buildPolymarketUserSubscribeMessage(creds: ApiKeyCreds): Record<string, unknown> {
   return {
     auth: {
       apiKey: creds.key,
       secret: creds.secret,
       passphrase: creds.passphrase,
     },
-    markets: [...conditionIds].sort(),
     type: "user",
+  };
+}
+
+export function buildPolymarketUserSubscriptionUpdate(operation: "subscribe" | "unsubscribe", conditionIds: Iterable<string>): Record<string, unknown> {
+  return {
+    operation,
+    markets: [...conditionIds].sort(),
   };
 }
 
@@ -235,7 +241,8 @@ export class PolymarketUserStreamClient {
   private async subscribe(socket: RawWebSocket): Promise<void> {
     try {
       const creds = await this.credentialsFactory();
-      socket.send(JSON.stringify(buildPolymarketUserSubscribeMessage(creds, this.desired)));
+      socket.send(JSON.stringify(buildPolymarketUserSubscribeMessage(creds)));
+      socket.send(JSON.stringify(buildPolymarketUserSubscriptionUpdate("subscribe", this.desired)));
       this.state = { ...this.state, subscribed: true, reason: null };
       logEvent({ category: "POLYMARKET_USER", message: "user websocket subscribed", context: { subscriptions: this.desired.size } });
     } catch (error) {

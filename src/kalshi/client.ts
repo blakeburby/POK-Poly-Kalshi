@@ -163,21 +163,31 @@ export class KalshiOrderbookParser {
     if (!marketTicker) return null;
 
     const state = this.getState(marketTicker);
-    if (type === "orderbook_snapshot" || record.yes || record.no || record.yes_bids || record.no_bids) {
+    if (
+      type === "orderbook_snapshot"
+      || record.yes
+      || record.no
+      || record.yes_bids
+      || record.no_bids
+      || record.yes_dollars
+      || record.no_dollars
+      || record.yes_dollars_fp
+      || record.no_dollars_fp
+    ) {
       state.yesBids.clear();
       state.noBids.clear();
-      for (const level of extractLevels(record, ["yes", "yes_bids", "yes_bid", "yes_levels"])) {
+      for (const level of extractLevels(record, ["yes", "yes_bids", "yes_bid", "yes_levels", "yes_dollars", "yes_dollars_fp"])) {
         setBookLevel(state.yesBids, level.price, level.size);
       }
-      for (const level of extractLevels(record, ["no", "no_bids", "no_bid", "no_levels"])) {
+      for (const level of extractLevels(record, ["no", "no_bids", "no_bid", "no_levels", "no_dollars", "no_dollars_fp"])) {
         setBookLevel(state.noBids, level.price, level.size);
       }
     }
 
     if (type === "orderbook_delta" || record.delta || record.side) {
       const side = String(record.side ?? record.contract_side ?? record.outcome ?? "").toLowerCase();
-      const price = normalizePrice(record.price ?? record.yes_price ?? record.no_price);
-      const delta = numberOrNull(record.delta ?? record.size_delta ?? record.quantity_delta);
+      const price = normalizePrice(record.price ?? record.price_dollars ?? record.yes_price ?? record.no_price);
+      const delta = numberOrNull(record.delta ?? record.delta_fp ?? record.size_delta ?? record.quantity_delta);
       const absoluteSize = normalizeSize(record.size ?? record.quantity ?? record.count);
       const book = side.includes("no") ? state.noBids : state.yesBids;
       const currentSize = price == null ? null : book.get(price) ?? 0;

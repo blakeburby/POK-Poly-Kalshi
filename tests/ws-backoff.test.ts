@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildKalshiSubscribeMessage, parseKalshiTickerSnapshot } from "../src/kalshi/client";
+import { buildKalshiSubscribeMessage, KalshiOrderbookParser, parseKalshiTickerSnapshot } from "../src/kalshi/client";
 import { buildKalshiUserStreamSubscribeMessage, parseKalshiUserStreamMessage } from "../src/kalshi/user-stream";
 import {
   buildPolymarketSubscribeMessage,
@@ -8,7 +8,7 @@ import {
   PolymarketBookParser,
   parsePolymarketBookSocketPayload,
 } from "../src/polymarket/client";
-import { buildPolymarketUserSubscribeMessage, parsePolymarketUserStreamPayload } from "../src/polymarket/user-stream";
+import { buildPolymarketUserSubscribeMessage, buildPolymarketUserSubscriptionUpdate, parsePolymarketUserStreamPayload } from "../src/polymarket/user-stream";
 import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../src/ws/reconnect";
 
 test("websocket rate-limit and reconnect delays follow backoff policy", () => {
@@ -51,10 +51,13 @@ test("subscription messages are deterministic for reconnect resubscription", () 
     key: "key",
     secret: "secret",
     passphrase: "passphrase",
-  }, ["condition-b", "condition-a"]), {
+  }), {
     auth: { apiKey: "key", secret: "secret", passphrase: "passphrase" },
-    markets: ["condition-a", "condition-b"],
     type: "user",
+  });
+  assert.deepEqual(buildPolymarketUserSubscriptionUpdate("subscribe", ["condition-b", "condition-a"]), {
+    operation: "subscribe",
+    markets: ["condition-a", "condition-b"],
   });
 });
 
@@ -101,6 +104,32 @@ test("Kalshi and Polymarket parsers expose best asks from websocket payloads", (
   }, 125);
   assert.equal(best.bestAsk, 0.43);
   assert.equal(best.bestBid, 0.42);
+});
+
+test("Kalshi orderbook parser handles current dollars_fp snapshot and delta frames", () => {
+  const parser = new KalshiOrderbookParser();
+  const snapshot = parser.apply("orderbook_snapshot", {
+    market_ticker: "KXBTC15M",
+    yes_dollars_fp: [["0.3900", "10.00"], ["0.3800", "4.00"]],
+    no_dollars_fp: [["0.6100", "7.00"], ["0.6000", "6.00"]],
+  }, 1_800_000_000_000);
+
+  assert.equal(snapshot?.yesBid, 0.39);
+  assert.equal(snapshot?.yesAsk, 0.39);
+  assert.equal(snapshot?.noBid, 0.61);
+  assert.equal(snapshot?.noAsk, 0.61);
+  assert.deepEqual(snapshot?.yesAskLevels?.[0], { price: 0.39, size: 7 });
+  assert.deepEqual(snapshot?.noAskLevels?.[0], { price: 0.61, size: 10 });
+
+  const delta = parser.apply("orderbook_delta", {
+    market_ticker: "KXBTC15M",
+    side: "yes",
+    price_dollars: "0.4000",
+    delta_fp: "5.00",
+  }, 1_800_000_000_100);
+
+  assert.equal(delta?.yesBid, 0.4);
+  assert.deepEqual(delta?.noAskLevels?.[0], { price: 0.6, size: 5 });
 });
 
 test("Polymarket CLOB websocket parser ignores heartbeat text frames", () => {
