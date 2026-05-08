@@ -122,6 +122,8 @@ export interface QuoteSnapshot {
   projectedEdgeAfterFees: number | null;
   minProfitDollars: number;
   edgeBufferDollars: number;
+  entryLatencyEdgeBufferDollars?: number | null;
+  totalEdgeBufferDollars?: number | null;
   failureReason: string | null;
 }
 
@@ -129,6 +131,11 @@ export interface ExecutionTimings {
   candidateToSubmitMs?: number | null;
   kalshiRttMs?: number | null;
   polymarketRttMs?: number | null;
+  preflightMs?: number | null;
+  kalshiOrderRttMs?: number | null;
+  postFillHedgeDecisionMs?: number | null;
+  polymarketOrderRttMs?: number | null;
+  venueSubmitSkewMs?: number | null;
   totalMs?: number | null;
 }
 
@@ -193,6 +200,10 @@ export interface ExecutionResult {
   projectedEdgeAfterFees?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
+  executionStrategy?: "sequential_hedge" | "parallel_canary" | null;
+  riskHedge?: boolean;
+  realizedGuaranteedProfit?: number | null;
+  hedgeCapPrice?: number | null;
 }
 
 export interface SignalInsert {
@@ -228,6 +239,10 @@ export interface SignalUpdate {
   projectedEdgeAfterFees?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
+  executionStrategy?: "sequential_hedge" | "parallel_canary" | null;
+  riskHedge?: boolean;
+  realizedGuaranteedProfit?: number | null;
+  hedgeCapPrice?: number | null;
 }
 
 export interface DashboardSignal {
@@ -270,6 +285,10 @@ export interface DashboardSignal {
   projectedEdgeAfterFees?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
+  executionStrategy?: "sequential_hedge" | "parallel_canary" | null;
+  riskHedge?: boolean;
+  realizedGuaranteedProfit?: number | null;
+  hedgeCapPrice?: number | null;
   risk?: SyntheticStructureRisk;
 }
 
@@ -334,6 +353,10 @@ export interface LiveExecutionReadiness {
   quoteSyncMaxSkewMs: number;
   minBookDepthShares: number;
   edgeBufferDollars: number;
+  entryLatencyEdgeBufferDollars?: number;
+  hedgeMaxLossDollars?: number;
+  hedgeFeeBufferDollars?: number;
+  parallelExecutionEnabled?: boolean;
   orderTimeoutMs: number;
   kalshiOrderGroupEnabled: boolean;
   userStreams: UserStreamReadiness;
@@ -520,7 +543,11 @@ export interface DashboardSnapshot {
     liveQuoteSyncMaxSkewMs: number;
     liveMinBookDepthShares: number;
     liveEdgeBufferDollars: number;
+    liveEntryLatencyEdgeBufferDollars: number;
     liveOrderTimeoutMs: number;
+    liveHedgeMaxLossDollars: number;
+    liveHedgeFeeBufferDollars: number;
+    liveParallelExecutionEnabled: boolean;
     liveUserStreamsEnabled: boolean;
     liveUserStreamConfirmTimeoutMs: number;
     liveReconcileBeforeTrade: boolean;

@@ -45,9 +45,13 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `POLYMARKET_ORDER_TYPE=FOK`: retained for readiness/status; Polymarket live buys use exact-size marketable limits because CLOB FOK/FAK BUYs are notional-based.
 - `LIVE_ORDER_SIZE=5`: first practical Polymarket BTC 15m live canary size because current CLOB markets commonly reject smaller orders with `min_order_size=5`.
 - `LIVE_MAX_SLIPPAGE_CENTS=1`: live preflight and limit-price buffer per buy leg.
-- `LIVE_MIN_EXPIRY_MS=30000`: skip entries too close to settlement.
+- `LIVE_MIN_EXPIRY_MS=120000`: production recommendation to skip entries too close to settlement.
 - `LIVE_MAX_TRADES_PER_WINDOW=1`: hard live canary cap per 15-minute expiry window.
 - `LIVE_COLLATERAL_BUFFER_DOLLARS=0.25`: extra Polymarket collateral required during fresh execution preflight.
+- `LIVE_ENTRY_LATENCY_EDGE_BUFFER_DOLLARS=0.02`: extra entry-only edge cushion so live does not arm barely-threshold quotes.
+- `LIVE_HEDGE_MAX_LOSS_DOLLARS=0.02`: maximum accepted realized loss per protected spread when hedging after the first venue fills.
+- `LIVE_HEDGE_FEE_BUFFER_DOLLARS=0.01`: conservative fee allowance used when calculating post-fill hedge caps.
+- `LIVE_PARALLEL_EXECUTION_ENABLED=false`: keep the default Hybrid Safe sequential-hedge mode; only enable parallel canary after deliberate operator review.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated Kalshi/Polymarket private order streams before live orders can be considered safe.
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: maximum wait for private-stream confirmation after REST order responses.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block live entries when recent audit rows, private-stream confirmations, or persistent locks show unresolved drift.
@@ -60,9 +64,11 @@ unfilled remainder. If Polymarket reports a fill count different from
 `LIVE_ORDER_SIZE`, the worker marks the attempt failed and engages the
 persistent live circuit breaker.
 
-Private-stream safety note: in live mode the worker keeps the fast Kalshi-first
-canary posture. After an exact Kalshi REST fill it immediately submits the
-Polymarket hedge after a fresh preflight, then requires authenticated
+Private-stream safety note: in default live mode the worker keeps the Hybrid
+Safe Kalshi-first canary posture. After an exact Kalshi REST fill it treats
+Polymarket as a risk-reducing hedge, bypassing the normal profit gate only when
+current depth can fill exact size inside the configured hedge loss cap, then
+requires authenticated
 user-stream confirmation for both legs. Any user-stream disconnect, confirmation
 timeout, failed Polymarket settlement event, fill-count mismatch, or dirty
 reconciliation state engages or keeps the persistent live circuit breaker.

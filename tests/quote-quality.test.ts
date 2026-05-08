@@ -14,6 +14,7 @@ function safetyConfig(input: Partial<AppConfig> = {}): AppConfig {
       LIVE_MIN_BOOK_DEPTH_SHARES: "5",
       ARB_MIN_PROFIT_DOLLARS: "0.05",
       LIVE_EDGE_BUFFER_DOLLARS: "0.03",
+      LIVE_ENTRY_LATENCY_EDGE_BUFFER_DOLLARS: "0.02",
       LIVE_QUOTE_MAX_AGE_MS: "750",
       LIVE_QUOTE_SYNC_MAX_SKEW_MS: "250",
     }),
@@ -67,7 +68,7 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and buff
 
   const ok = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
   assert.equal(ok.ok, true);
-  assert.equal(ok.snapshot.projectedEdgeAfterFees, 0.07);
+  assert.equal(ok.snapshot.projectedEdgeAfterFees, 0.05);
 
   const stale = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 751 }] }, config, now);
   assert.equal(stale.ok, false);

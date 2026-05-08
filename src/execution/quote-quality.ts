@@ -178,7 +178,8 @@ export function evaluateLiveQuoteQuality(
     ? roundPrice(kalshi.snapshot.vwap + polymarket.snapshot.vwap)
     : null;
   const projectedEdge = projectedPremium == null ? null : roundPrice(1 - projectedPremium);
-  const projectedEdgeAfterFees = projectedEdge == null ? null : roundPrice(projectedEdge - config.liveEdgeBufferDollars);
+  const totalEdgeBufferDollars = roundPrice(config.liveEdgeBufferDollars + config.liveEntryLatencyEdgeBufferDollars);
+  const projectedEdgeAfterFees = projectedEdge == null ? null : roundPrice(projectedEdge - totalEdgeBufferDollars);
   if (!failureReason && projectedEdgeAfterFees != null && projectedEdgeAfterFees + 1e-9 < config.minProfitDollars) {
     failureReason = `depth VWAP edge ${projectedEdgeAfterFees.toFixed(4)} after buffer below threshold ${config.minProfitDollars.toFixed(4)}`;
   }
@@ -193,6 +194,8 @@ export function evaluateLiveQuoteQuality(
     projectedEdgeAfterFees,
     minProfitDollars: config.minProfitDollars,
     edgeBufferDollars: config.liveEdgeBufferDollars,
+    entryLatencyEdgeBufferDollars: config.liveEntryLatencyEdgeBufferDollars,
+    totalEdgeBufferDollars,
     failureReason,
   };
 

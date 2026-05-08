@@ -27,6 +27,14 @@ export interface LiveOrderContext {
   requiredCollateral?: number;
   requestedAt?: number;
   orderGroupId?: string;
+  signal?: AbortSignal;
+  preflight?: LiveOrderPreflight;
+}
+
+export interface LiveOrderPreflight {
+  polymarketReadiness?: VenueExecutionReadiness;
+  polymarketRequiredCollateral?: number;
+  polymarketOrderBook?: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">;
 }
 
 export interface VenueOrderResult {
@@ -280,6 +288,7 @@ export class KalshiOrderClient implements VenueOrderClient {
       method: "POST",
       headers: { ...getKalshiHeaders("POST", signPath), "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: context.signal,
     });
     const respondedAt = Date.now();
     const text = await response.text();
@@ -576,15 +585,20 @@ export class PolymarketOrderClient implements VenueOrderClient {
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     if (!leg.tokenId) throw new Error("Polymarket token id is required for live trading");
-    const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
-      force: true,
-      requiredCollateral: context.requiredCollateral,
-    });
+    const readiness = context.preflight?.polymarketReadiness
+      && context.preflight.polymarketRequiredCollateral != null
+      && context.requiredCollateral != null
+      && context.preflight.polymarketRequiredCollateral + 1e-9 >= context.requiredCollateral
+      ? context.preflight.polymarketReadiness
+      : await this.checkReadiness(context.requestedAt ?? Date.now(), {
+        force: true,
+        requiredCollateral: context.requiredCollateral,
+      });
     if (!readiness.ready) throw new Error(readiness.reason ?? "Polymarket live readiness failed");
     const tokenId = leg.tokenId;
     const requestedAt = context.requestedAt ?? Date.now();
     const { client } = await this.client();
-    const book = await withMutedPolymarketClientLogs(() => client.getOrderBook(tokenId));
+    const book = context.preflight?.polymarketOrderBook ?? await withMutedPolymarketClientLogs(() => client.getOrderBook(tokenId));
     const minOrderSize = finiteOrNull(book.min_order_size);
     if (minOrderSize != null && minOrderSize > context.size) {
       throw new Error(`Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`);
@@ -656,6 +670,12 @@ export class PolymarketOrderClient implements VenueOrderClient {
     if (minOrderSize != null && minOrderSize > context.size) {
       return `Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`;
     }
+    context.preflight = {
+      ...context.preflight,
+      polymarketReadiness: readiness,
+      polymarketRequiredCollateral: requiredCollateral,
+      polymarketOrderBook: book,
+    };
     return null;
   }
 

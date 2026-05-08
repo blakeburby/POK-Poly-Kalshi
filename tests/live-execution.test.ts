@@ -66,7 +66,11 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
     liveEdgeBufferDollars: 0.03,
+    liveEntryLatencyEdgeBufferDollars: 0.02,
     liveOrderTimeoutMs: 2_500,
+    liveHedgeMaxLossDollars: 0.02,
+    liveHedgeFeeBufferDollars: 0.01,
+    liveParallelExecutionEnabled: false,
     liveKalshiOrderGroupEnabled: false,
     liveKalshiOrderGroupId: "",
     liveUserStreamsEnabled: false,
@@ -82,6 +86,18 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     dashboardApiToken: "token",
     ...input,
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(assertion: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (!assertion()) {
+    if (Date.now() - startedAt > 1_000) throw new Error("condition timed out");
+    await sleep(5);
+  }
 }
 
 const allowedGeoblock: PolymarketGeoblockChecker = async (now) => ({
@@ -122,6 +138,22 @@ class FakeVenueClient implements VenueOrderClient {
       error: null,
       ...this.result,
     };
+  }
+}
+
+class MutatingVenueClient extends FakeVenueClient {
+  constructor(
+    venue: Venue,
+    result: Partial<VenueOrderResult>,
+    private readonly afterPlace: () => void,
+  ) {
+    super(venue, result);
+  }
+
+  async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+    const result = await super.placeOrder(leg, context);
+    this.afterPlace();
+    return result;
   }
 }
 
@@ -284,6 +316,57 @@ test("Polymarket order client builds an exact-size marketable buy for the select
   assert.equal(readiness.ready, true);
   assert.equal(readiness.balance, 10);
   assert.equal(readiness.allowance, 10);
+});
+
+test("Polymarket order client reuses fresh preflight readiness and orderbook data for placement", async () => {
+  class ReuseFakeClob implements PolymarketClobLike {
+    balanceCalls = 0;
+    bookCalls = 0;
+
+    async getOrderBook() {
+      this.bookCalls += 1;
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      this.balanceCalls += 1;
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new ReuseFakeClob();
+  const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.41,
+    requiredCollateral: 2.3,
+  };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
+
+  assert.equal(await client.preflightOrder(leg, context), null);
+  const result = await client.placeOrder(leg, context);
+
+  assert.equal(result.fillCount, 5);
+  assert.equal(fake.balanceCalls, 1);
+  assert.equal(fake.bookCalls, 1);
 });
 
 test("Polymarket order client cancels open remainders and flags non-exact fills", async () => {
@@ -665,7 +748,7 @@ test("live executor fills only protected candidates after stale book and capped-
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed.length, 1);
   assert.equal(kalshi.placed[0].context.maxBuyPrice, 0.51);
-  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.4);
+  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.51);
 });
 
 test("live executor supports configured venue minimum size when both venues fill exactly", async () => {
@@ -686,6 +769,145 @@ test("live executor supports configured venue minimum size when both venues fill
   assert.equal(result.polymarketFillCount, 5);
   assert.equal(kalshi.placed[0].context.size, 5);
   assert.equal(polymarket.placed[0].context.size, 5);
+});
+
+test("live executor hedges Polymarket after Kalshi fill even when refreshed arb edge is below threshold", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const movedPolymarket = { ...lower, yesAsk: 0.5, yesAskLevels: [{ price: 0.5, size: 5 }], updatedAt: now };
+  const kalshi = new MutatingVenueClient("kalshi", { fillPrice: 0.5, fillCount: 5 }, () => {
+    books.setPolymarketContracts([movedPolymarket]);
+  });
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(polymarket.placed[0].leg.ask, 0.5);
+  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.51);
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.riskHedge, true);
+  assert.equal(result.hedgeCapPrice, 0.51);
+  assert.equal(result.realizedGuaranteedProfit, 0);
+  assert.match(result.failureReason ?? "", /risk hedge completed below normal profit threshold/);
+});
+
+test("live executor locks with hedge-cap reason when Polymarket cannot hedge within max loss", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const movedPolymarket = { ...lower, yesAsk: 0.52, yesAskLevels: [{ price: 0.52, size: 5 }], updatedAt: now };
+  const locks = new FakeLiveLockStore();
+  const kalshi = new MutatingVenueClient("kalshi", { fillPrice: 0.5, fillCount: 5 }, () => {
+    books.setPolymarketContracts([movedPolymarket]);
+  });
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.placed.length, 0);
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.equal(result.riskHedge, true);
+  assert.match(result.liveLockReason ?? "", /Polymarket hedge cap preflight failed/);
+  assert.match((await locks.getActiveLock())?.reason ?? "", /Polymarket hedge worst ask 0.5200 exceeds cap 0.5100/);
+});
+
+test("live executor timing metrics separate preflight from venue order RTTs", async () => {
+  let now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  class TimedClient extends FakeVenueClient {
+    constructor(venue: Venue, private readonly preflightMs: number, private readonly orderMs: number) {
+      super(venue);
+    }
+
+    async preflightOrder(): Promise<string | null> {
+      now += this.preflightMs;
+      return null;
+    }
+
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      this.placed.push({ leg, context });
+      const requestedAt = context.requestedAt ?? now;
+      now = requestedAt + this.orderMs;
+      return {
+        venue: this.venue,
+        clientOrderId: context.clientOrderId,
+        orderId: `${this.venue}-order`,
+        status: "filled",
+        fillPrice: leg.ask,
+        fillCount: context.size,
+        requestedAt: new Date(requestedAt).toISOString(),
+        respondedAt: new Date(now).toISOString(),
+        error: null,
+      };
+    }
+  }
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 1 }),
+    books,
+    new TimedClient("kalshi", 30, 10),
+    new TimedClient("polymarket", 20, 15),
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionTimings?.preflightMs, 50);
+  assert.equal(result.executionTimings?.candidateToSubmitMs, 50);
+  assert.equal(result.executionTimings?.kalshiOrderRttMs, 10);
+  assert.equal(result.executionTimings?.kalshiRttMs, 10);
+  assert.equal(result.executionTimings?.polymarketOrderRttMs, 15);
+  assert.equal(result.executionTimings?.polymarketRttMs, 15);
+});
+
+test("live executor keeps parallel canary disabled by default and starts both venue orders concurrently when enabled", async () => {
+  assert.equal(config().liveParallelExecutionEnabled, false);
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const starts: Venue[] = [];
+  let releaseKalshi = () => undefined;
+  class ParallelClient extends FakeVenueClient {
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      starts.push(this.venue);
+      if (this.venue === "kalshi") {
+        await new Promise<void>((resolve) => {
+          releaseKalshi = resolve;
+        });
+      }
+      return super.placeOrder(leg, context);
+    }
+  }
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 1, liveParallelExecutionEnabled: true, liveOrderTimeoutMs: 5_000 }),
+    books,
+    new ParallelClient("kalshi"),
+    new ParallelClient("polymarket"),
+    () => now,
+  );
+
+  const execution = executor.execute(candidate);
+  await waitFor(() => starts.includes("kalshi") && starts.includes("polymarket"));
+  releaseKalshi();
+  const result = await execution;
+
+  assert.equal(result.executionStrategy, "parallel_canary");
+  assert.equal(result.action, "filled");
+  assert.deepEqual(starts.sort(), ["kalshi", "polymarket"]);
 });
 
 test("live executor keeps immediate hedge flow and then requires private stream confirmations", async () => {
@@ -766,7 +988,7 @@ test("live executor locks when realized fills no longer satisfy guaranteed edge"
 
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, false);
-  assert.match(result.liveLockReason ?? "", /realized edge -0.1000 below threshold 0.0500/);
+  assert.match(result.liveLockReason ?? "", /risk hedge realized edge -0.1000 below loss cap -0.0200/);
   assert.equal(locks.engageCalls, 1);
   assert.equal((await locks.getActiveLock())?.reason, result.liveLockReason);
   const readiness = await executor.readiness(now);

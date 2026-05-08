@@ -71,6 +71,10 @@ interface DashboardSignalRow {
   projected_edge_after_fees: string | number | null;
   execution_timings: ExecutionTimings | string | null;
   venue_confirmations: VenueConfirmations | string | null;
+  execution_strategy: string | null;
+  risk_hedge: boolean | string | null;
+  realized_guaranteed_profit: string | number | null;
+  hedge_cap_price: string | number | null;
 }
 
 interface LiveExposureRow {
@@ -111,7 +115,8 @@ const SIGNAL_COLUMNS = `
   kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
   kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
   kalshi_error, polymarket_error, partial_fill,
-  quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations
+  quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations,
+  execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -214,6 +219,10 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
+    executionStrategy: row.execution_strategy === "parallel_canary" ? "parallel_canary" : row.execution_strategy === "sequential_hedge" ? "sequential_hedge" : null,
+    riskHedge: booleanFrom(row.risk_hedge),
+    realizedGuaranteedProfit: numberFrom(row.realized_guaranteed_profit),
+    hedgeCapPrice: numberFrom(row.hedge_cap_price),
     risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
@@ -292,6 +301,10 @@ export class SignalStore {
           projected_edge_after_fees = $24,
           execution_timings = CASE WHEN $25::TEXT IS NULL THEN NULL ELSE $25::JSONB END,
           venue_confirmations = CASE WHEN $26::TEXT IS NULL THEN NULL ELSE $26::JSONB END,
+          execution_strategy = $27,
+          risk_hedge = $28,
+          realized_guaranteed_profit = $29,
+          hedge_cap_price = $30,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -322,6 +335,10 @@ export class SignalStore {
       update.projectedEdgeAfterFees ?? null,
       update.executionTimings == null ? null : JSON.stringify(update.executionTimings),
       update.venueConfirmations == null ? null : JSON.stringify(update.venueConfirmations),
+      update.executionStrategy ?? null,
+      update.riskHedge ?? false,
+      update.realizedGuaranteedProfit ?? null,
+      update.hedgeCapPrice ?? null,
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
