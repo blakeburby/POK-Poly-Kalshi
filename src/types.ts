@@ -1,6 +1,7 @@
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
+export type ExecutionMode = "paper" | "live";
 
 export interface BookLevel {
   price: number;
@@ -196,6 +197,7 @@ export interface ExecutionResult {
 
 export interface SignalInsert {
   candidate: ArbCandidate;
+  executionMode?: ExecutionMode;
   action: SignalAction;
   failureReason?: string | null;
 }
@@ -232,6 +234,7 @@ export interface DashboardSignal {
   id: number;
   createdAt: string;
   updatedAt: string;
+  executionMode: ExecutionMode;
   pairKey: string;
   expiryMs: number;
   kalshiContractId: string;
@@ -436,6 +439,11 @@ export interface DashboardAnalytics {
   realtime?: DashboardAnalyticsRealtime;
 }
 
+export interface DashboardDataSlice {
+  recentSignals: DashboardSignal[];
+  analytics?: DashboardAnalytics;
+}
+
 export type PolymarketStrikeStatus = "ready" | "pending_strike" | "missing_strike" | "invalid_market";
 
 export interface PolymarketMarketDiagnostic {
@@ -536,6 +544,8 @@ export interface DashboardSnapshot {
   };
   liveCandidates: ArbCandidate[];
   syntheticStructures?: ArbCandidate[];
+  live: DashboardDataSlice;
+  paper: DashboardDataSlice;
   recentSignals: DashboardSignal[];
   analytics?: DashboardAnalytics;
   execution?: LiveExecutionReadiness;

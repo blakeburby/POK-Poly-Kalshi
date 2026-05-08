@@ -75,6 +75,7 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
     id: 7,
     createdAt: "2026-04-29T20:00:00.000Z",
     updatedAt: "2026-04-29T20:00:01.000Z",
+    executionMode: "paper",
     pairKey: "pair",
     expiryMs: 1_800_000_000_000,
     kalshiContractId: "kalshi",
@@ -111,8 +112,9 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
     config: config(),
     books,
     signals: {
-      listRecentSignals: async () => [signal()],
-      listFilledSignalsSince: async () => [signal({
+      listRecentSignals: async (_limit, executionMode) => [signal({ id: executionMode === "live" ? 8 : 7, executionMode: executionMode ?? "paper" })],
+      listFilledSignalsSince: async (_since, _limit, executionMode) => [signal({
+        executionMode: executionMode ?? "paper",
         updatedAt: new Date(now - 1_000).toISOString(),
         kalshiFillPrice: 0.51,
         polymarketFillPrice: 0.41,
@@ -185,7 +187,12 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.syntheticStructures?.[1].risk?.classification, "probabilistic_bet");
   assert.equal(snapshot.diagnostics.polymarket.readyContracts, 1);
   assert.equal(snapshot.recentSignals[0].action, "filled");
+  assert.equal(snapshot.recentSignals[0].executionMode, "paper");
+  assert.equal(snapshot.paper.recentSignals[0].executionMode, "paper");
+  assert.equal(snapshot.live.recentSignals[0].executionMode, "live");
   assert.equal(snapshot.analytics?.hourly.filledTrades, 1);
+  assert.equal(snapshot.paper.analytics?.hourly.filledTrades, 1);
+  assert.equal(snapshot.live.analytics?.hourly.filledTrades, 1);
   assert.equal(snapshot.analytics?.hourly.netPnl, 0.08);
   assert.equal(snapshot.analytics?.daily.window, "daily");
   assert.equal(snapshot.analytics?.weekly.window, "weekly");
@@ -225,16 +232,16 @@ test("dashboard snapshot cache avoids querying heavy DB-backed sections on every
 
   await createDashboardSnapshot(runtime, now, cache);
   await createDashboardSnapshot(runtime, now + 250, cache);
-  assert.equal(recentCalls, 1);
-  assert.equal(analyticsCalls, 1);
+  assert.equal(recentCalls, 2);
+  assert.equal(analyticsCalls, 2);
 
   await createDashboardSnapshot(runtime, now + 1_001, cache);
-  assert.equal(recentCalls, 2);
-  assert.equal(analyticsCalls, 1);
+  assert.equal(recentCalls, 4);
+  assert.equal(analyticsCalls, 2);
 
   await createDashboardSnapshot(runtime, now + 5_001, cache);
-  assert.equal(recentCalls, 3);
-  assert.equal(analyticsCalls, 2);
+  assert.equal(recentCalls, 6);
+  assert.equal(analyticsCalls, 4);
 });
 
 test("dashboard snapshot uses hot analytics provider without polling filled signals", async () => {
@@ -271,7 +278,7 @@ test("dashboard snapshot uses hot analytics provider without polling filled sign
   await createDashboardSnapshot(runtime, now);
   await createDashboardSnapshot(runtime, now + 250);
   assert.equal(analyticsCalls, 0);
-  assert.equal(hotAnalyticsCalls, 2);
+  assert.equal(hotAnalyticsCalls, 4);
 });
 
 test("dashboard stream events are valid SSE snapshot frames", () => {

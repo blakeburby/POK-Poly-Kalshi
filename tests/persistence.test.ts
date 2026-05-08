@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { LiveExecutionLockStore } from "../src/db/live-execution-locks";
 import { SignalStore, type Queryable } from "../src/db/signals";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
@@ -16,6 +17,7 @@ class FakeDb implements Queryable {
           id: values?.[0] ?? 42,
           created_at: "2026-04-29T20:00:00.000Z",
           updated_at: "2026-04-29T20:00:01.000Z",
+          execution_mode: "live",
           pair_key: "pair",
           expiry_ms: 1_800_000_000_000,
           kalshi_contract_id: "kalshi",
@@ -84,6 +86,7 @@ class FakeDb implements Queryable {
           id: 7,
           created_at: "2026-04-29T20:00:00.000Z",
           updated_at: "2026-04-29T20:00:01.000Z",
+          execution_mode: "live",
           pair_key: "pair",
           expiry_ms: 1_800_000_000_000,
           kalshi_contract_id: "kalshi",
@@ -167,7 +170,11 @@ test("signal persistence inserts threshold-crossing candidate before execution u
   assert.equal(signalId, 42);
   assert.match(db.calls[0].sql, /INSERT INTO cross_venue_arb_signals/);
   assert.equal(db.calls[0].values?.[0], candidate.pairKey);
-  assert.equal(db.calls[0].values?.[18], "skipped");
+  assert.equal(db.calls[0].values?.[18], "paper");
+  assert.equal(db.calls[0].values?.[19], "skipped");
+
+  await store.insertSignal({ candidate, executionMode: "live", action: "skipped", failureReason: "pending_execution" });
+  assert.equal(db.calls[1].values?.[18], "live");
 
   await store.updateSignal(signalId, {
     action: "filled",
@@ -189,11 +196,11 @@ test("signal persistence inserts threshold-crossing candidate before execution u
     polymarketRespondedAt: "2026-04-29T20:00:00.900Z",
     partialFill: false,
   });
-  assert.match(db.calls[1].sql, /UPDATE cross_venue_arb_signals/);
-  assert.equal(db.calls[1].values?.[0], 42);
-  assert.equal(db.calls[1].values?.[1], "filled");
-  assert.equal(db.calls[1].values?.[7], "group");
-  assert.equal(db.calls[1].values?.[20], false);
+  assert.match(db.calls[2].sql, /UPDATE cross_venue_arb_signals/);
+  assert.equal(db.calls[2].values?.[0], 42);
+  assert.equal(db.calls[2].values?.[1], "filled");
+  assert.equal(db.calls[2].values?.[7], "group");
+  assert.equal(db.calls[2].values?.[20], false);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -209,10 +216,33 @@ test("signal persistence exposes filled signals for analytics windows", async ()
   assert.equal(signals.length, 1);
   assert.equal(signals[0].action, "filled");
   assert.equal(signals[0].kalshiFillPrice, 0.51);
+  assert.equal(signals[0].executionMode, "live");
   assert.equal(signals[0].executionGroupId, "group");
   assert.equal(signals[0].partialFill, false);
   assert.equal(db.calls[0].values?.[0], 1_800_000_000_000);
   assert.equal(db.calls[0].values?.[1], 50);
+});
+
+test("signal persistence filters recent and filled signals by execution mode", async () => {
+  const db = new FakeDb();
+  const store = new SignalStore(db);
+
+  await store.listRecentSignals(25, "live");
+  assert.match(db.calls[0].sql, /WHERE execution_mode = \$2/);
+  assert.deepEqual(db.calls[0].values, [25, "live"]);
+
+  await store.listFilledSignalsSince(1_800_000_000_000, 50, "paper");
+  assert.match(db.calls[1].sql, /AND execution_mode = \$3/);
+  assert.deepEqual(db.calls[1].values, [1_800_000_000_000, 50, "paper"]);
+});
+
+test("execution mode migration backfills live rows from real execution metadata", () => {
+  const sql = readFileSync("src/db/migrations/007_add_signal_execution_mode.sql", "utf8");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'paper'/);
+  assert.match(sql, /SET execution_mode = 'live'/);
+  assert.match(sql, /execution_group_id IS NOT NULL/);
+  assert.match(sql, /venue_confirmations IS NOT NULL/);
+  assert.match(sql, /CHECK \(execution_mode IN \('paper', 'live'\)\)/);
 });
 
 test("signal persistence blocks live candidates with same-window exposure", async () => {

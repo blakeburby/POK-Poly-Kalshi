@@ -6,11 +6,11 @@ import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
-import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
+import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, ExecutionMode, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 
 interface SignalReader {
-  listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
-  listFilledSignalsSince?(sinceMs: number, limit?: number): Promise<DashboardSignal[]>;
+  listRecentSignals(limit?: number, executionMode?: ExecutionMode): Promise<DashboardSignal[]>;
+  listFilledSignalsSince?(sinceMs: number, limit?: number, executionMode?: ExecutionMode): Promise<DashboardSignal[]>;
 }
 
 export interface DashboardDiscoveryState {
@@ -22,7 +22,7 @@ export interface DashboardRuntime {
   config: AppConfig;
   books: BookStore;
   signals: SignalReader;
-  getAnalytics?: (now: number) => DashboardAnalytics | Promise<DashboardAnalytics>;
+  getAnalytics?: (now: number, executionMode?: ExecutionMode) => DashboardAnalytics | Promise<DashboardAnalytics>;
   getScannerStatus: () => ScannerStatus;
   getDiscoveryState: () => DashboardDiscoveryState;
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
@@ -32,14 +32,14 @@ export interface DashboardRuntime {
 }
 
 export interface DashboardSnapshotCache {
-  recentSignals?: {
+  recentSignals?: Partial<Record<ExecutionMode, {
     refreshedAt: number;
     value: DashboardSignal[];
-  };
-  analytics?: {
+  }>>;
+  analytics?: Partial<Record<ExecutionMode, {
     refreshedAt: number;
     value: DashboardAnalytics;
-  };
+  }>>;
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -61,21 +61,26 @@ export function dashboardRequestAuthorized(headers: IncomingMessage["headers"], 
   return scheme?.toLowerCase() === "bearer" && typeof value === "string" && safeEqual(value, token);
 }
 
-async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardSignal[]> {
-  if (cache?.recentSignals && now - cache.recentSignals.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
-    return cache.recentSignals.value;
+async function cachedRecentSignals(runtime: DashboardRuntime, now: number, executionMode: ExecutionMode, cache?: DashboardSnapshotCache): Promise<DashboardSignal[]> {
+  const cached = cache?.recentSignals?.[executionMode];
+  if (cached && now - cached.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
+    return cached.value;
   }
-  const value = await runtime.signals.listRecentSignals(100);
-  if (cache) cache.recentSignals = { refreshedAt: now, value };
+  const value = await runtime.signals.listRecentSignals(100, executionMode);
+  if (cache) {
+    cache.recentSignals ??= {};
+    cache.recentSignals[executionMode] = { refreshedAt: now, value };
+  }
   return value;
 }
 
-async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
-  if (runtime.getAnalytics) return runtime.getAnalytics(now);
-  if (cache?.analytics && now - cache.analytics.refreshedAt < runtime.config.dashboardAnalyticsRefreshMs) {
-    return cache.analytics.value;
+async function cachedAnalytics(runtime: DashboardRuntime, now: number, executionMode: ExecutionMode, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
+  if (runtime.getAnalytics) return runtime.getAnalytics(now, executionMode);
+  const cached = cache?.analytics?.[executionMode];
+  if (cached && now - cached.refreshedAt < runtime.config.dashboardAnalyticsRefreshMs) {
+    return cached.value;
   }
-  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]));
+  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000, executionMode) ?? Promise.resolve([]));
   const value = buildDashboardAnalytics(analyticsSignals, now, {
     mode: "fallback_db",
     lastUpdatedAt: analyticsSignals
@@ -87,16 +92,21 @@ async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: D
     sourceSignalCount: analyticsSignals.length,
     stale: false,
   });
-  if (cache) cache.analytics = { refreshedAt: now, value };
+  if (cache) {
+    cache.analytics ??= {};
+    cache.analytics[executionMode] = { refreshedAt: now, value };
+  }
   return value;
 }
 
 export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
   const snapshotStartedAt = Date.now();
   const books = runtime.books.snapshot();
-  const [recentSignals, analytics] = await Promise.all([
-    cachedRecentSignals(runtime, now, cache),
-    cachedAnalytics(runtime, now, cache),
+  const [paperSignals, liveSignals, paperAnalytics, liveAnalytics] = await Promise.all([
+    cachedRecentSignals(runtime, now, "paper", cache),
+    cachedRecentSignals(runtime, now, "live", cache),
+    cachedAnalytics(runtime, now, "paper", cache),
+    cachedAnalytics(runtime, now, "live", cache),
   ]);
   const execution = await runtime.getExecutionReadiness?.(now);
   const paired = enumerateCandidates(
@@ -145,8 +155,16 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     },
     liveCandidates,
     syntheticStructures,
-    recentSignals,
-    analytics,
+    live: {
+      recentSignals: liveSignals,
+      analytics: liveAnalytics,
+    },
+    paper: {
+      recentSignals: paperSignals,
+      analytics: paperAnalytics,
+    },
+    recentSignals: paperSignals,
+    analytics: paperAnalytics,
     execution,
     logs: runtime.getLogs(150),
   };

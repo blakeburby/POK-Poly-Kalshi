@@ -44,9 +44,17 @@ async function main(): Promise<void> {
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
   reentry.hydrate(await signals.loadRecentFilledAttempts());
-  const analytics = new AnalyticsStore();
+  const paperAnalytics = new AnalyticsStore();
+  const liveAnalytics = new AnalyticsStore();
   async function reconcileAnalytics(): Promise<void> {
-    analytics.reconcileFilledSignals(await signals.listFilledSignalsSince(oldestAnalyticsSinceMs(Date.now()), 10_000), Date.now());
+    const now = Date.now();
+    const sinceMs = oldestAnalyticsSinceMs(now);
+    const [paperSignals, liveSignals] = await Promise.all([
+      signals.listFilledSignalsSince(sinceMs, 10_000, "paper"),
+      signals.listFilledSignalsSince(sinceMs, 10_000, "live"),
+    ]);
+    paperAnalytics.reconcileFilledSignals(paperSignals, now);
+    liveAnalytics.reconcileFilledSignals(liveSignals, now);
   }
   await reconcileAnalytics();
   const kalshiUserStream = config.liveUserStreamsEnabled ? new KalshiUserStreamClient(config.kalshiUserWsUrl, orderEvents, undefined, liveLocks) : null;
@@ -79,7 +87,7 @@ async function main(): Promise<void> {
     liveExposure: signals,
     liveLocks,
     latency,
-    analytics,
+    analytics: config.liveTrading ? liveAnalytics : paperAnalytics,
   });
   const scanScheduler = new CoalescedScanScheduler(scanner, latency);
 
@@ -193,7 +201,7 @@ async function main(): Promise<void> {
         config,
         books,
         signals,
-        getAnalytics: (now) => analytics.snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
+        getAnalytics: (now, executionMode = "paper") => (executionMode === "live" ? liveAnalytics : paperAnalytics).snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
         getScannerStatus: () => scanner.status(),
         getDiscoveryState: () => ({ lastDiscoveryAt, lastDiscoveryError }),
         getPolymarketDiagnostics: livePolymarketDiagnostics,

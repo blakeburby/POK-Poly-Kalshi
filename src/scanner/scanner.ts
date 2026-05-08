@@ -187,7 +187,12 @@ export class CrossVenueArbScanner {
 
   private async handleCandidate(candidate: ArbCandidate, now: number): Promise<void> {
     const insertStartedAt = Date.now();
-    const signalId = await this.signals.insertSignal({ candidate, action: "skipped", failureReason: "pending_execution" });
+    const signalId = await this.signals.insertSignal({
+      candidate,
+      executionMode: this.options.liveTrading ? "live" : "paper",
+      action: "skipped",
+      failureReason: "pending_execution",
+    });
     this.options.latency?.recordDbInsert(Date.now() - insertStartedAt);
     try {
       const executionStartedAt = Date.now();

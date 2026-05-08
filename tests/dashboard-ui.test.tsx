@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  DashboardSelector,
   DashboardTerminalView,
   InlineTradePayoffGraph,
   RiskMeter,
@@ -65,6 +66,7 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
     id: 42,
     createdAt: "2026-04-29T20:00:00.000Z",
     updatedAt: "2026-04-29T20:00:01.250Z",
+    executionMode: "paper",
     pairKey: "polymarket-poly-1500::kalshi-kalshi-1502",
     expiryMs: 1_800_000_900_000,
     kalshiContractId: "kalshi-kxbtc-1502",
@@ -92,6 +94,14 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
 
 function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
   const generatedAt = 1_800_000_010_000;
+  const defaultPaperSignals = input.paper?.recentSignals ?? input.recentSignals ?? [];
+  const defaultLiveSignals = input.live?.recentSignals ?? [
+    signal({ executionMode: "live", id: 84, updatedAt: new Date(generatedAt - 1_000).toISOString(), kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 }),
+  ];
+  const defaultPaperAnalytics = input.paper?.analytics ?? input.analytics ?? buildDashboardAnalytics([
+    signal({ updatedAt: new Date(generatedAt - 1_000).toISOString(), kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 }),
+  ], generatedAt);
+  const defaultLiveAnalytics = input.live?.analytics ?? buildDashboardAnalytics(defaultLiveSignals, generatedAt);
   return {
     generatedAt,
     health: {
@@ -190,10 +200,16 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
     },
     liveCandidates: [candidate("slow", 0.05, 1_800_000_900_000), candidate("fast", 0.12, 1_800_000_900_000)],
     syntheticStructures: [candidate("fast", 0.12, 1_800_000_900_000), probabilisticCandidate()],
-    recentSignals: [],
-    analytics: buildDashboardAnalytics([
-      signal({ updatedAt: new Date(generatedAt - 1_000).toISOString(), kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 }),
-    ], generatedAt),
+    live: {
+      recentSignals: defaultLiveSignals,
+      analytics: defaultLiveAnalytics,
+    },
+    paper: {
+      recentSignals: defaultPaperSignals,
+      analytics: defaultPaperAnalytics,
+    },
+    recentSignals: defaultPaperSignals,
+    analytics: defaultPaperAnalytics,
     logs: [],
     ...input,
   };
@@ -204,6 +220,27 @@ test("dashboard password helper rejects unauthenticated access inputs", () => {
   assert.equal(verifyDashboardPassword("operator"), true);
   assert.equal(verifyDashboardPassword("wrong"), false);
   assert.equal(isValidDashboardSession(undefined), false);
+});
+
+test("dashboard selector exposes live and current paper dashboard choices", () => {
+  const markup = renderToStaticMarkup(
+    <DashboardSelector
+      dashboardName="POK Terminal"
+      onSelect={() => undefined}
+      snapshot={snapshot({
+        live: { recentSignals: [signal({ executionMode: "live", id: 77 })], analytics: buildDashboardAnalytics([signal({ executionMode: "live", id: 77 })], snapshot().generatedAt) },
+        paper: { recentSignals: [signal({ executionMode: "paper", id: 42 })], analytics: buildDashboardAnalytics([signal({ executionMode: "paper", id: 42 })], snapshot().generatedAt) },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /Live Trading Dashboard/);
+  assert.match(markup, /Current Paper Trading Dashboard/);
+  assert.match(markup, /Real trades only/);
+  assert.match(markup, /simulated\/dry-run strategy history/i);
+  assert.doesNotMatch(markup, /Open Live Command/);
+  assert.doesNotMatch(markup, /Open Paper Analytics/);
 });
 
 test("opportunity blotter sorts by guaranteed profit and stale helper flags old books", () => {
@@ -403,7 +440,7 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Below lower/);
   assert.match(live, /Between strikes/);
   assert.match(live, /Above higher/);
-  assert.match(live, /Estimated Guaranteed PnL/);
+  assert.match(live, /Executed Fill-Audit PnL/);
   assert.match(live, /Hourly/);
   assert.match(live, /Daily/);
   assert.match(live, /Weekly/);
@@ -467,7 +504,7 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /protected edge/);
   assert.match(live, /Price-To-Beat Diagnostics/);
   assert.match(live, /aria-label="Signal and runtime activity"/);
-  assert.match(live, /Signal Tape/);
+  assert.match(live, /Live Signal Tape/);
   assert.match(live, /Event Tape/);
   assert.match(live, /role="button"/);
   assert.match(live, /Open payoff detail for/);
@@ -529,20 +566,27 @@ test("live dashboard surfaces circuit breaker state and lock reason", () => {
   assert.match(liveLocked, /CIRCUIT LOCK/);
   assert.match(liveLocked, /LOCK REASON/);
   assert.match(liveLocked, /realized edge -0.1000 below threshold 0.0500/);
-  assert.match(liveLocked, /Max\/Window/);
-  assert.match(liveLocked, /NO-GO/);
+  assert.match(liveLocked, /Read-Only Live Audit/);
+  assert.match(liveLocked, /STREAM/);
 });
 
 test("analytics panel renders empty worker and no-trade states", () => {
+  const base = snapshot();
   const noWorkerAnalytics = renderToStaticMarkup(
-    <DashboardTerminalView dashboardName="POK Terminal" snapshot={{ ...snapshot(), analytics: undefined }} streamState="live" />,
+    <DashboardTerminalView
+      dashboardKind="paper"
+      dashboardName="POK Terminal"
+      snapshot={{ ...base, analytics: undefined, paper: { ...base.paper, analytics: undefined } }}
+      streamState="live"
+    />,
   );
-  assert.match(noWorkerAnalytics, /The worker has not published analytics yet/);
+  assert.match(noWorkerAnalytics, /The worker has not published paper analytics yet/);
 
   const noTrades = renderToStaticMarkup(
     <DashboardTerminalView
+      dashboardKind="paper"
       dashboardName="POK Terminal"
-      snapshot={snapshot({ analytics: buildDashboardAnalytics([], snapshot().generatedAt) })}
+      snapshot={snapshot({ analytics: buildDashboardAnalytics([], snapshot().generatedAt), paper: { recentSignals: [], analytics: buildDashboardAnalytics([], snapshot().generatedAt) } })}
       streamState="live"
     />,
   );
@@ -561,6 +605,7 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
   });
   const markup = renderToStaticMarkup(
     <DashboardTerminalView
+      dashboardKind="paper"
       dashboardName="POK Terminal"
       snapshot={snapshot({ recentSignals: [signal(), failed] })}
       streamState="live"
@@ -599,6 +644,38 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
   assert.match(markup, /Combined P\/L/);
   assert.match(markup, /payoff-segment-profit/);
   assert.match(markup, /Failure: kalshi order rejected/);
+});
+
+test("live dashboard signal tape excludes paper simulated fills", () => {
+  const liveSignal = signal({
+    id: 88,
+    executionMode: "live",
+    kalshiFillId: "real-kalshi-order",
+    polymarketFillId: "real-poly-order",
+  });
+  const paperSignal = signal({
+    id: 42,
+    executionMode: "paper",
+    kalshiFillId: "dry-run-kalshi-paper",
+    polymarketFillId: "dry-run-poly-paper",
+  });
+  const markup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        live: { recentSignals: [liveSignal], analytics: buildDashboardAnalytics([liveSignal], snapshot().generatedAt) },
+        paper: { recentSignals: [paperSignal], analytics: buildDashboardAnalytics([paperSignal], snapshot().generatedAt) },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /Live Signal Tape/);
+  assert.match(markup, /real-kalshi-order/);
+  assert.match(markup, /real-poly-order/);
+  assert.doesNotMatch(markup, /dry-run-kalshi-paper/);
+  assert.doesNotMatch(markup, /dry-run-poly-paper/);
 });
 
 test("trade detail drawer renders detailed payoff diagram with protected and dead-zone shading", () => {

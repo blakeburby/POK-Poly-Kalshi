@@ -4114,6 +4114,23 @@ tbody tr:hover {
   gap: 14px;
 }
 
+.live-safety-compact {
+  align-items: center;
+  border-color: rgba(255, 94, 94, 0.26);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.live-safety-compact p {
+  color: #9fb0c4;
+  margin: 4px 0 0;
+}
+
+.live-safety-compact .status-rail {
+  justify-content: flex-end;
+}
+
 .paper-live-warning {
   border: 1px solid rgba(255, 189, 82, 0.34);
   border-radius: var(--radius-card);
