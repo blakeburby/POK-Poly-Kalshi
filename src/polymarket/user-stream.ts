@@ -8,7 +8,7 @@ import { logEvent, logThrottle } from "../logger";
 import type { UserStreamVenueState } from "../types";
 import { computeReconnectDelay, isRateLimitError } from "../ws/reconnect";
 
-type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState">;
+type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState"> & { ping?: () => void };
 type WebSocketFactory = (url: string) => RawWebSocket;
 type CredentialsFactory = () => Promise<ApiKeyCreds>;
 
@@ -247,12 +247,13 @@ export class PolymarketUserStreamClient {
 
   private startHeartbeat(socket: RawWebSocket): void {
     this.clearHeartbeat();
+    if (!socket.ping) return;
     this.heartbeatTimer = setInterval(() => {
       if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
         this.clearHeartbeat();
         return;
       }
-      socket.send("PING");
+      socket.ping?.();
     }, 10_000);
   }
 
