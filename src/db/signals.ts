@@ -1,4 +1,16 @@
-import type { ArbLeg, DashboardSignal, LegDirection, SignalAction, SignalInsert, SignalUpdate, Venue } from "../types";
+import type {
+  ArbCandidate,
+  ArbLeg,
+  DashboardSignal,
+  ExecutionTimings,
+  LegDirection,
+  QuoteSnapshot,
+  SignalAction,
+  SignalInsert,
+  SignalUpdate,
+  Venue,
+  VenueConfirmations,
+} from "../types";
 import type { FilledAttempt } from "../scanner/reentry";
 import { buildSyntheticStructureRisk } from "../scanner/payoff";
 
@@ -52,6 +64,38 @@ interface DashboardSignalRow {
   kalshi_error: string | null;
   polymarket_error: string | null;
   partial_fill: boolean | string | null;
+  quote_snapshot: QuoteSnapshot | string | null;
+  depth_vwap: string | number | null;
+  projected_edge_after_fees: string | number | null;
+  execution_timings: ExecutionTimings | string | null;
+  venue_confirmations: VenueConfirmations | string | null;
+}
+
+interface LiveExposureRow {
+  id: string | number;
+  pair_key: string;
+  expiry_ms: string | number;
+  kalshi_contract_id: string;
+  polymarket_contract_id: string;
+  lower_venue: string;
+  lower_contract_id: string;
+  lower_direction: string;
+  higher_venue: string;
+  higher_contract_id: string;
+  higher_direction: string;
+  kalshi_fill_count: string | number | null;
+  polymarket_fill_count: string | number | null;
+}
+
+interface LiveReconciliationRow {
+  id: string | number;
+  action: string;
+  partial_fill: boolean | string | null;
+  kalshi_status: string | null;
+  polymarket_status: string | null;
+  kalshi_fill_count: string | number | null;
+  polymarket_fill_count: string | number | null;
+  venue_confirmations: VenueConfirmations | string | null;
 }
 
 const SIGNAL_COLUMNS = `
@@ -64,7 +108,8 @@ const SIGNAL_COLUMNS = `
   execution_group_id, kalshi_client_order_id, polymarket_client_order_id,
   kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
   kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
-  kalshi_error, polymarket_error, partial_fill
+  kalshi_error, polymarket_error, partial_fill,
+  quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -85,6 +130,28 @@ function optionalDateString(value: string | Date | null): string | null {
 function booleanFrom(value: boolean | string | null): boolean {
   if (typeof value === "boolean") return value;
   return value === "true" || value === "t" || value === "1";
+}
+
+function confirmationStatus(confirmations: VenueConfirmations | null, venue: Venue): string | null {
+  const value = confirmations?.[venue];
+  if (!value || typeof value !== "object") return null;
+  const status = (value as Record<string, unknown>).status;
+  return typeof status === "string" ? status : null;
+}
+
+function confirmedByUserStream(confirmations: VenueConfirmations | null, venue: Venue): boolean {
+  const status = confirmationStatus(confirmations, venue)?.toLowerCase() ?? "";
+  return ["confirmed", "matched", "filled"].includes(status);
+}
+
+function jsonFromRow<T>(value: T | string | null): T | null {
+  if (value == null) return null;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 }
 
 function legFromRow(row: DashboardSignalRow, side: "lower" | "higher"): ArbLeg {
@@ -135,6 +202,11 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     kalshiError: row.kalshi_error,
     polymarketError: row.polymarket_error,
     partialFill: booleanFrom(row.partial_fill),
+    quoteSnapshot: jsonFromRow<QuoteSnapshot>(row.quote_snapshot),
+    depthVwap: numberFrom(row.depth_vwap),
+    projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
+    executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
+    venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
     risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
@@ -207,6 +279,11 @@ export class SignalStore {
           kalshi_error = $19,
           polymarket_error = $20,
           partial_fill = $21,
+          quote_snapshot = CASE WHEN $22::TEXT IS NULL THEN NULL ELSE $22::JSONB END,
+          depth_vwap = $23,
+          projected_edge_after_fees = $24,
+          execution_timings = CASE WHEN $25::TEXT IS NULL THEN NULL ELSE $25::JSONB END,
+          venue_confirmations = CASE WHEN $26::TEXT IS NULL THEN NULL ELSE $26::JSONB END,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -232,6 +309,11 @@ export class SignalStore {
       update.kalshiError ?? null,
       update.polymarketError ?? null,
       update.partialFill ?? false,
+      update.quoteSnapshot == null ? null : JSON.stringify(update.quoteSnapshot),
+      update.depthVwap ?? null,
+      update.projectedEdgeAfterFees ?? null,
+      update.executionTimings == null ? null : JSON.stringify(update.executionTimings),
+      update.venueConfirmations == null ? null : JSON.stringify(update.venueConfirmations),
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
@@ -246,6 +328,96 @@ export class SignalStore {
     return result.rows
       .map((row) => ({ pairKey: row.pair_key, filledAtMs: Number(row.filled_at_ms) }))
       .filter((row) => Number.isFinite(row.filledAtMs));
+  }
+
+  async liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
+    const result = await this.db.query<LiveExposureRow>(`
+      SELECT id, pair_key, expiry_ms, kalshi_contract_id, polymarket_contract_id,
+             lower_venue, lower_contract_id, lower_direction,
+             higher_venue, higher_contract_id, higher_direction,
+             kalshi_fill_count, polymarket_fill_count
+      FROM cross_venue_arb_signals
+      WHERE execution_group_id IS NOT NULL
+        AND expiry_ms = $1
+        AND expiry_ms > $2
+        AND (
+          action = 'filled'
+          OR partial_fill = TRUE
+          OR COALESCE(kalshi_fill_count, 0) > 0
+          OR COALESCE(polymarket_fill_count, 0) > 0
+        )
+      ORDER BY updated_at DESC
+      LIMIT 50
+    `, [candidate.expiryMs, now]);
+
+    const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
+    if (result.rows.length >= maxTrades) {
+      return `live max trades per window reached for expiry ${candidate.expiryMs}: ${result.rows.length}/${maxTrades}`;
+    }
+
+    for (const row of result.rows) {
+      if (row.kalshi_contract_id === candidate.kalshiContractId) {
+        return `live Kalshi leg ${candidate.kalshiContractId} already has exposure in signal #${row.id}`;
+      }
+      if (row.polymarket_contract_id === candidate.polymarketContractId) {
+        return `live Polymarket leg ${candidate.polymarketContractId} already has exposure in signal #${row.id}`;
+      }
+
+      const exposedLegs = [
+        { venue: row.lower_venue, contractId: row.lower_contract_id, direction: row.lower_direction },
+        { venue: row.higher_venue, contractId: row.higher_contract_id, direction: row.higher_direction },
+      ];
+      const candidateLegs = [
+        candidate.lower,
+        candidate.higher,
+      ];
+      for (const exposed of exposedLegs) {
+        if (candidateLegs.some((leg) => leg.venue === exposed.venue && leg.contractId === exposed.contractId && leg.direction === exposed.direction)) {
+          return `live ${exposed.venue} ${exposed.direction} leg ${exposed.contractId} already has exposure in signal #${row.id}`;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
+    const result = await this.db.query<LiveReconciliationRow>(`
+      SELECT id, action, partial_fill, kalshi_status, polymarket_status,
+             kalshi_fill_count, polymarket_fill_count, venue_confirmations
+      FROM cross_venue_arb_signals
+      WHERE execution_group_id IS NOT NULL
+        AND expiry_ms = $1
+        AND expiry_ms > $2
+        AND (
+          partial_fill = TRUE
+          OR COALESCE(kalshi_fill_count, 0) > 0
+          OR COALESCE(polymarket_fill_count, 0) > 0
+          OR kalshi_status IN ('unknown', 'unexpected_fill_count')
+          OR polymarket_status IN ('unknown', 'unexpected_fill_count')
+        )
+      ORDER BY updated_at DESC
+      LIMIT 50
+    `, [candidate.expiryMs, now]);
+
+    for (const row of result.rows) {
+      const kalshiFillCount = numberFrom(row.kalshi_fill_count) ?? 0;
+      const polymarketFillCount = numberFrom(row.polymarket_fill_count) ?? 0;
+      const hasAnyFill = kalshiFillCount > 0 || polymarketFillCount > 0;
+      const confirmations = jsonFromRow<VenueConfirmations>(row.venue_confirmations);
+      if (booleanFrom(row.partial_fill)) return `live reconciliation blocked: signal #${row.id} is marked partial_fill`;
+      if (hasAnyFill && Math.abs(kalshiFillCount - polymarketFillCount) > 0.000001) {
+        return `live reconciliation blocked: signal #${row.id} fill mismatch kalshi=${kalshiFillCount} polymarket=${polymarketFillCount}`;
+      }
+      if (hasAnyFill && (!confirmedByUserStream(confirmations, "kalshi") || !confirmedByUserStream(confirmations, "polymarket"))) {
+        return `live reconciliation blocked: signal #${row.id} has venue fills without private-stream confirmations`;
+      }
+      if (["unknown", "unexpected_fill_count"].includes(row.kalshi_status ?? "") || ["unknown", "unexpected_fill_count"].includes(row.polymarket_status ?? "")) {
+        return `live reconciliation blocked: signal #${row.id} has unresolved venue status`;
+      }
+    }
+
+    return null;
   }
 
   async listRecentSignals(limit = 100): Promise<DashboardSignal[]> {

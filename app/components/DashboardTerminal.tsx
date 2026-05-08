@@ -197,6 +197,10 @@ function formatExecutionState(value: string | null | undefined): string {
   return value && value.trim().length > 0 ? value.toUpperCase() : "--";
 }
 
+function shortReason(value: string): string {
+  return value.length > 82 ? `${value.slice(0, 79)}...` : value;
+}
+
 function signalLatencyMs(signal: DashboardSignal): number | null {
   const started = Date.parse(signal.createdAt);
   const finished = Date.parse(signal.updatedAt);
@@ -2769,10 +2773,15 @@ function LiveSafetyBanner({ snapshot }: { snapshot: DashboardSnapshot }) {
   const execution = snapshot.execution;
   const kalshiReady = execution?.kalshi.ready ?? false;
   const polymarketReady = execution?.polymarket.ready ?? false;
+  const streamsReady = execution?.userStreams?.ready ?? false;
+  const reconciliationClean = execution?.reconciliation?.clean ?? false;
   const partialLocked = execution?.partialFillLocked ?? false;
-  const liveReady = snapshot.health.liveTrading && kalshiReady && polymarketReady && !partialLocked;
+  const circuitLocked = execution?.circuitBreakerLocked ?? false;
+  const liveReady = snapshot.health.liveTrading && kalshiReady && polymarketReady && streamsReady && reconciliationClean && !partialLocked && !circuitLocked;
   const warning = snapshot.health.liveTrading
-    ? "LIVE EXECUTION IS ARMED. The dashboard is read-only, but the VPS worker can place FOK canary orders from its environment settings."
+    ? circuitLocked
+      ? "LIVE EXECUTION IS ARMED BUT CIRCUIT-LOCKED. Do not re-enable until the unsafe attempt is reconciled and the lock is manually cleared."
+      : "LIVE EXECUTION IS ARMED. The dashboard is read-only, but the VPS worker can place FOK canary orders from its environment settings."
     : "Live command surface selected, but backend live trading is OFF. This is safe for readiness review only.";
 
   return (
@@ -2786,9 +2795,15 @@ function LiveSafetyBanner({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Env Flag</span><strong className={snapshot.health.liveTrading ? "loss" : "profit"}>{snapshot.health.liveTrading ? "LIVE TRUE" : "LIVE FALSE"}</strong></div>
         <div><span>Kalshi</span><strong className={kalshiReady ? "profit" : "loss"}>{kalshiReady ? "READY" : "BLOCKED"}</strong></div>
         <div><span>Polymarket</span><strong className={polymarketReady ? "profit" : "loss"}>{polymarketReady ? "READY" : "BLOCKED"}</strong></div>
+        <div><span>User Streams</span><strong className={streamsReady ? "profit" : "loss"}>{streamsReady ? "CONFIRMING" : "BLOCKED"}</strong></div>
+        <div><span>Reconcile</span><strong className={reconciliationClean ? "profit" : "loss"}>{reconciliationClean ? "CLEAN" : "DRIFT"}</strong></div>
         <div><span>Partial Fill Lock</span><strong className={partialLocked ? "loss" : "profit"}>{partialLocked ? "LOCKED" : "CLEAR"}</strong></div>
+        <div><span>Circuit Breaker</span><strong className={circuitLocked ? "loss" : "profit"}>{circuitLocked ? "LOCKED" : "CLEAR"}</strong></div>
         <div><span>Composite</span><strong className={liveReady ? "loss" : "warn"}>{liveReady ? "CAN EXECUTE" : "NO-GO"}</strong></div>
       </div>
+      {execution?.circuitBreakerReason ? <p className="live-lock-reason">LOCK REASON: {execution.circuitBreakerReason}</p> : null}
+      {execution?.userStreams?.reason ? <p className="live-lock-reason">STREAM REASON: {execution.userStreams.reason}</p> : null}
+      {execution?.reconciliation?.reason ? <p className="live-lock-reason">RECONCILE REASON: {execution.reconciliation.reason}</p> : null}
     </section>
   );
 }
@@ -2812,6 +2827,18 @@ function ExecutionControlsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Max Slippage</span><strong>{execution ? formatCents(execution.maxSlippageCents / 100) : "--"}</strong></div>
         <div><span>Protected Only</span><strong>{execution?.protectedOnly ? "YES" : "NO"}</strong></div>
         <div><span>Min Expiry</span><strong>{execution ? formatCompactTime(execution.minExpiryMs) : "--"}</strong></div>
+        <div><span>Max/Window</span><strong>{execution?.maxTradesPerWindow ?? snapshot.health.liveMaxTradesPerWindow}</strong></div>
+        <div><span>Collateral Buffer</span><strong>{formatDollars(execution?.collateralBufferDollars ?? null)}</strong></div>
+        <div><span>Quote Max Age</span><strong>{execution ? formatCompactTime(execution.quoteMaxAgeMs) : formatCompactTime(snapshot.health.liveQuoteMaxAgeMs)}</strong></div>
+        <div><span>Quote Sync Skew</span><strong>{execution ? formatCompactTime(execution.quoteSyncMaxSkewMs) : formatCompactTime(snapshot.health.liveQuoteSyncMaxSkewMs)}</strong></div>
+        <div><span>Min Depth</span><strong>{execution?.minBookDepthShares ?? snapshot.health.liveMinBookDepthShares}</strong></div>
+        <div><span>Edge Buffer</span><strong>{formatSignedCents(-(execution?.edgeBufferDollars ?? snapshot.health.liveEdgeBufferDollars))}</strong></div>
+        <div><span>Order Timeout</span><strong>{execution ? formatCompactTime(execution.orderTimeoutMs) : formatCompactTime(snapshot.health.liveOrderTimeoutMs)}</strong></div>
+        <div><span>Stream Confirm</span><strong>{execution?.userStreams ? formatCompactTime(execution.userStreams.confirmTimeoutMs) : formatCompactTime(snapshot.health.liveUserStreamConfirmTimeoutMs)}</strong></div>
+        <div><span>User Streams</span><strong className={execution?.userStreams?.ready ? "profit" : "loss"}>{execution?.userStreams?.enabled ? execution.userStreams.ready ? "READY" : "BLOCKED" : "OFF"}</strong></div>
+        <div><span>Reconcile Before Trade</span><strong className={execution?.reconciliation?.clean ? "profit" : "loss"}>{execution?.reconciliation?.enabled ? execution.reconciliation.clean ? "CLEAN" : "DRIFT" : "OFF"}</strong></div>
+        <div><span>Kalshi Group</span><strong className={execution?.kalshiOrderGroupEnabled ? "warn" : ""}>{execution?.kalshiOrderGroupEnabled ? "ON" : "OFF"}</strong></div>
+        <div><span>Circuit Breaker</span><strong className={execution?.circuitBreakerLocked ? "loss" : "profit"}>{execution?.circuitBreakerLocked ? "LOCKED" : "CLEAR"}</strong></div>
       </div>
       <div className="readonly-control-strip">
         <span>ARMING SOURCE: /etc/pok-poly-kalshi/worker.env</span>
@@ -2839,13 +2866,13 @@ function VenueReadinessPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <VenueBadge venue="kalshi" />
           <strong className={kalshi?.ready ? "profit" : "loss"}>{formatReadiness(kalshi?.ready, kalshi?.reason)}</strong>
           <span>Balance {formatDollars(kalshi?.balance ?? null)}</span>
-          <small>Last check {formatRealtimeAge(snapshot.generatedAt, kalshi?.lastCheckedAt)}</small>
+          <small>Stream {execution?.userStreams?.kalshi.subscribed ? "subscribed" : "blocked"} · Last check {formatRealtimeAge(snapshot.generatedAt, kalshi?.lastCheckedAt)}</small>
         </div>
         <div className="venue-readiness-card">
           <VenueBadge venue="polymarket" />
           <strong className={polymarket?.ready ? "profit" : "loss"}>{formatReadiness(polymarket?.ready, polymarket?.reason)}</strong>
           <span>Collateral {formatDollars(polymarket?.collateralBalanceNormalized ?? polymarket?.balance ?? null)}</span>
-          <small>Sig type {polymarket?.signatureType ?? "--"} · Geo {polymarket?.geoblockBlocked ? "blocked" : polymarket?.geoblockCountry ?? "--"}</small>
+          <small>Stream {execution?.userStreams?.polymarket.subscribed ? "subscribed" : "blocked"} · Sig {polymarket?.signatureType ?? "--"} · Geo {polymarket?.geoblockBlocked ? "blocked" : polymarket?.geoblockCountry ?? "--"}</small>
         </div>
       </div>
     </section>
@@ -2865,10 +2892,11 @@ function ExposurePanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <p className="panel-kicker">exposure</p>
           <h2>Exposure</h2>
         </div>
-        <StatusPill label={execution?.partialFillLocked ? "LOCKED" : "CLEAR"} state={execution?.partialFillLocked ? "stale" : "live"} />
+        <StatusPill label={execution?.circuitBreakerLocked || execution?.partialFillLocked ? "LOCKED" : "CLEAR"} state={execution?.circuitBreakerLocked || execution?.partialFillLocked ? "stale" : "live"} />
       </div>
       <div className="ops-metric-grid">
         <div><span>Partial-Fill Lock</span><strong className={execution?.partialFillLocked ? "loss" : "profit"}>{execution?.partialFillLocked ? "LOCKED" : "CLEAR"}</strong></div>
+        <div><span>Circuit Breaker</span><strong className={execution?.circuitBreakerLocked ? "loss" : "profit"}>{execution?.circuitBreakerLocked ? "LOCKED" : "CLEAR"}</strong></div>
         <div><span>Canary Size</span><strong>{formatDollars(orderSize)}</strong></div>
         <div><span>Poly Collateral</span><strong>{formatDollars(polymarketCollateral)}</strong></div>
         <div><span>Required Collateral</span><strong>{formatDollars(execution?.polymarket.requiredCollateral ?? null)}</strong></div>
@@ -2915,20 +2943,24 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <p className="panel-kicker">execution audit</p>
           <h2>Execution Audit</h2>
         </div>
-        <StatusPill label={execution?.lastAttempt ? "LAST ATTEMPT" : "NO ATTEMPT"} state={execution?.lastAttempt ? "warn" : "empty"} />
+        <StatusPill label={execution?.circuitBreakerLocked ? "CIRCUIT LOCK" : execution?.lastAttempt ? "LAST ATTEMPT" : "NO ATTEMPT"} state={execution?.circuitBreakerLocked ? "stale" : execution?.lastAttempt ? "warn" : "empty"} />
       </div>
       <div className="audit-summary-grid">
         <div><span>Last Action</span><strong>{formatExecutionState(execution?.lastAttempt?.action)}</strong></div>
         <div><span>Partial Fill</span><strong className={execution?.lastAttempt?.partialFill ? "loss" : "profit"}>{execution?.lastAttempt?.partialFill ? "YES" : "NO"}</strong></div>
         <div><span>Kalshi Status</span><strong>{formatExecutionState(execution?.lastAttempt?.kalshiStatus)}</strong></div>
         <div><span>Polymarket Status</span><strong>{formatExecutionState(execution?.lastAttempt?.polymarketStatus)}</strong></div>
+        <div><span>Lock Reason</span><strong className={execution?.circuitBreakerReason ? "loss" : ""}>{execution?.circuitBreakerReason ? shortReason(execution.circuitBreakerReason) : "--"}</strong></div>
       </div>
       <div className="audit-tape">
         {auditSignals.map((signal) => (
           <div className="audit-tape-row" key={signal.id}>
             <span>#{signal.id}</span>
             <strong className={signal.action === "filled" ? "profit" : signal.action === "failed" ? "loss" : ""}>{signal.action.toUpperCase()}</strong>
-            <span>{formatSignedCents(signal.guaranteedProfit)}</span>
+            <span>VWAP {formatDollars(signal.depthVwap ?? null)}</span>
+            <span>Edge {formatSignedCents(signal.projectedEdgeAfterFees ?? signal.guaranteedProfit)}</span>
+            <span>Skew {signal.quoteSnapshot?.quoteSkewMs == null ? "--" : `${Math.round(signal.quoteSnapshot.quoteSkewMs)}ms`}</span>
+            <span>RTT K {signal.executionTimings?.kalshiRttMs == null ? "--" : `${Math.round(signal.executionTimings.kalshiRttMs)}ms`}</span>
             <span>Partial {signal.partialFill ? "YES" : "NO"}</span>
             <span>K {signal.kalshiFillCount ?? "--"} / P {signal.polymarketFillCount ?? "--"}</span>
           </div>

@@ -144,6 +144,69 @@ test("scanner processes candidate executions through a bounded queue without dup
   assert.equal(scanner.status().activeExecutions, 0);
 });
 
+test("live scanner limits canary execution to one candidate per expiry window", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly-a", strike: 1500, yesAsk: 0.4, noAsk: 0.6, updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi-a", strike: 1502, yesAsk: 0.5, noAsk: 0.5, updatedAt: now }),
+    contract({ venue: "kalshi", contractId: "kalshi-b", strike: 1503, yesAsk: 0.49, noAsk: 0.49, updatedAt: now }),
+  ]);
+
+  let inserted = 0;
+  let executed = 0;
+  const scanner = new CrossVenueArbScanner(
+    books,
+    {
+      async insertSignal() {
+        inserted += 1;
+        return inserted;
+      },
+      async updateSignal() {
+        return undefined;
+      },
+    },
+    {
+      async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
+        executed += 1;
+        return {
+          action: "filled",
+          failureReason: null,
+          kalshiFillId: `kalshi-${candidate.kalshiContractId}`,
+          polymarketFillId: `poly-${candidate.polymarketContractId}`,
+          kalshiFillPrice: candidate.higher.venue === "kalshi" ? candidate.higher.ask : candidate.lower.ask,
+          polymarketFillPrice: candidate.higher.venue === "polymarket" ? candidate.higher.ask : candidate.lower.ask,
+        };
+      },
+    },
+    new ReentryThrottle(15_000),
+    {
+      enabled: true,
+      minProfitDollars: 0.05,
+      staleBookMs: 10_000,
+      executionConcurrency: 2,
+      liveTrading: true,
+      maxLiveTradesPerWindow: 1,
+      liveExposure: {
+        async liveExposureBlockReason() {
+          return null;
+        },
+      },
+    },
+  );
+
+  const accepted = await scanner.scan(now);
+
+  assert.equal(accepted.length, 1);
+  await waitFor(() => executed === 1);
+  await waitFor(() => scanner.status().activeExecutions === 0);
+  assert.equal(inserted, 1);
+  assert.equal(scanner.status().queuedExecutions, 0);
+  assert.equal(scanner.status().activeExecutions, 0);
+});
+
 test("scanner blocks equal-strike candidates before persistence or execution", async () => {
   const books = new BookStore();
   const now = 1_800_000_000_000;

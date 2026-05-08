@@ -46,6 +46,20 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderSize: 1,
     liveMaxSlippageCents: 1,
     liveMinExpiryMs: 30_000,
+    liveMaxTradesPerWindow: 1,
+    liveCollateralBufferDollars: 0.25,
+    liveQuoteMaxAgeMs: 750,
+    liveQuoteSyncMaxSkewMs: 250,
+    liveMinBookDepthShares: 1,
+    liveEdgeBufferDollars: 0.03,
+    liveOrderTimeoutMs: 2_500,
+    liveKalshiOrderGroupEnabled: false,
+    liveKalshiOrderGroupId: "",
+    liveUserStreamsEnabled: false,
+    liveUserStreamConfirmTimeoutMs: 2_500,
+    liveReconcileBeforeTrade: false,
+    kalshiUserWsUrl: "",
+    polymarketUserWsUrl: "",
     dryRunSlippageEnabled: true,
     dryRunKalshiSlippageCents: 1,
     dryRunPolymarketSlippageCents: 1,
@@ -126,7 +140,12 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
       orderType: "FOK",
       maxSlippageCents: 1,
       minExpiryMs: 30_000,
+      maxTradesPerWindow: 1,
+      collateralBufferDollars: 0.25,
       partialFillLocked: false,
+      circuitBreakerLocked: false,
+      circuitBreakerReason: null,
+      circuitBreaker: null,
       kalshi: { configured: true, ready: true, reason: null, balance: null, allowance: null, lastCheckedAt: now },
       polymarket: {
         configured: true,
@@ -157,6 +176,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
 
   const snapshot = await createDashboardSnapshot(runtime, now);
   assert.equal(snapshot.health.ok, true);
+  assert.equal(snapshot.health.liveMaxTradesPerWindow, 1);
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);
   assert.equal(snapshot.liveCandidates.length, 1);
@@ -170,6 +190,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.analytics?.daily.window, "daily");
   assert.equal(snapshot.analytics?.weekly.window, "weekly");
   assert.equal(snapshot.execution?.polymarket.ready, false);
+  assert.equal(snapshot.execution?.circuitBreakerLocked, false);
   assert.equal(snapshot.execution?.polymarket.funderAddress, "0x3333...4444");
   assert.equal(snapshot.execution?.polymarket.collateralBalanceNormalized, 0);
   assert.equal(snapshot.logs[0].category, "SCANNER");

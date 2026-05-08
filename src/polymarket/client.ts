@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { z } from "zod";
 import { logEvent, logThrottle } from "../logger";
+import type { BookLevel } from "../types";
 import { computeReconnectDelay, isRateLimitError } from "../ws/reconnect";
 
 type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState">;
@@ -10,6 +11,11 @@ export interface TokenBookSnapshot {
   tokenId: string;
   bestBid: number | null;
   bestAsk: number | null;
+  bidLevels: BookLevel[];
+  askLevels: BookLevel[];
+  hash?: string | null;
+  tickSize?: number | null;
+  tickSizeChangedAt?: number | null;
   timestamp: number;
 }
 
@@ -18,6 +24,9 @@ interface BookLevels {
   asks: Map<number, number>;
   bestBidOverride: number | null;
   bestAskOverride: number | null;
+  hash: string | null;
+  tickSize: number | null;
+  tickSizeChangedAt: number | null;
 }
 
 const PriceLevelSchema = z.object({
@@ -40,6 +49,8 @@ const BookMessageSchema = z.object({
   market: z.string().optional(),
   best_bid: z.union([z.string(), z.number()]).optional(),
   best_ask: z.union([z.string(), z.number()]).optional(),
+  hash: z.string().optional(),
+  tick_size: z.union([z.string(), z.number()]).optional(),
   bids: z.array(PriceLevelSchema).optional(),
   asks: z.array(PriceLevelSchema).optional(),
   changes: z.array(PriceChangeSchema).optional(),
@@ -75,6 +86,13 @@ function bestAsk(levels: Map<number, number>): number | null {
     if (best == null || price < best) best = price;
   }
   return best;
+}
+
+function sortedLevels(levels: Map<number, number>, side: "bid" | "ask"): BookLevel[] {
+  return [...levels]
+    .filter(([, size]) => size > 0)
+    .map(([price, size]) => ({ price, size }))
+    .sort((a, b) => side === "bid" ? b.price - a.price : a.price - b.price);
 }
 
 export function buildPolymarketSubscribeMessage(tokenIds: Iterable<string>): Record<string, unknown> {
@@ -123,6 +141,7 @@ export class PolymarketBookParser {
         book.asks.clear();
         book.bestBidOverride = null;
         book.bestAskOverride = null;
+        this.applyMetadata(book, parsed.data, timestamp);
         for (const bid of parsed.data.bids ?? []) setLevel(book.bids, bid.price, bid.size);
         for (const ask of parsed.data.asks ?? []) setLevel(book.asks, ask.price, ask.size);
         snapshots.push(this.snapshot(parsed.data.asset_id, timestamp));
@@ -147,6 +166,7 @@ export class PolymarketBookParser {
 
       if (eventType === "best_bid_ask" && parsed.data.asset_id) {
         const book = this.getBook(parsed.data.asset_id);
+        this.applyMetadata(book, parsed.data, timestamp);
         if (parsed.data.best_bid != null) book.bestBidOverride = toNumber(parsed.data.best_bid);
         if (parsed.data.best_ask != null) book.bestAskOverride = toNumber(parsed.data.best_ask);
         snapshots.push(this.snapshot(parsed.data.asset_id, timestamp));
@@ -169,17 +189,36 @@ export class PolymarketBookParser {
       asks: new Map<number, number>(),
       bestBidOverride: null,
       bestAskOverride: null,
+      hash: null,
+      tickSize: null,
+      tickSizeChangedAt: null,
     };
     this.books.set(tokenId, book);
     return book;
   }
 
+  private applyMetadata(book: BookLevels, data: { hash?: string; tick_size?: string | number }, timestamp: number): void {
+    if (data.hash) book.hash = data.hash;
+    if (data.tick_size != null) {
+      const tickSize = toNumber(data.tick_size);
+      if (tickSize != null && book.tickSize != null && book.tickSize !== tickSize) book.tickSizeChangedAt = timestamp;
+      if (tickSize != null) book.tickSize = tickSize;
+    }
+  }
+
   private snapshot(tokenId: string, timestamp: number): TokenBookSnapshot {
     const book = this.getBook(tokenId);
+    const bidLevels = sortedLevels(book.bids, "bid");
+    const askLevels = sortedLevels(book.asks, "ask");
     return {
       tokenId,
       bestBid: book.bestBidOverride ?? bestBid(book.bids),
       bestAsk: book.bestAskOverride ?? bestAsk(book.asks),
+      bidLevels,
+      askLevels,
+      hash: book.hash,
+      tickSize: book.tickSize,
+      tickSizeChangedAt: book.tickSizeChangedAt,
       timestamp,
     };
   }

@@ -4036,6 +4036,17 @@ tbody tr:hover {
   color: var(--amber);
 }
 
+.live-lock-reason {
+  border-top: 1px solid rgba(255, 91, 91, 0.28);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  margin: 0;
+  padding: 0 var(--panel-pad) var(--panel-pad);
+  text-transform: uppercase;
+}
+
 .venue-readiness-grid {
   display: grid;
   gap: 12px;

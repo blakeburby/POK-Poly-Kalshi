@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { z } from "zod";
 import { getKalshiWebsocketHeaders } from "./auth";
 import { logEvent, logThrottle } from "../logger";
+import type { BookLevel } from "../types";
 import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../ws/reconnect";
 
 type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState">;
@@ -13,6 +14,14 @@ export interface KalshiTickerSnapshot {
   yesAsk: number | null;
   noBid: number | null;
   noAsk: number | null;
+  yesBidLevels?: BookLevel[];
+  yesAskLevels?: BookLevel[];
+  noBidLevels?: BookLevel[];
+  noAskLevels?: BookLevel[];
+  sequence?: number | null;
+  bookHash?: string | null;
+  tickSize?: number | null;
+  tickSizeChangedAt?: number | null;
   timestamp: number;
 }
 
@@ -34,12 +43,68 @@ function dollarsToCentsDollars(value: unknown, mode: "bid" | "ask"): number | nu
   return Math.max(0, Math.min(100, rounded)) / 100;
 }
 
+function normalizePrice(value: unknown): number | null {
+  if (value == null) return null;
+  const parsed = typeof value === "number" ? value : Number.parseFloat(String(value));
+  if (!Number.isFinite(parsed)) return null;
+  return parsed > 1 ? Math.max(0, Math.min(100, parsed)) / 100 : Math.max(0, Math.min(1, parsed));
+}
+
+function normalizeSize(value: unknown): number | null {
+  if (value == null) return null;
+  const parsed = typeof value === "number" ? value : Number.parseFloat(String(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function rawRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function parseLevel(value: unknown): BookLevel | null {
+  if (Array.isArray(value)) {
+    const price = normalizePrice(value[0]);
+    const size = normalizeSize(value[1]);
+    return price == null || size == null ? null : { price, size };
+  }
+  const record = rawRecord(value);
+  if (!record) return null;
+  const price = normalizePrice(record.price ?? record.yes_price ?? record.no_price);
+  const size = normalizeSize(record.size ?? record.quantity ?? record.count);
+  return price == null || size == null ? null : { price, size };
+}
+
+function sortedBids(levels: Iterable<BookLevel>): BookLevel[] {
+  return [...levels]
+    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.size > 0)
+    .sort((a, b) => b.price - a.price);
+}
+
+function askFromOppositeBids(levels: Iterable<BookLevel>): BookLevel[] {
+  return [...levels]
+    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.size > 0)
+    .map((level) => ({ price: Math.round((1 - level.price) * 10_000) / 10_000, size: level.size }))
+    .sort((a, b) => a.price - b.price);
+}
+
+function bestBid(levels: BookLevel[]): number | null {
+  return levels[0]?.price ?? null;
+}
+
+function bestAsk(levels: BookLevel[]): number | null {
+  return levels[0]?.price ?? null;
+}
+
 export function buildKalshiSubscribeMessage(id: number, marketTickers: Iterable<string>): Record<string, unknown> {
   return {
     id,
     cmd: "subscribe",
     params: {
-      channels: ["ticker"],
+      channels: ["orderbook_delta"],
       market_tickers: [...marketTickers].sort(),
     },
   };
@@ -62,10 +127,108 @@ export function parseKalshiTickerSnapshot(raw: unknown, timestamp = Date.now()):
   };
 }
 
+interface KalshiBookState {
+  yesBids: Map<number, number>;
+  noBids: Map<number, number>;
+  sequence: number | null;
+}
+
+function setBookLevel(levels: Map<number, number>, price: number | null, size: number | null): void {
+  if (price == null || size == null) return;
+  if (size <= 0) levels.delete(price);
+  else levels.set(price, size);
+}
+
+function levelsFromMap(levels: Map<number, number>): BookLevel[] {
+  return sortedBids([...levels].map(([price, size]) => ({ price, size })));
+}
+
+function extractLevels(raw: Record<string, unknown>, keys: string[]): BookLevel[] {
+  for (const key of keys) {
+    const value = raw[key];
+    if (!Array.isArray(value)) continue;
+    return value.map(parseLevel).filter((level): level is BookLevel => level != null);
+  }
+  return [];
+}
+
+export class KalshiOrderbookParser {
+  private readonly books = new Map<string, KalshiBookState>();
+
+  apply(type: string | undefined, raw: unknown, timestamp = Date.now()): KalshiTickerSnapshot | null {
+    if (type === "ticker") return parseKalshiTickerSnapshot(raw, timestamp);
+    const record = rawRecord(raw);
+    if (!record) return null;
+    const marketTicker = String(record.market_ticker ?? record.marketTicker ?? "");
+    if (!marketTicker) return null;
+
+    const state = this.getState(marketTicker);
+    if (type === "orderbook_snapshot" || record.yes || record.no || record.yes_bids || record.no_bids) {
+      state.yesBids.clear();
+      state.noBids.clear();
+      for (const level of extractLevels(record, ["yes", "yes_bids", "yes_bid", "yes_levels"])) {
+        setBookLevel(state.yesBids, level.price, level.size);
+      }
+      for (const level of extractLevels(record, ["no", "no_bids", "no_bid", "no_levels"])) {
+        setBookLevel(state.noBids, level.price, level.size);
+      }
+    }
+
+    if (type === "orderbook_delta" || record.delta || record.side) {
+      const side = String(record.side ?? record.contract_side ?? record.outcome ?? "").toLowerCase();
+      const price = normalizePrice(record.price ?? record.yes_price ?? record.no_price);
+      const delta = numberOrNull(record.delta ?? record.size_delta ?? record.quantity_delta);
+      const absoluteSize = normalizeSize(record.size ?? record.quantity ?? record.count);
+      const book = side.includes("no") ? state.noBids : state.yesBids;
+      const currentSize = price == null ? null : book.get(price) ?? 0;
+      const nextSize = absoluteSize ?? (delta == null || currentSize == null ? null : currentSize + delta);
+      setBookLevel(book, price, nextSize);
+    }
+
+    state.sequence = numberOrNull(record.seq ?? record.sequence ?? record.sid) ?? state.sequence;
+    return this.snapshot(marketTicker, timestamp);
+  }
+
+  getSnapshot(marketTicker: string, timestamp = Date.now()): KalshiTickerSnapshot | null {
+    if (!this.books.has(marketTicker)) return null;
+    return this.snapshot(marketTicker, timestamp);
+  }
+
+  private getState(marketTicker: string): KalshiBookState {
+    const existing = this.books.get(marketTicker);
+    if (existing) return existing;
+    const state = { yesBids: new Map<number, number>(), noBids: new Map<number, number>(), sequence: null };
+    this.books.set(marketTicker, state);
+    return state;
+  }
+
+  private snapshot(marketTicker: string, timestamp: number): KalshiTickerSnapshot {
+    const state = this.getState(marketTicker);
+    const yesBidLevels = levelsFromMap(state.yesBids);
+    const noBidLevels = levelsFromMap(state.noBids);
+    const yesAskLevels = askFromOppositeBids(noBidLevels);
+    const noAskLevels = askFromOppositeBids(yesBidLevels);
+    return {
+      marketTicker,
+      yesBid: bestBid(yesBidLevels),
+      yesAsk: bestAsk(yesAskLevels),
+      noBid: bestBid(noBidLevels),
+      noAsk: bestAsk(noAskLevels),
+      yesBidLevels,
+      yesAskLevels,
+      noBidLevels,
+      noAskLevels,
+      sequence: state.sequence,
+      timestamp,
+    };
+  }
+}
+
 export class KalshiTickerClient {
   private readonly desired = new Set<string>();
   private readonly listeners = new Set<(snapshot: KalshiTickerSnapshot) => void>();
   private readonly latest = new Map<string, KalshiTickerSnapshot>();
+  private readonly parser = new KalshiOrderbookParser();
   private socket: RawWebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
@@ -149,8 +312,7 @@ export class KalshiTickerClient {
     socket.on("message", (raw: WebSocket.RawData) => {
       try {
         const payload = JSON.parse(raw.toString()) as { type?: string; msg?: unknown };
-        if (payload.type !== "ticker") return;
-        const snapshot = parseKalshiTickerSnapshot(payload.msg);
+        const snapshot = this.parser.apply(payload.type, payload.msg);
         if (!snapshot) return;
         this.latest.set(snapshot.marketTicker, snapshot);
         for (const listener of this.listeners) listener(snapshot);

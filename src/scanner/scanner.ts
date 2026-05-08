@@ -1,6 +1,7 @@
 import type { BookStore } from "../books/book-store";
 import type { ArbExecutor } from "../execution/executor";
 import { logEvent } from "../logger";
+import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { ArbCandidate, DashboardSignal } from "../types";
 import type { SignalStore } from "../db/signals";
 import { pairExecutableCandidates } from "./pairing";
@@ -17,6 +18,12 @@ export interface ScannerOptions {
   minProfitDollars: number;
   staleBookMs: number;
   executionConcurrency?: number;
+  liveTrading?: boolean;
+  maxLiveTradesPerWindow?: number;
+  liveExposure?: {
+    liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null>;
+  };
+  liveLocks?: LiveExecutionLockWriter;
   latency?: {
     recordScanStarted(at?: number): void;
     recordScanDuration(durationMs: number, completedAt?: number): void;
@@ -50,6 +57,8 @@ export class CrossVenueArbScanner {
   private lastCandidateCount = 0;
   private readonly executionQueue: QueuedCandidate[] = [];
   private readonly activePairs = new Set<string>();
+  private readonly activeLiveExpiries = new Map<number, number>();
+  private readonly activeLiveLegs = new Set<string>();
   private activeExecutions = 0;
 
   constructor(
@@ -79,7 +88,21 @@ export class CrossVenueArbScanner {
     try {
       const polymarket = this.books.getPolymarketContracts(this.options.staleBookMs, now);
       const kalshi = this.books.getKalshiContracts(this.options.staleBookMs, now);
-      const candidates = pairExecutableCandidates(polymarket, kalshi, this.options.minProfitDollars);
+      if (this.options.liveTrading) {
+        const activeLock = await this.options.liveLocks?.getActiveLock();
+        if (activeLock) {
+          this.lastCandidateCount = 0;
+          logEvent({
+            severity: "ERROR",
+            category: "SCANNER",
+            message: "live scan blocked by persistent circuit breaker",
+            context: { reason: activeLock.reason, lockId: activeLock.id },
+          });
+          return [];
+        }
+      }
+      const candidates = pairExecutableCandidates(polymarket, kalshi, this.options.minProfitDollars)
+        .sort((left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs);
       const protectedCandidates: ArbCandidate[] = [];
       for (const candidate of candidates) {
         const blockReason = protectedCandidateBlockReason(candidate, this.options.minProfitDollars);
@@ -97,6 +120,22 @@ export class CrossVenueArbScanner {
               lowerStrike: candidate.lower.strike,
               higherStrike: candidate.higher.strike,
               guaranteedProfit: candidate.guaranteedProfit,
+            },
+          });
+          continue;
+        }
+        const liveBlockReason = await this.liveCandidateBlockReason(candidate, now);
+        if (liveBlockReason) {
+          logEvent({
+            severity: "WARN",
+            category: "SCANNER",
+            message: "candidate blocked by live exposure guard",
+            context: {
+              pairKey: candidate.pairKey,
+              reason: liveBlockReason,
+              expiryMs: candidate.expiryMs,
+              kalshiContractId: candidate.kalshiContractId,
+              polymarketContractId: candidate.polymarketContractId,
             },
           });
           continue;
@@ -119,6 +158,7 @@ export class CrossVenueArbScanner {
       return;
     }
     this.activePairs.add(candidate.pairKey);
+    if (this.options.liveTrading) this.reserveLiveCandidate(candidate);
     this.executionQueue.push({ candidate, now });
     this.recordQueueState();
     this.drainExecutionQueue();
@@ -134,6 +174,7 @@ export class CrossVenueArbScanner {
       void this.handleCandidate(queued.candidate, queued.now).finally(() => {
         this.activeExecutions -= 1;
         this.activePairs.delete(queued.candidate.pairKey);
+        if (this.options.liveTrading) this.releaseLiveCandidate(queued.candidate);
         this.recordQueueState();
         this.drainExecutionQueue();
       });
@@ -156,6 +197,22 @@ export class CrossVenueArbScanner {
       const updatedSignal = await this.signals.updateSignal(signalId, result);
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
       if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
+      if (result.liveLockReason) {
+        await this.options.liveLocks?.engageLock({
+          reason: result.liveLockReason,
+          sourceSignalId: signalId,
+          executionGroupId: result.executionGroupId ?? null,
+          details: {
+            pairKey: candidate.pairKey,
+            expiryMs: candidate.expiryMs,
+            action: result.action,
+            kalshiFillCount: result.kalshiFillCount ?? null,
+            polymarketFillCount: result.polymarketFillCount ?? null,
+            kalshiFillPrice: result.kalshiFillPrice ?? null,
+            polymarketFillPrice: result.polymarketFillPrice ?? null,
+          },
+        });
+      }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
       else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
       logEvent({
@@ -176,5 +233,39 @@ export class CrossVenueArbScanner {
         context: { pairKey: candidate.pairKey, error: error instanceof Error ? error.message : String(error) },
       });
     }
+  }
+
+  private async liveCandidateBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
+    if (!this.options.liveTrading) return null;
+    const maxTrades = Math.max(0, Math.floor(this.options.maxLiveTradesPerWindow ?? 1));
+    const reservedForExpiry = this.activeLiveExpiries.get(candidate.expiryMs) ?? 0;
+    if (reservedForExpiry >= maxTrades) {
+      return `live scan window limit reached for expiry ${candidate.expiryMs}: ${reservedForExpiry}/${maxTrades} already reserved`;
+    }
+    for (const key of this.liveLegKeys(candidate)) {
+      if (this.activeLiveLegs.has(key)) return `live leg already reserved in this scan: ${key}`;
+    }
+    return await this.options.liveExposure?.liveExposureBlockReason(candidate, now, maxTrades) ?? null;
+  }
+
+  private reserveLiveCandidate(candidate: ArbCandidate): void {
+    this.activeLiveExpiries.set(candidate.expiryMs, (this.activeLiveExpiries.get(candidate.expiryMs) ?? 0) + 1);
+    for (const key of this.liveLegKeys(candidate)) this.activeLiveLegs.add(key);
+  }
+
+  private releaseLiveCandidate(candidate: ArbCandidate): void {
+    const count = this.activeLiveExpiries.get(candidate.expiryMs) ?? 0;
+    if (count <= 1) this.activeLiveExpiries.delete(candidate.expiryMs);
+    else this.activeLiveExpiries.set(candidate.expiryMs, count - 1);
+    for (const key of this.liveLegKeys(candidate)) this.activeLiveLegs.delete(key);
+  }
+
+  private liveLegKeys(candidate: ArbCandidate): string[] {
+    return [
+      `${candidate.lower.venue}:${candidate.lower.contractId}:${candidate.lower.direction}:${candidate.lower.tokenId ?? ""}`,
+      `${candidate.higher.venue}:${candidate.higher.contractId}:${candidate.higher.direction}:${candidate.higher.tokenId ?? ""}`,
+      `kalshi:${candidate.kalshiContractId}`,
+      `polymarket:${candidate.polymarketContractId}`,
+    ];
   }
 }

@@ -35,6 +35,20 @@ export interface AppConfig {
   liveOrderSize: number;
   liveMaxSlippageCents: number;
   liveMinExpiryMs: number;
+  liveMaxTradesPerWindow: number;
+  liveCollateralBufferDollars: number;
+  liveQuoteMaxAgeMs: number;
+  liveQuoteSyncMaxSkewMs: number;
+  liveMinBookDepthShares: number;
+  liveEdgeBufferDollars: number;
+  liveOrderTimeoutMs: number;
+  liveKalshiOrderGroupEnabled: boolean;
+  liveKalshiOrderGroupId: string;
+  liveUserStreamsEnabled: boolean;
+  liveUserStreamConfirmTimeoutMs: number;
+  liveReconcileBeforeTrade: boolean;
+  kalshiUserWsUrl: string;
+  polymarketUserWsUrl: string;
   dryRunSlippageEnabled: boolean;
   dryRunKalshiSlippageCents: number;
   dryRunPolymarketSlippageCents: number;
@@ -72,6 +86,7 @@ function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]):
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 1);
   return {
     port: envNumber(env, "PORT", 8080),
     databaseUrl: envString(env, "DATABASE_URL"),
@@ -110,9 +125,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketClobHost: envString(env, "POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
     polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FOK").toUpperCase() === "FAK" ? "FAK" : "FOK",
-    liveOrderSize: envNumber(env, "LIVE_ORDER_SIZE", 1),
+    liveOrderSize,
     liveMaxSlippageCents: envNumber(env, "LIVE_MAX_SLIPPAGE_CENTS", 1),
     liveMinExpiryMs: envNumber(env, "LIVE_MIN_EXPIRY_MS", 30_000),
+    liveMaxTradesPerWindow: envNumber(env, "LIVE_MAX_TRADES_PER_WINDOW", 1),
+    liveCollateralBufferDollars: envNumber(env, "LIVE_COLLATERAL_BUFFER_DOLLARS", 0.25),
+    liveQuoteMaxAgeMs: envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
+    liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
+    liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", liveOrderSize),
+    liveEdgeBufferDollars: envNumber(env, "LIVE_EDGE_BUFFER_DOLLARS", 0.03),
+    liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
+    liveKalshiOrderGroupEnabled: envBoolean(env, "LIVE_KALSHI_ORDER_GROUP_ENABLED", true),
+    liveKalshiOrderGroupId: envString(env, "LIVE_KALSHI_ORDER_GROUP_ID"),
+    liveUserStreamsEnabled: envBoolean(env, "LIVE_USER_STREAMS_ENABLED", true),
+    liveUserStreamConfirmTimeoutMs: envNumber(env, "LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS", 2_500),
+    liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
+    kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
+    polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),
     dryRunSlippageEnabled: envBoolean(env, "DRY_RUN_SLIPPAGE_ENABLED", true),
     dryRunKalshiSlippageCents: envNumber(env, "DRY_RUN_KALSHI_SLIPPAGE_CENTS", 1),
     dryRunPolymarketSlippageCents: envNumber(env, "DRY_RUN_POLYMARKET_SLIPPAGE_CENTS", 1),

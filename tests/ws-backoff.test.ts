@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildKalshiSubscribeMessage, parseKalshiTickerSnapshot } from "../src/kalshi/client";
+import { buildKalshiUserStreamSubscribeMessage, parseKalshiUserStreamMessage } from "../src/kalshi/user-stream";
 import {
   buildPolymarketSubscribeMessage,
   buildPolymarketSubscriptionUpdate,
   PolymarketBookParser,
   parsePolymarketBookSocketPayload,
 } from "../src/polymarket/client";
+import { buildPolymarketUserSubscribeMessage, parsePolymarketUserStreamPayload } from "../src/polymarket/user-stream";
 import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../src/ws/reconnect";
 
 test("websocket rate-limit and reconnect delays follow backoff policy", () => {
@@ -24,7 +26,7 @@ test("subscription messages are deterministic for reconnect resubscription", () 
   assert.deepEqual(buildKalshiSubscribeMessage(7, ["B", "A"]), {
     id: 7,
     cmd: "subscribe",
-    params: { channels: ["ticker"], market_tickers: ["A", "B"] },
+    params: { channels: ["orderbook_delta"], market_tickers: ["A", "B"] },
   });
   assert.deepEqual(buildPolymarketSubscribeMessage(["token-b", "token-a"]), {
     type: "market",
@@ -39,6 +41,20 @@ test("subscription messages are deterministic for reconnect resubscription", () 
   assert.deepEqual(buildPolymarketSubscriptionUpdate("unsubscribe", ["token-b", "token-a"]), {
     operation: "unsubscribe",
     assets_ids: ["token-a", "token-b"],
+  });
+  assert.deepEqual(buildKalshiUserStreamSubscribeMessage(9, ["KXBTC-B", "KXBTC-A"]), {
+    id: 9,
+    cmd: "subscribe",
+    params: { channels: ["user_orders", "fill"], market_tickers: ["KXBTC-A", "KXBTC-B"] },
+  });
+  assert.deepEqual(buildPolymarketUserSubscribeMessage({
+    key: "key",
+    secret: "secret",
+    passphrase: "passphrase",
+  }, ["condition-b", "condition-a"]), {
+    auth: { apiKey: "key", secret: "secret", passphrase: "passphrase" },
+    markets: ["condition-a", "condition-b"],
+    type: "user",
   });
 });
 
@@ -96,4 +112,75 @@ test("Polymarket CLOB websocket parser ignores heartbeat text frames", () => {
     asset_id: "token",
     best_ask: "0.45",
   });
+});
+
+test("authenticated user stream parsers normalize venue order events", () => {
+  const kalshiOrder = parseKalshiUserStreamMessage({
+    type: "user_order",
+    sid: 22,
+    msg: {
+      order_id: "kalshi-order",
+      client_order_id: "kalshi-client",
+      ticker: "KXBTC15M",
+      status: "executed",
+      side: "yes",
+      yes_price_dollars: "0.3500",
+      fill_count_fp: "5.00",
+      remaining_count_fp: "0.00",
+      created_ts_ms: 1_800_000_000_123,
+    },
+  }, 1_800_000_000_200);
+  assert.equal(kalshiOrder?.venue, "kalshi");
+  assert.equal(kalshiOrder?.eventType, "user_order");
+  assert.equal(kalshiOrder?.clientOrderId, "kalshi-client");
+  assert.equal(kalshiOrder?.fillCount, 5);
+  assert.equal(kalshiOrder?.fillPrice, 0.35);
+
+  const kalshiFill = parseKalshiUserStreamMessage({
+    type: "fill",
+    sid: 23,
+    msg: {
+      order_id: "kalshi-order",
+      market_ticker: "KXBTC15M",
+      purchased_side: "no",
+      yes_price_dollars: "0.81",
+      count_fp: "5.00",
+      ts_ms: 1_800_000_000_300,
+    },
+  }, 1_800_000_000_350);
+  assert.equal(kalshiFill?.status, "filled");
+  assert.equal(kalshiFill?.fillPrice, 0.19);
+
+  const [polyTrade, polyOrder] = parsePolymarketUserStreamPayload([
+    {
+      event_type: "trade",
+      asset_id: "yes-token",
+      market: "condition",
+      status: "MATCHED",
+      taker_order_id: "poly-order",
+      side: "BUY",
+      size: "5",
+      price: "0.91",
+      timestamp: "1800000000",
+    },
+    {
+      event_type: "order",
+      id: "poly-order",
+      asset_id: "yes-token",
+      market: "condition",
+      type: "UPDATE",
+      original_size: "5",
+      size_matched: "5",
+      price: "0.91",
+      side: "BUY",
+      timestamp: "1800000001",
+    },
+  ], 1_800_000_001_100);
+  assert.equal(polyTrade.venue, "polymarket");
+  assert.equal(polyTrade.eventType, "trade");
+  assert.equal(polyTrade.status, "matched");
+  assert.equal(polyTrade.fillCount, 5);
+  assert.equal(polyTrade.fillPrice, 0.91);
+  assert.equal(polyOrder.status, "matched");
+  assert.equal(polyOrder.remainingCount, 0);
 });

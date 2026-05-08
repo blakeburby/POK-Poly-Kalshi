@@ -24,7 +24,9 @@ export interface LiveOrderContext {
   clientOrderId: string;
   size: number;
   maxBuyPrice: number;
+  requiredCollateral?: number;
   requestedAt?: number;
+  orderGroupId?: string;
 }
 
 export interface VenueOrderResult {
@@ -37,6 +39,8 @@ export interface VenueOrderResult {
   requestedAt: string;
   respondedAt: string;
   error: string | null;
+  fee?: number | null;
+  exchangeTimestampMs?: number | null;
 }
 
 export interface VenueOrderClient {
@@ -70,6 +74,7 @@ export type PolymarketGeoblockChecker = (now: number) => Promise<PolymarketGeobl
 export interface PolymarketClobClientBundle {
   client: PolymarketClobLike;
   credentialsSource: PolymarketCredentialsSource;
+  creds?: ApiKeyCreds;
 }
 
 export interface PolymarketApiKeyProvider {
@@ -238,7 +243,7 @@ function requireKalshiConfigured(now: number): VenueExecutionReadiness {
 export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): Record<string, string | boolean> {
   const isYes = leg.direction === "yes";
   const yesBookPrice = isYes ? context.maxBuyPrice : 1 - context.maxBuyPrice;
-  return {
+  const body: Record<string, string | boolean> = {
     ticker: leg.contractId,
     client_order_id: context.clientOrderId,
     side: isYes ? "bid" : "ask",
@@ -248,6 +253,8 @@ export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): 
     self_trade_prevention_type: "taker_at_cross",
     cancel_order_on_pause: true,
   };
+  if (context.orderGroupId) body.order_group_id = context.orderGroupId;
+  return body;
 }
 
 export class KalshiOrderClient implements VenueOrderClient {
@@ -282,6 +289,8 @@ export class KalshiOrderClient implements VenueOrderClient {
     const yesFillPrice = finiteOrNull(payload.average_fill_price);
     const fillPrice = yesFillPrice == null ? null : leg.direction === "yes" ? yesFillPrice : roundPrice(1 - yesFillPrice);
     const fillCount = finiteOrNull(payload.fill_count);
+    const fee = finiteOrNull(payload.average_fee_paid);
+    const exchangeTimestampMs = finiteOrNull(payload.ts_ms);
     return {
       venue: this.venue,
       clientOrderId: String(payload.client_order_id ?? context.clientOrderId),
@@ -292,6 +301,8 @@ export class KalshiOrderClient implements VenueOrderClient {
       requestedAt: isoFromMs(requestedAt),
       respondedAt: isoFromMs(respondedAt),
       error: null,
+      fee,
+      exchangeTimestampMs,
     };
   }
 }
@@ -362,7 +373,7 @@ function exactFillError(venue: Venue, fillCount: number | null, requestedSize: n
     : `${venue} filled ${fillCount} shares for requested exact size ${requestedSize}`;
 }
 
-async function defaultPolymarketClientFactory(config: AppConfig): Promise<PolymarketClobClientBundle> {
+export async function resolvePolymarketApiCreds(config: AppConfig): Promise<{ creds: ApiKeyCreds; source: PolymarketCredentialsSource }> {
   if (!config.polymarketPrivateKey) throw new Error("POLYMARKET_PRIVATE_KEY is required for live trading");
   const account = privateKeyToAccount(normalizePrivateKey(config.polymarketPrivateKey));
   const walletClient = createWalletClient({
@@ -377,7 +388,7 @@ async function defaultPolymarketClientFactory(config: AppConfig): Promise<Polyma
     throw new Error("POLYMARKET_FUNDER_ADDRESS is required for proxy/safe signatures");
   }
   const configuredCreds = polymarketApiCredsFromConfig(config);
-  const resolved = configuredCreds
+  return configuredCreds
     ? { creds: configuredCreds, source: "configured" as const }
     : await withMutedPolymarketClientLogs(async () => {
       const l1Client = new ClobClient({
@@ -390,6 +401,23 @@ async function defaultPolymarketClientFactory(config: AppConfig): Promise<Polyma
       });
       return deriveOrCreatePolymarketApiCreds(l1Client);
     });
+}
+
+export async function defaultPolymarketClientFactory(config: AppConfig): Promise<PolymarketClobClientBundle> {
+  if (!config.polymarketPrivateKey) throw new Error("POLYMARKET_PRIVATE_KEY is required for live trading");
+  const account = privateKeyToAccount(normalizePrivateKey(config.polymarketPrivateKey));
+  const walletClient = createWalletClient({
+    account,
+    chain: viemChainFromConfig(config.polymarketChainId),
+    transport: http(),
+  });
+  const chain = chainFromConfig(config.polymarketChainId);
+  const signatureType = signatureTypeFromConfig(config.polymarketSignatureType);
+  const funderAddress = config.polymarketFunderAddress || undefined;
+  if (signatureType !== SignatureTypeV2.EOA && !funderAddress) {
+    throw new Error("POLYMARKET_FUNDER_ADDRESS is required for proxy/safe signatures");
+  }
+  const resolved = await resolvePolymarketApiCreds(config);
   return {
     client: new ClobClient({
       host: config.polymarketClobHost,
@@ -401,6 +429,7 @@ async function defaultPolymarketClientFactory(config: AppConfig): Promise<Polyma
       throwOnError: true,
     }),
     credentialsSource: resolved.source,
+    creds: resolved.creds,
   };
 }
 
@@ -416,16 +445,26 @@ export class PolymarketOrderClient implements VenueOrderClient {
   ) {}
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
-    if (this.cachedReadiness && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000) return this.cachedReadiness;
+    return this.checkReadiness(now);
+  }
+
+  private async checkReadiness(
+    now = Date.now(),
+    options: { force?: boolean; requiredCollateral?: number } = {},
+  ): Promise<VenueExecutionReadiness> {
+    const requiredCollateral = options.requiredCollateral ?? this.config.liveOrderSize;
+    const useCache = !options.force && options.requiredCollateral == null;
+    if (useCache && this.cachedReadiness && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000) return this.cachedReadiness;
     if (!this.config.polymarketPrivateKey) {
-      this.cachedReadiness = configuredReadiness(false, "POLYMARKET_PRIVATE_KEY is required for signing live Polymarket orders", now);
-      return this.cachedReadiness;
+      const readiness = configuredReadiness(false, "POLYMARKET_PRIVATE_KEY is required for signing live Polymarket orders", now);
+      if (useCache) this.cachedReadiness = readiness;
+      return readiness;
     }
     const signatureType = signatureTypeFromConfig(this.config.polymarketSignatureType);
     const signerAddress = polymarketSignerAddress(this.config);
     const funderAddress = this.config.polymarketFunderAddress || null;
     if (signatureType !== SignatureTypeV2.EOA && !funderAddress) {
-      this.cachedReadiness = {
+      const readiness = {
         configured: true,
         ready: false,
         reason: "POLYMARKET_FUNDER_ADDRESS is required for proxy/safe signatures",
@@ -435,14 +474,15 @@ export class PolymarketOrderClient implements VenueOrderClient {
         signerAddress: maskAddress(signerAddress),
         funderAddress: null,
         signatureType: this.config.polymarketSignatureType,
-        requiredCollateral: this.config.liveOrderSize,
+        requiredCollateral,
       };
-      return this.cachedReadiness;
+      if (useCache) this.cachedReadiness = readiness;
+      return readiness;
     }
 
     const geoblock = await this.geoblockChecker(now);
     if (geoblock.blocked !== false) {
-      this.cachedReadiness = {
+      const readiness = {
         configured: true,
         ready: false,
         reason: geoblock.reason ?? "Polymarket geoblock status is unknown from worker egress",
@@ -455,10 +495,11 @@ export class PolymarketOrderClient implements VenueOrderClient {
         clobCredentialsSource: null,
         clobCredentialsDerived: null,
         clobBalanceSynced: null,
-        requiredCollateral: this.config.liveOrderSize,
+        requiredCollateral,
         ...geoblockReadinessFields(geoblock),
       };
-      return this.cachedReadiness;
+      if (useCache) this.cachedReadiness = readiness;
+      return readiness;
     }
 
     try {
@@ -482,15 +523,14 @@ export class PolymarketOrderClient implements VenueOrderClient {
       }
       const finalRawBalance = finiteOrNull(balanceAllowance.balance);
       const finalRawAllowance = finiteOrNull(balanceAllowance.allowance);
-      const requiredCollateral = this.config.liveOrderSize;
       const insufficientBalance = balance == null || balance <= 0 || balance + 1e-9 < requiredCollateral;
       const insufficientAllowance = allowance != null && allowance + 1e-9 < requiredCollateral;
       const reason = insufficientBalance
-        ? `Polymarket collateral balance ${balance ?? 0} is below required canary collateral ${requiredCollateral}; verify POLYMARKET_FUNDER_ADDRESS points to the funded Polymarket proxy wallet`
+        ? `Polymarket collateral balance ${balance ?? 0} is below required live collateral ${requiredCollateral}; verify POLYMARKET_FUNDER_ADDRESS points to the funded Polymarket proxy wallet`
         : insufficientAllowance
-          ? `Polymarket collateral allowance ${allowance ?? 0} is below required canary collateral ${requiredCollateral}`
+          ? `Polymarket collateral allowance ${allowance ?? 0} is below required live collateral ${requiredCollateral}`
           : null;
-      this.cachedReadiness = {
+      const readiness = {
         configured: true,
         ready: reason == null,
         reason,
@@ -510,8 +550,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
         requiredCollateral,
         ...geoblockReadinessFields(geoblock),
       };
+      if (useCache) this.cachedReadiness = readiness;
+      return readiness;
     } catch (error) {
-      this.cachedReadiness = {
+      const readiness = {
         configured: true,
         ready: false,
         reason: sanitizeError(error),
@@ -524,16 +566,20 @@ export class PolymarketOrderClient implements VenueOrderClient {
         clobCredentialsSource: null,
         clobCredentialsDerived: null,
         clobBalanceSynced: null,
-        requiredCollateral: this.config.liveOrderSize,
+        requiredCollateral,
         ...geoblockReadinessFields(geoblock),
       };
+      if (useCache) this.cachedReadiness = readiness;
+      return readiness;
     }
-    return this.cachedReadiness;
   }
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     if (!leg.tokenId) throw new Error("Polymarket token id is required for live trading");
-    const readiness = await this.readiness(context.requestedAt ?? Date.now());
+    const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
+      force: true,
+      requiredCollateral: context.requiredCollateral,
+    });
     if (!readiness.ready) throw new Error(readiness.reason ?? "Polymarket live readiness failed");
     const tokenId = leg.tokenId;
     const requestedAt = context.requestedAt ?? Date.now();
@@ -580,6 +626,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const makingAmount = finiteOrNull(response.makingAmount);
     const fillPrice = makingAmount != null && fillCount != null && fillCount > 0 ? roundPrice(makingAmount / fillCount) : context.maxBuyPrice;
     const fillError = exactFillError(this.venue, fillCount, context.size);
+    this.cachedReadiness = null;
     return {
       venue: this.venue,
       clientOrderId: context.clientOrderId,
@@ -590,12 +637,18 @@ export class PolymarketOrderClient implements VenueOrderClient {
       requestedAt: isoFromMs(requestedAt),
       respondedAt: isoFromMs(respondedAt),
       error: fillError,
+      fee: null,
+      exchangeTimestampMs: null,
     };
   }
 
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     if (!leg.tokenId) return "Polymarket token id is required for live trading";
-    const readiness = await this.readiness(context.requestedAt ?? Date.now());
+    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
+      force: true,
+      requiredCollateral,
+    });
     if (!readiness.ready) return readiness.reason ?? "Polymarket live readiness failed";
     const { client } = await this.client();
     const book = await withMutedPolymarketClientLogs(() => client.getOrderBook(leg.tokenId as string));
@@ -628,6 +681,8 @@ export function failedVenueResult(venue: Venue, clientOrderId: string, error: un
     requestedAt: isoFromMs(requestedAt),
     respondedAt: isoFromMs(Date.now()),
     error: sanitizeError(error),
+    fee: null,
+    exchangeTimestampMs: null,
   };
 }
 

@@ -6,16 +6,21 @@ import { loadConfig } from "./config";
 import { handleDashboardRequest } from "./dashboard/worker-api";
 import { createPool } from "./db/pool";
 import { runMigrations } from "./db/migrate";
+import { LiveExecutionLockStore } from "./db/live-execution-locks";
 import { PolymarketPriceBeatStore } from "./db/polymarket-price-beats";
 import { SignalStore } from "./db/signals";
+import { VenueOrderEventHub, VenueOrderEventStore } from "./db/venue-order-events";
 import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
 import { DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
+import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator } from "./execution/venue-confirmations";
 import { KalshiTickerClient } from "./kalshi/client";
+import { KalshiUserStreamClient } from "./kalshi/user-stream";
 import { LatencyMonitor } from "./latency/metrics";
 import { getRecentLogs, logEvent } from "./logger";
 import { PolymarketBookClient } from "./polymarket/client";
 import { PolymarketPriceToBeatService } from "./polymarket/price-to-beat";
+import { PolymarketUserStreamClient } from "./polymarket/user-stream";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
 import { CoalescedScanScheduler } from "./scanner/scheduler";
@@ -33,6 +38,8 @@ async function main(): Promise<void> {
 
   const books = new BookStore();
   const signals = new SignalStore(pool);
+  const liveLocks = new LiveExecutionLockStore(pool);
+  const orderEvents = new VenueOrderEventHub(new VenueOrderEventStore(pool));
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
@@ -42,13 +49,35 @@ async function main(): Promise<void> {
     analytics.reconcileFilledSignals(await signals.listFilledSignalsSince(oldestAnalyticsSinceMs(Date.now()), 10_000), Date.now());
   }
   await reconcileAnalytics();
-  const liveReadinessProbe = new LiveExecutor(config, books);
+  const kalshiUserStream = config.liveUserStreamsEnabled ? new KalshiUserStreamClient(config.kalshiUserWsUrl, orderEvents, undefined, liveLocks) : null;
+  const polymarketUserStream = config.liveUserStreamsEnabled ? PolymarketUserStreamClient.fromConfig(config, orderEvents, liveLocks) : null;
+  const confirmationMonitor = new LiveVenueConfirmationCoordinator({
+    enabled: config.liveUserStreamsEnabled,
+    confirmTimeoutMs: config.liveUserStreamConfirmTimeoutMs,
+    reconcileBeforeTrade: config.liveReconcileBeforeTrade,
+    eventSource: orderEvents,
+    streamReadiness: (now) => buildUserStreamReadiness(
+      config.liveUserStreamsEnabled,
+      config.liveUserStreamConfirmTimeoutMs,
+      kalshiUserStream?.status(),
+      polymarketUserStream?.status(),
+      now,
+    ),
+    reconciliationStore: signals,
+    liveLocks,
+    now: Date.now,
+  });
+  const liveReadinessProbe = new LiveExecutor(config, books, undefined, undefined, Date.now, liveLocks, orderEvents, confirmationMonitor);
   const executor = config.liveTrading ? liveReadinessProbe : new DryRunExecutor(DryRunSlippageModel.fromConfig(config), config.minProfitDollars);
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,
     staleBookMs: config.staleBookMs,
     executionConcurrency: config.executionConcurrency,
+    liveTrading: config.liveTrading,
+    maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
+    liveExposure: signals,
+    liveLocks,
     latency,
     analytics,
   });
@@ -106,6 +135,10 @@ async function main(): Promise<void> {
         polymarketPriceToBeat.setCaptureWindows(polymarketResult.captureWindows);
         kalshi.setSubscriptions(books.getKalshiTickers());
         polymarket.setSubscriptions(books.getPolymarketTokenIds());
+        if (config.liveUserStreamsEnabled) {
+          kalshiUserStream?.setSubscriptions(books.getKalshiTickers());
+          polymarketUserStream?.setSubscriptions(books.getPolymarketConditionIds());
+        }
         lastDiscoveryAt = Date.now();
         lastDiscoveryError = null;
       } catch (error) {
@@ -215,6 +248,8 @@ async function main(): Promise<void> {
     for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();
     polymarket.close();
+    kalshiUserStream?.close();
+    polymarketUserStream?.close();
     polymarketPriceToBeat.close();
     server.close();
     await pool.end();

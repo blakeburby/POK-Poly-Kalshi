@@ -101,6 +101,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       minProfitDollars: 0.05,
       reentryIntervalMs: 15_000,
       staleBookMs: 10_000,
+      liveMaxTradesPerWindow: 1,
     },
     discovery: { lastDiscoveryAt: 1_800_000_009_000, lastDiscoveryError: null },
     scanner: { scanning: false, lastScanAt: 1_800_000_009_500, lastCandidateCount: 2, queuedExecutions: 1, activeExecutions: 1 },
@@ -472,6 +473,64 @@ test("dashboard renders loading, degraded, and live terminal states", () => {
   assert.match(live, /Open payoff detail for/);
   assert.match(live, /SSE LIVE/);
   assert.match(live, /12c/);
+});
+
+test("live dashboard surfaces circuit breaker state and lock reason", () => {
+  const base = snapshot();
+  const lockReason = "live safety lock engaged: realized edge -0.1000 below threshold 0.0500";
+  const liveLocked = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        health: { ...base.health, liveTrading: true, liveMaxTradesPerWindow: 1 },
+        execution: {
+          mode: "live",
+          liveTrading: true,
+          protectedOnly: true,
+          orderSize: 5,
+          orderType: "FOK",
+          maxSlippageCents: 1,
+          minExpiryMs: 30_000,
+          maxTradesPerWindow: 1,
+          collateralBufferDollars: 0.25,
+          partialFillLocked: false,
+          circuitBreakerLocked: true,
+          circuitBreakerReason: lockReason,
+          circuitBreaker: {
+            id: 1,
+            createdAt: "2026-04-29T20:00:00.000Z",
+            reason: lockReason,
+            severity: "critical",
+            sourceSignalId: 42,
+            executionGroupId: "group",
+            details: {},
+            clearedAt: null,
+            clearReason: null,
+          },
+          kalshi: { configured: true, ready: true, reason: null, balance: null, allowance: null, lastCheckedAt: base.generatedAt },
+          polymarket: { configured: true, ready: true, reason: null, balance: 7.45, allowance: null, lastCheckedAt: base.generatedAt, requiredCollateral: 4.8 },
+          lastAttempt: {
+            executionGroupId: "group",
+            action: "failed",
+            partialFill: false,
+            failureReason: lockReason,
+            liveLockReason: lockReason,
+            kalshiStatus: "filled",
+            polymarketStatus: "filled",
+            completedAt: base.generatedAt,
+          },
+        },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(liveLocked, /CIRCUIT LOCK/);
+  assert.match(liveLocked, /LOCK REASON/);
+  assert.match(liveLocked, /realized edge -0.1000 below threshold 0.0500/);
+  assert.match(liveLocked, /Max\/Window/);
+  assert.match(liveLocked, /NO-GO/);
 });
 
 test("analytics panel renders empty worker and no-trade states", () => {

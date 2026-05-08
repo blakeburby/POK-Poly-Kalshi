@@ -16,8 +16,10 @@ import {
   type VenueOrderClient,
   type VenueOrderResult,
 } from "../src/execution/live-clients";
+import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
-import type { ArbLeg, Venue, VenueExecutionReadiness } from "../src/types";
+import type { ArbLeg, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
+import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "../src/execution/venue-confirmations";
 import { contract } from "./helpers";
 
 function config(input: Partial<AppConfig> = {}): AppConfig {
@@ -58,6 +60,20 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderSize: 1,
     liveMaxSlippageCents: 1,
     liveMinExpiryMs: 30_000,
+    liveMaxTradesPerWindow: 1,
+    liveCollateralBufferDollars: 0.25,
+    liveQuoteMaxAgeMs: 750,
+    liveQuoteSyncMaxSkewMs: 250,
+    liveMinBookDepthShares: 1,
+    liveEdgeBufferDollars: 0.03,
+    liveOrderTimeoutMs: 2_500,
+    liveKalshiOrderGroupEnabled: false,
+    liveKalshiOrderGroupId: "",
+    liveUserStreamsEnabled: false,
+    liveUserStreamConfirmTimeoutMs: 2_500,
+    liveReconcileBeforeTrade: false,
+    kalshiUserWsUrl: "",
+    polymarketUserWsUrl: "",
     dryRunSlippageEnabled: true,
     dryRunKalshiSlippageCents: 1,
     dryRunPolymarketSlippageCents: 1,
@@ -105,6 +121,76 @@ class FakeVenueClient implements VenueOrderClient {
       respondedAt: "2026-04-29T20:00:00.050Z",
       error: null,
       ...this.result,
+    };
+  }
+}
+
+class FakeLiveLockStore implements LiveExecutionLockWriter {
+  lock: LiveExecutionLock | null = null;
+  engageCalls = 0;
+
+  async getActiveLock(): Promise<LiveExecutionLock | null> {
+    return this.lock;
+  }
+
+  async engageLock(input: LiveExecutionLockInput): Promise<LiveExecutionLock> {
+    this.engageCalls += 1;
+    if (this.lock) return this.lock;
+    this.lock = {
+      id: 1,
+      createdAt: new Date(1_800_000_000_000).toISOString(),
+      reason: input.reason,
+      severity: input.severity ?? "critical",
+      sourceSignalId: input.sourceSignalId ?? null,
+      executionGroupId: input.executionGroupId ?? null,
+      details: input.details ?? {},
+      clearedAt: null,
+      clearReason: null,
+    };
+    return this.lock;
+  }
+}
+
+class FakeConfirmationMonitor implements VenueConfirmationMonitor {
+  readonly waitCalls: Venue[] = [];
+  preflightReason: string | null = null;
+  resultStatus: VenueConfirmationResult["status"] = "confirmed";
+
+  userStreamReadiness(now = 1_800_000_000_000) {
+    const stream = {
+      enabled: true,
+      connected: true,
+      subscribed: true,
+      reason: null,
+      lastConnectedAt: now,
+      lastEventAt: now,
+      lastError: null,
+    };
+    return buildUserStreamReadiness(true, 2_500, stream, stream, now);
+  }
+
+  reconciliationReadiness(now = 1_800_000_000_000) {
+    return defaultReconciliationReadiness(true, now, this.preflightReason);
+  }
+
+  async preflight(): Promise<string | null> {
+    return this.preflightReason;
+  }
+
+  async waitForVenueResult(result: VenueOrderResult): Promise<VenueConfirmationResult> {
+    this.waitCalls.push(result.venue);
+    return {
+      venue: result.venue,
+      status: this.resultStatus,
+      reason: this.resultStatus === "confirmed" ? null : `${result.venue} stream ${this.resultStatus}`,
+      clientOrderId: result.clientOrderId,
+      venueOrderId: result.orderId,
+      fillCount: result.fillCount,
+      fillPrice: result.fillPrice,
+      fee: result.fee ?? null,
+      exchangeTimestampMs: result.exchangeTimestampMs ?? null,
+      receivedAtMs: 1_800_000_000_100,
+      eventType: "test",
     };
   }
 }
@@ -503,6 +589,65 @@ test("Polymarket readiness syncs CLOB balance allowance before deciding readines
   assert.equal(fake.updateCalls, 1);
 });
 
+test("Polymarket live preflight forces fresh collateral for candidate-specific spend", async () => {
+  class BalanceChangingFakeClob implements PolymarketClobLike {
+    balanceCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      this.balanceCalls += 1;
+      return {
+        balance: this.balanceCalls === 1 ? "9000000" : "2000000",
+        allowance: "10000000",
+      };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+
+  const fake = new BalanceChangingFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveOrderSize: 5,
+    liveCollateralBufferDollars: 0.25,
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => fake, allowedGeoblock);
+
+  const cached = await client.readiness(1_800_000_000_000);
+  assert.equal(cached.ready, true);
+  assert.equal(cached.balance, 9);
+
+  const reason = await client.preflightOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.91,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.91,
+    requiredCollateral: 4.8,
+    requestedAt: 1_800_000_000_500,
+  });
+
+  assert.match(reason ?? "", /balance 2 is below required live collateral 4.8/);
+  assert.equal(fake.balanceCalls, 2);
+});
+
 test("live executor fills only protected candidates after stale book and capped-edge preflight", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
@@ -541,6 +686,115 @@ test("live executor supports configured venue minimum size when both venues fill
   assert.equal(result.polymarketFillCount, 5);
   assert.equal(kalshi.placed[0].context.size, 5);
   assert.equal(polymarket.placed[0].context.size, 5);
+});
+
+test("live executor keeps immediate hedge flow and then requires private stream confirmations", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const monitor = new FakeConfirmationMonitor();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveReconcileBeforeTrade: true }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.deepEqual(monitor.waitCalls, ["kalshi", "polymarket"]);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(result.venueConfirmations?.kalshi?.status, "confirmed");
+  assert.equal(result.venueConfirmations?.polymarket?.status, "confirmed");
+});
+
+test("live executor locks when private stream confirmation times out", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.resultStatus = "timeout";
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true }),
+    books,
+    new FakeVenueClient("kalshi"),
+    new FakeVenueClient("polymarket"),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(locks.engageCalls, 1);
+  assert.match((await locks.getActiveLock())?.reason ?? "", /private stream confirmation timeout/);
+});
+
+test("live executor locks when realized fills no longer satisfy guaranteed edge", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, minProfitDollars: 0.05 }),
+    books,
+    new FakeVenueClient("kalshi", { fillPrice: 0.19, fillCount: 5 }),
+    new FakeVenueClient("polymarket", { fillPrice: 0.91, fillCount: 5 }),
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, false);
+  assert.match(result.liveLockReason ?? "", /realized edge -0.1000 below threshold 0.0500/);
+  assert.equal(locks.engageCalls, 1);
+  assert.equal((await locks.getActiveLock())?.reason, result.liveLockReason);
+  const readiness = await executor.readiness(now);
+  assert.equal(readiness.circuitBreakerLocked, true);
+  assert.equal(readiness.circuitBreakerReason, result.liveLockReason);
+});
+
+test("live executor refuses to trade when a persistent circuit breaker is active", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  await locks.engageLock({ reason: "manual incident lock", executionGroupId: "prior-group" });
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.match(result.failureReason ?? "", /live circuit breaker locked: manual incident lock/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+  const readiness = await executor.readiness(now);
+  assert.equal(readiness.circuitBreakerLocked, true);
+  assert.equal(readiness.circuitBreaker?.executionGroupId, "prior-group");
 });
 
 test("live executor does not submit Polymarket when Kalshi fails first", async () => {
@@ -638,8 +892,8 @@ test("live executor skips stale or below-threshold capped live books before plac
   assert.equal(polymarket.placed.length, 0);
 
   const expensiveBooks = new BookStore();
-  expensiveBooks.setPolymarketContracts([{ ...lower, yesAsk: 0.48, updatedAt: now }]);
-  expensiveBooks.setKalshiContracts([{ ...higher, noAsk: 0.48, updatedAt: now }]);
+  expensiveBooks.setPolymarketContracts([{ ...lower, yesAsk: 0.48, yesAskLevels: [{ price: 0.48, size: 999 }], updatedAt: now }]);
+  expensiveBooks.setKalshiContracts([{ ...higher, noAsk: 0.48, noAskLevels: [{ price: 0.48, size: 999 }], updatedAt: now }]);
   const expensiveExecutor = new LiveExecutor(config(), expensiveBooks, kalshi, polymarket, () => now);
   const expensive = await expensiveExecutor.execute(candidate);
   assert.equal(expensive.action, "skipped");
@@ -673,9 +927,9 @@ test("live executor rejects dead-zone candidates and locks after one-sided fills
   const partial = await executor.execute(candidate);
   assert.equal(partial.action, "failed");
   assert.equal(partial.partialFill, true);
-  assert.match(partial.failureReason ?? "", /partial fill lock engaged/);
+  assert.match(partial.failureReason ?? "", /venue fill mismatch/);
   const readiness = await executor.readiness(now);
   assert.equal(readiness.partialFillLocked, true);
   const locked = await executor.execute(candidate);
-  assert.match(locked.failureReason ?? "", /locked after partial fill/);
+  assert.match(locked.failureReason ?? "", /locked after unsafe fill/);
 });

@@ -42,6 +42,14 @@ export class BookStore {
       noAsk: snapshot.noAsk,
       yesBid: snapshot.yesBid,
       noBid: snapshot.noBid,
+      yesAskLevels: snapshot.yesAskLevels,
+      noAskLevels: snapshot.noAskLevels,
+      yesBidLevels: snapshot.yesBidLevels,
+      noBidLevels: snapshot.noBidLevels,
+      sequence: snapshot.sequence,
+      bookHash: snapshot.bookHash,
+      tickSize: snapshot.tickSize,
+      tickSizeChangedAt: snapshot.tickSizeChangedAt,
       updatedAt: snapshot.timestamp,
     });
   }
@@ -57,6 +65,13 @@ export class BookStore {
       noAsk: mapping.side === "no" ? snapshot.bestAsk : contract.noAsk,
       yesBid: mapping.side === "yes" ? snapshot.bestBid : contract.yesBid,
       noBid: mapping.side === "no" ? snapshot.bestBid : contract.noBid,
+      yesAskLevels: mapping.side === "yes" ? snapshot.askLevels : contract.yesAskLevels,
+      noAskLevels: mapping.side === "no" ? snapshot.askLevels : contract.noAskLevels,
+      yesBidLevels: mapping.side === "yes" ? snapshot.bidLevels : contract.yesBidLevels,
+      noBidLevels: mapping.side === "no" ? snapshot.bidLevels : contract.noBidLevels,
+      bookHash: snapshot.hash ?? contract.bookHash,
+      tickSize: snapshot.tickSize ?? contract.tickSize,
+      tickSizeChangedAt: snapshot.tickSizeChangedAt ?? contract.tickSizeChangedAt,
       updatedAt: snapshot.timestamp,
     });
   }
@@ -71,6 +86,10 @@ export class BookStore {
 
   getPolymarketTokenIds(): string[] {
     return [...this.polyTokenToContract.keys()];
+  }
+
+  getPolymarketConditionIds(): string[] {
+    return [...this.polymarket.keys()];
   }
 
   getKalshiTickers(): string[] {
@@ -91,8 +110,15 @@ export class BookStore {
       noAsk: incoming.noAsk ?? existing.noAsk,
       yesBid: incoming.yesBid ?? existing.yesBid,
       noBid: incoming.noBid ?? existing.noBid,
+      yesAskLevels: incoming.yesAskLevels ?? existing.yesAskLevels,
+      noAskLevels: incoming.noAskLevels ?? existing.noAskLevels,
+      yesBidLevels: incoming.yesBidLevels ?? existing.yesBidLevels,
+      noBidLevels: incoming.noBidLevels ?? existing.noBidLevels,
+      sequence: incoming.sequence ?? existing.sequence,
+      bookHash: incoming.bookHash ?? existing.bookHash,
+      tickSize: incoming.tickSize ?? existing.tickSize,
+      tickSizeChangedAt: incoming.tickSizeChangedAt ?? existing.tickSizeChangedAt,
       updatedAt: Math.max(incoming.updatedAt, existing.updatedAt),
     };
   }
 }
-

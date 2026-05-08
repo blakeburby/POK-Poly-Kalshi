@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { LiveExecutionLockStore } from "../src/db/live-execution-locks";
 import { SignalStore, type Queryable } from "../src/db/signals";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
 import { contract } from "./helpers";
@@ -58,6 +59,25 @@ class FakeDb implements Queryable {
     }
     if (/RETURNING id/.test(sql)) return { rows: [{ id: 42 } as T] };
     if (/GROUP BY pair_key/.test(sql)) return { rows: [{ pair_key: "pair", filled_at_ms: "123000" } as T] };
+    if (/execution_group_id IS NOT NULL/.test(sql)) {
+      return {
+        rows: [{
+          id: 99,
+          pair_key: "pair",
+          expiry_ms: 1_800_000_000_000,
+          kalshi_contract_id: "kalshi",
+          polymarket_contract_id: "poly",
+          lower_venue: "polymarket",
+          lower_contract_id: "poly",
+          lower_direction: "yes",
+          higher_venue: "kalshi",
+          higher_contract_id: "kalshi",
+          higher_direction: "no",
+          kalshi_fill_count: 5,
+          polymarket_fill_count: 5,
+        } as T],
+      };
+    }
     if (/updated_at >= to_timestamp/.test(sql)) {
       return {
         rows: [{
@@ -104,6 +124,32 @@ class FakeDb implements Queryable {
           partial_fill: false,
         } as T],
       };
+    }
+    return { rows: [] };
+  }
+}
+
+class FakeLockDb implements Queryable {
+  readonly calls: { sql: string; values?: unknown[] }[] = [];
+  activeRows: Record<string, unknown>[] = [];
+
+  async query<T = Record<string, unknown>>(sql: string, values?: unknown[]): Promise<{ rows: T[] }> {
+    this.calls.push({ sql, values });
+    if (/SELECT/.test(sql) && /FROM live_execution_locks/.test(sql)) return { rows: this.activeRows as T[] };
+    if (/INSERT INTO live_execution_locks/.test(sql)) {
+      const row = {
+        id: 1,
+        created_at: "2026-04-29T20:00:00.000Z",
+        reason: values?.[0],
+        severity: values?.[1],
+        source_signal_id: values?.[2],
+        execution_group_id: values?.[3],
+        details: JSON.parse(String(values?.[4] ?? "{}")) as Record<string, unknown>,
+        cleared_at: null,
+        clear_reason: null,
+      };
+      this.activeRows = [row];
+      return { rows: [row as T] };
     }
     return { rows: [] };
   }
@@ -167,4 +213,38 @@ test("signal persistence exposes filled signals for analytics windows", async ()
   assert.equal(signals[0].partialFill, false);
   assert.equal(db.calls[0].values?.[0], 1_800_000_000_000);
   assert.equal(db.calls[0].values?.[1], 50);
+});
+
+test("signal persistence blocks live candidates with same-window exposure", async () => {
+  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
+  const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+
+  const store = new SignalStore(new FakeDb());
+  const maxTradeReason = await store.liveExposureBlockReason(candidate, 1_799_999_999_000, 1);
+  assert.match(maxTradeReason ?? "", /max trades per window/);
+  const legReason = await store.liveExposureBlockReason(candidate, 1_799_999_999_000, 2);
+  assert.match(legReason ?? "", /Kalshi leg kalshi already has exposure/);
+});
+
+test("live execution lock store persists a restart-safe active lock", async () => {
+  const db = new FakeLockDb();
+  const store = new LiveExecutionLockStore(db);
+
+  assert.equal(await store.getActiveLock(), null);
+  const lock = await store.engageLock({
+    reason: "live safety lock engaged: realized edge below threshold",
+    sourceSignalId: 42,
+    executionGroupId: "group",
+    details: { kalshiFillCount: 30, polymarketFillCount: 5 },
+  });
+  const duplicate = await store.engageLock({ reason: "second reason should not replace active lock" });
+
+  assert.equal(lock.reason, "live safety lock engaged: realized edge below threshold");
+  assert.equal(lock.sourceSignalId, 42);
+  assert.equal(lock.executionGroupId, "group");
+  assert.deepEqual(lock.details, { kalshiFillCount: 30, polymarketFillCount: 5 });
+  assert.equal(duplicate.reason, lock.reason);
+  assert.equal(db.calls.filter((call) => /INSERT INTO live_execution_locks/.test(call.sql)).length, 1);
 });

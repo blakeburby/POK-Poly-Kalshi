@@ -2,6 +2,11 @@ export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 
+export interface BookLevel {
+  price: number;
+  size: number;
+}
+
 export interface BinaryContract {
   venue: Venue;
   contractId: string;
@@ -12,6 +17,14 @@ export interface BinaryContract {
   noAsk: number | null;
   yesBid: number | null;
   noBid: number | null;
+  yesAskLevels?: BookLevel[];
+  noAskLevels?: BookLevel[];
+  yesBidLevels?: BookLevel[];
+  noBidLevels?: BookLevel[];
+  sequence?: number | null;
+  bookHash?: string | null;
+  tickSize?: number | null;
+  tickSizeChangedAt?: number | null;
   yesTokenId?: string | null;
   noTokenId?: string | null;
   title?: string | null;
@@ -79,6 +92,79 @@ export interface ArbCandidate {
   risk?: SyntheticStructureRisk;
 }
 
+export interface QuoteSnapshotLeg {
+  venue: Venue;
+  contractId: string;
+  direction: LegDirection;
+  topAsk: number | null;
+  worstAsk: number | null;
+  vwap: number | null;
+  depth: number;
+  depthRequired: number;
+  levelsConsumed: BookLevel[];
+  spread: number | null;
+  quoteAgeMs: number | null;
+  updatedAt: number | null;
+  sequence?: number | null;
+  bookHash?: string | null;
+  tickSize?: number | null;
+  tickSizeChangedAt?: number | null;
+}
+
+export interface QuoteSnapshot {
+  capturedAt: number;
+  quoteSkewMs: number | null;
+  kalshi: QuoteSnapshotLeg | null;
+  polymarket: QuoteSnapshotLeg | null;
+  projectedPremium: number | null;
+  projectedEdge: number | null;
+  projectedEdgeAfterFees: number | null;
+  minProfitDollars: number;
+  edgeBufferDollars: number;
+  failureReason: string | null;
+}
+
+export interface ExecutionTimings {
+  candidateToSubmitMs?: number | null;
+  kalshiRttMs?: number | null;
+  polymarketRttMs?: number | null;
+  totalMs?: number | null;
+}
+
+export interface VenueConfirmations {
+  kalshi?: Record<string, unknown> | null;
+  polymarket?: Record<string, unknown> | null;
+}
+
+export interface UserStreamVenueState {
+  enabled: boolean;
+  connected: boolean;
+  subscribed: boolean;
+  reason: string | null;
+  lastConnectedAt: number | null;
+  lastEventAt: number | null;
+  lastError: string | null;
+}
+
+export interface UserStreamReadiness {
+  enabled: boolean;
+  ready: boolean;
+  reason: string | null;
+  confirmTimeoutMs: number;
+  kalshi: UserStreamVenueState;
+  polymarket: UserStreamVenueState;
+  lastUserStreamEventAt: number | null;
+  confirmationLagMs: number | null;
+}
+
+export interface ReconciliationReadiness {
+  enabled: boolean;
+  clean: boolean;
+  reason: string | null;
+  checkedAt: number | null;
+  lastReconciliationAt: number | null;
+}
+
 export interface ExecutionResult {
   action: SignalAction;
   failureReason: string | null;
@@ -100,6 +186,12 @@ export interface ExecutionResult {
   kalshiError?: string | null;
   polymarketError?: string | null;
   partialFill?: boolean;
+  liveLockReason?: string | null;
+  quoteSnapshot?: QuoteSnapshot | null;
+  depthVwap?: number | null;
+  projectedEdgeAfterFees?: number | null;
+  executionTimings?: ExecutionTimings | null;
+  venueConfirmations?: VenueConfirmations | null;
 }
 
 export interface SignalInsert {
@@ -129,6 +221,11 @@ export interface SignalUpdate {
   kalshiError?: string | null;
   polymarketError?: string | null;
   partialFill?: boolean;
+  quoteSnapshot?: QuoteSnapshot | null;
+  depthVwap?: number | null;
+  projectedEdgeAfterFees?: number | null;
+  executionTimings?: ExecutionTimings | null;
+  venueConfirmations?: VenueConfirmations | null;
 }
 
 export interface DashboardSignal {
@@ -165,6 +262,11 @@ export interface DashboardSignal {
   kalshiError?: string | null;
   polymarketError?: string | null;
   partialFill?: boolean;
+  quoteSnapshot?: QuoteSnapshot | null;
+  depthVwap?: number | null;
+  projectedEdgeAfterFees?: number | null;
+  executionTimings?: ExecutionTimings | null;
+  venueConfirmations?: VenueConfirmations | null;
   risk?: SyntheticStructureRisk;
 }
 
@@ -197,9 +299,22 @@ export interface LiveExecutionLastAttempt {
   action: SignalAction;
   partialFill: boolean;
   failureReason: string | null;
+  liveLockReason?: string | null;
   kalshiStatus: string | null;
   polymarketStatus: string | null;
   completedAt: number;
+}
+
+export interface LiveExecutionLock {
+  id: number;
+  createdAt: string;
+  reason: string;
+  severity: "warn" | "critical";
+  sourceSignalId: number | null;
+  executionGroupId: string | null;
+  details: Record<string, unknown>;
+  clearedAt: string | null;
+  clearReason: string | null;
 }
 
 export interface LiveExecutionReadiness {
@@ -210,7 +325,20 @@ export interface LiveExecutionReadiness {
   orderType: string;
   maxSlippageCents: number;
   minExpiryMs: number;
+  maxTradesPerWindow: number;
+  collateralBufferDollars: number;
+  quoteMaxAgeMs: number;
+  quoteSyncMaxSkewMs: number;
+  minBookDepthShares: number;
+  edgeBufferDollars: number;
+  orderTimeoutMs: number;
+  kalshiOrderGroupEnabled: boolean;
+  userStreams: UserStreamReadiness;
+  reconciliation: ReconciliationReadiness;
   partialFillLocked: boolean;
+  circuitBreakerLocked: boolean;
+  circuitBreakerReason: string | null;
+  circuitBreaker: LiveExecutionLock | null;
   kalshi: VenueExecutionReadiness;
   polymarket: VenueExecutionReadiness;
   lastAttempt: LiveExecutionLastAttempt | null;
@@ -379,6 +507,15 @@ export interface DashboardSnapshot {
     minProfitDollars: number;
     reentryIntervalMs: number;
     staleBookMs: number;
+    liveMaxTradesPerWindow: number;
+    liveQuoteMaxAgeMs: number;
+    liveQuoteSyncMaxSkewMs: number;
+    liveMinBookDepthShares: number;
+    liveEdgeBufferDollars: number;
+    liveOrderTimeoutMs: number;
+    liveUserStreamsEnabled: boolean;
+    liveUserStreamConfirmTimeoutMs: number;
+    liveReconcileBeforeTrade: boolean;
   };
   latency?: DashboardLatencySnapshot;
   discovery: {
