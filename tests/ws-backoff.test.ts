@@ -8,7 +8,7 @@ import {
   PolymarketBookParser,
   parsePolymarketBookSocketPayload,
 } from "../src/polymarket/client";
-import { buildPolymarketUserSubscribeMessage, buildPolymarketUserSubscriptionUpdate, parsePolymarketUserStreamPayload } from "../src/polymarket/user-stream";
+import { buildPolymarketUserSubscribeMessage, parsePolymarketUserStreamPayload, parsePolymarketUserStreamSocketPayload } from "../src/polymarket/user-stream";
 import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../src/ws/reconnect";
 
 test("websocket rate-limit and reconnect delays follow backoff policy", () => {
@@ -54,10 +54,6 @@ test("subscription messages are deterministic for reconnect resubscription", () 
   }), {
     auth: { apiKey: "key", secret: "secret", passphrase: "passphrase" },
     type: "user",
-  });
-  assert.deepEqual(buildPolymarketUserSubscriptionUpdate("subscribe", ["condition-b", "condition-a"]), {
-    operation: "subscribe",
-    markets: ["condition-a", "condition-b"],
   });
 });
 
@@ -141,6 +137,16 @@ test("Polymarket CLOB websocket parser ignores heartbeat text frames", () => {
     asset_id: "token",
     best_ask: "0.45",
   });
+});
+
+test("Polymarket user websocket parser ignores benign text control frames", () => {
+  assert.equal(parsePolymarketUserStreamSocketPayload(Buffer.from("PONG")), null);
+  assert.equal(parsePolymarketUserStreamSocketPayload(Buffer.from("PING")), null);
+  assert.equal(parsePolymarketUserStreamSocketPayload(Buffer.from("NO NEW MARKETS")), null);
+  assert.throws(
+    () => parsePolymarketUserStreamSocketPayload(Buffer.from("INVALID OPERATION")),
+    /Unexpected token/,
+  );
 });
 
 test("authenticated user stream parsers normalize venue order events", () => {

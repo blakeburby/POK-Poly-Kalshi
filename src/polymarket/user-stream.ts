@@ -57,11 +57,10 @@ export function buildPolymarketUserSubscribeMessage(creds: ApiKeyCreds): Record<
   };
 }
 
-export function buildPolymarketUserSubscriptionUpdate(operation: "subscribe" | "unsubscribe", conditionIds: Iterable<string>): Record<string, unknown> {
-  return {
-    operation,
-    markets: [...conditionIds].sort(),
-  };
+export function parsePolymarketUserStreamSocketPayload(raw: WebSocket.RawData): VenueOrderEventInput[] | null {
+  const text = raw.toString().trim();
+  if (!text || ["PONG", "PING", "NO NEW MARKETS"].includes(text.toUpperCase())) return null;
+  return parsePolymarketUserStreamPayload(JSON.parse(text));
 }
 
 export function parsePolymarketUserStreamPayload(raw: unknown, receivedAtMs = Date.now()): VenueOrderEventInput[] {
@@ -204,9 +203,8 @@ export class PolymarketUserStreamClient {
 
     socket.on("message", (raw: WebSocket.RawData) => {
       try {
-        const text = raw.toString().trim();
-        if (!text || text.toUpperCase() === "PONG" || text.toUpperCase() === "PING") return;
-        const events = parsePolymarketUserStreamPayload(JSON.parse(text));
+        const events = parsePolymarketUserStreamSocketPayload(raw);
+        if (!events) return;
         for (const event of events) {
           this.state = { ...this.state, lastEventAt: event.receivedAtMs ?? Date.now(), reason: null };
           void this.events.recordEvent(event);
@@ -242,7 +240,6 @@ export class PolymarketUserStreamClient {
     try {
       const creds = await this.credentialsFactory();
       socket.send(JSON.stringify(buildPolymarketUserSubscribeMessage(creds)));
-      socket.send(JSON.stringify(buildPolymarketUserSubscriptionUpdate("subscribe", this.desired)));
       this.state = { ...this.state, subscribed: true, reason: null };
       logEvent({ category: "POLYMARKET_USER", message: "user websocket subscribed", context: { subscriptions: this.desired.size } });
     } catch (error) {
