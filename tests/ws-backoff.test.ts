@@ -51,8 +51,9 @@ test("subscription messages are deterministic for reconnect resubscription", () 
     key: "key",
     secret: "secret",
     passphrase: "passphrase",
-  }), {
+  }, ["condition-b", "condition-a"]), {
     auth: { apiKey: "key", secret: "secret", passphrase: "passphrase" },
+    markets: ["condition-a", "condition-b"],
     type: "user",
   });
 });
