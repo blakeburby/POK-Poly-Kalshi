@@ -33,6 +33,14 @@ function normalizeEventType(value: unknown): string | null {
   return raw ? raw.toLowerCase() : null;
 }
 
+function equalSets(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
 function normalizedOrderStatus(message: Record<string, unknown>): string {
   const rawStatus = stringOrNull(message.status);
   if (rawStatus && ["FAILED", "REJECTED", "CANCELED", "CANCELLED"].includes(rawStatus.toUpperCase())) {
@@ -163,14 +171,17 @@ export class PolymarketUserStreamClient {
   }
 
   setSubscriptions(conditionIds: Iterable<string>): void {
+    const next = new Set<string>();
+    for (const id of conditionIds) next.add(id);
+    const changed = !equalSets(this.desired, next);
     this.desired.clear();
-    for (const id of conditionIds) this.desired.add(id);
+    for (const id of next) this.desired.add(id);
     if (this.desired.size === 0) {
       this.state = { ...this.state, subscribed: false, reason: "no Polymarket markets discovered" };
       return;
     }
     if (this.socket?.readyState === WebSocket.OPEN) {
-      void this.subscribe(this.socket);
+      if (changed) this.reconnectForSubscriptionRefresh();
       return;
     }
     void this.ensureSocket();
@@ -227,14 +238,28 @@ export class PolymarketUserStreamClient {
     socket.on("close", (_code: number, reason: Buffer) => {
       const reasonText = reason.toString() || "closed";
       const wasConnected = this.state.connected || this.state.lastConnectedAt != null;
-      this.socket = null;
-      this.clearHeartbeat();
-      this.state = { ...this.state, connected: false, subscribed: false, reason: reasonText };
-      if (!this.intentionalClose) {
+      const isCurrentSocket = this.socket === socket;
+      if (isCurrentSocket) {
+        this.socket = null;
+        this.clearHeartbeat();
+        this.state = { ...this.state, connected: false, subscribed: false, reason: reasonText };
+      }
+      if (!this.intentionalClose && isCurrentSocket) {
         if (wasConnected) void this.lockOnDisconnect(reasonText);
         this.scheduleReconnect(reasonText);
       }
     });
+  }
+
+  private reconnectForSubscriptionRefresh(): void {
+    const socket = this.socket;
+    if (!socket) return;
+    this.intentionalClose = true;
+    this.clearHeartbeat();
+    this.socket = null;
+    this.state = { ...this.state, connected: false, subscribed: false, reason: "refreshing Polymarket user subscriptions" };
+    socket.close();
+    void this.ensureSocket();
   }
 
   private async subscribe(socket: RawWebSocket): Promise<void> {

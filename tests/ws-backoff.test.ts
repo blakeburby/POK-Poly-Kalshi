@@ -8,7 +8,12 @@ import {
   PolymarketBookParser,
   parsePolymarketBookSocketPayload,
 } from "../src/polymarket/client";
-import { buildPolymarketUserSubscribeMessage, parsePolymarketUserStreamPayload, parsePolymarketUserStreamSocketPayload } from "../src/polymarket/user-stream";
+import {
+  buildPolymarketUserSubscribeMessage,
+  parsePolymarketUserStreamPayload,
+  parsePolymarketUserStreamSocketPayload,
+  PolymarketUserStreamClient,
+} from "../src/polymarket/user-stream";
 import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../src/ws/reconnect";
 
 test("websocket rate-limit and reconnect delays follow backoff policy", () => {
@@ -148,6 +153,43 @@ test("Polymarket user websocket parser ignores benign text control frames", () =
     () => parsePolymarketUserStreamSocketPayload(Buffer.from("INVALID OPERATION")),
     /Unexpected token/,
   );
+});
+
+test("Polymarket user stream does not re-auth unchanged open subscriptions", async () => {
+  const handlers = new Map<string, (...args: any[]) => void>();
+  const sent: string[] = [];
+  const socket = {
+    readyState: 0,
+    on(event: string, callback: (...args: any[]) => void) {
+      handlers.set(event, callback);
+    },
+    send(payload: string) {
+      sent.push(payload);
+    },
+    close() {
+      socket.readyState = 3;
+      handlers.get("close")?.(1000, Buffer.alloc(0));
+    },
+  };
+
+  const client = new PolymarketUserStreamClient(
+    "wss://example.invalid",
+    { recordEvent: async () => {} },
+    async () => ({ key: "key", secret: "secret", passphrase: "passphrase" }),
+    () => socket,
+  );
+
+  client.setSubscriptions(["condition-a"]);
+  socket.readyState = 1;
+  handlers.get("open")?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 1);
+
+  client.setSubscriptions(["condition-a"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 1);
+
+  client.close();
 });
 
 test("authenticated user stream parsers normalize venue order events", () => {
