@@ -973,6 +973,43 @@ test("live executor skips transient pre-trade user stream outage without persist
   assert.equal(await locks.getActiveLock(), null);
 });
 
+for (const preflightReason of [
+  "refreshing Polymarket user subscriptions",
+  "refreshing Kalshi user subscriptions",
+]) {
+  test(`live executor skips transient pre-trade subscription refresh without persistent lock: ${preflightReason}`, async () => {
+    const now = 1_799_999_900_000;
+    const { candidate, lower, higher } = liveCandidate(now);
+    const books = new BookStore();
+    books.setPolymarketContracts([lower]);
+    books.setKalshiContracts([higher]);
+    const kalshi = new FakeVenueClient("kalshi");
+    const polymarket = new FakeVenueClient("polymarket");
+    const locks = new FakeLiveLockStore();
+    const monitor = new FakeConfirmationMonitor();
+    monitor.preflightReason = preflightReason;
+    const executor = new LiveExecutor(
+      config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 0 }),
+      books,
+      kalshi,
+      polymarket,
+      () => now,
+      locks,
+      undefined,
+      monitor,
+    );
+
+    const result = await executor.execute(candidate);
+
+    assert.equal(result.action, "skipped");
+    assert.match(result.failureReason ?? "", /live user stream preflight skipped/);
+    assert.equal(kalshi.placed.length, 0);
+    assert.equal(polymarket.placed.length, 0);
+    assert.equal(locks.engageCalls, 0);
+    assert.equal(await locks.getActiveLock(), null);
+  });
+}
+
 test("live executor grace-retries pre-trade user streams before submitting orders", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);

@@ -79,12 +79,14 @@ function waitMs(ms: number): Promise<void> {
 
 function isUserStreamPreflightReason(reason: string): boolean {
   const normalized = reason.toLowerCase();
-  return normalized.includes("user stream")
+  const mentionsUserStream = normalized.includes("user stream") || normalized.includes("user subscription");
+  return mentionsUserStream
     && (
       normalized.includes("not connected")
       || normalized.includes("not subscribed")
       || normalized.includes("not ready")
       || normalized.includes("not configured")
+      || normalized.includes("refreshing")
     );
 }
 
