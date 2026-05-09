@@ -73,6 +73,21 @@ function liveLocked(reason: string): ExecutionResult {
   };
 }
 
+function waitMs(ms: number): Promise<void> {
+  return ms <= 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isUserStreamPreflightReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return normalized.includes("user stream")
+    && (
+      normalized.includes("not connected")
+      || normalized.includes("not subscribed")
+      || normalized.includes("not ready")
+      || normalized.includes("not configured")
+    );
+}
+
 function protectedGuardFailure(candidate: ArbCandidate, minProfitDollars: number): ExecutionResult | null {
   const blockReason = protectedCandidateBlockReason(candidate, minProfitDollars);
   return blockReason ? failed(`protected-spread-only guard: ${blockReason}`) : null;
@@ -570,10 +585,21 @@ export class LiveExecutor implements ArbExecutor {
 
   private async confirmationPreflight(candidate: ArbCandidate): Promise<ExecutionResult | null> {
     if (!this.config.liveUserStreamsEnabled) return null;
-    const reason = this.confirmationMonitor
+    let reason = this.confirmationMonitor
       ? await this.confirmationMonitor.preflight(candidate, this.now())
       : "live user stream confirmation is enabled but not configured";
     if (!reason) return null;
+    if (isUserStreamPreflightReason(reason)) {
+      const graceMs = Math.max(0, this.config.liveUserStreamPretradeGraceMs);
+      if (graceMs > 0 && this.confirmationMonitor) {
+        await waitMs(graceMs);
+        reason = await this.confirmationMonitor.preflight(candidate, this.now());
+        if (!reason) return null;
+      }
+      if (isUserStreamPreflightReason(reason)) {
+        return skipped(`live user stream preflight skipped: ${reason}`);
+      }
+    }
     const lockReason = `live safety lock engaged: ${reason}`;
     await this.liveLocks?.engageLock({ reason: lockReason, details: { phase: "user_stream_preflight" } });
     return liveLocked(lockReason);

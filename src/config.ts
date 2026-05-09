@@ -49,6 +49,7 @@ export interface AppConfig {
   liveKalshiOrderGroupEnabled: boolean;
   liveKalshiOrderGroupId: string;
   liveUserStreamsEnabled: boolean;
+  liveUserStreamPretradeGraceMs: number;
   liveUserStreamConfirmTimeoutMs: number;
   liveReconcileBeforeTrade: boolean;
   kalshiUserWsUrl: string;
@@ -146,6 +147,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveKalshiOrderGroupEnabled: envBoolean(env, "LIVE_KALSHI_ORDER_GROUP_ENABLED", true),
     liveKalshiOrderGroupId: envString(env, "LIVE_KALSHI_ORDER_GROUP_ID"),
     liveUserStreamsEnabled: envBoolean(env, "LIVE_USER_STREAMS_ENABLED", true),
+    liveUserStreamPretradeGraceMs: envNumber(env, "LIVE_USER_STREAM_PRETRADE_GRACE_MS", 750),
     liveUserStreamConfirmTimeoutMs: envNumber(env, "LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS", 2_500),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
     kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),

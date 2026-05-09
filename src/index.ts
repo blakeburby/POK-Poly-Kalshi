@@ -57,8 +57,8 @@ async function main(): Promise<void> {
     liveAnalytics.reconcileFilledSignals(liveSignals, now);
   }
   await reconcileAnalytics();
-  const kalshiUserStream = config.liveUserStreamsEnabled ? new KalshiUserStreamClient(config.kalshiUserWsUrl, orderEvents, undefined, liveLocks) : null;
-  const polymarketUserStream = config.liveUserStreamsEnabled ? PolymarketUserStreamClient.fromConfig(config, orderEvents, liveLocks) : null;
+  const kalshiUserStream = config.liveUserStreamsEnabled ? new KalshiUserStreamClient(config.kalshiUserWsUrl, orderEvents) : null;
+  const polymarketUserStream = config.liveUserStreamsEnabled ? PolymarketUserStreamClient.fromConfig(config, orderEvents) : null;
   const confirmationMonitor = new LiveVenueConfirmationCoordinator({
     enabled: config.liveUserStreamsEnabled,
     confirmTimeoutMs: config.liveUserStreamConfirmTimeoutMs,

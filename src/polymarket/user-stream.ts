@@ -1,7 +1,6 @@
 import WebSocket from "ws";
 import type { ApiKeyCreds } from "@polymarket/clob-client-v2";
 import type { AppConfig } from "../config";
-import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { VenueOrderEventInput, VenueOrderEventWriter } from "../db/venue-order-events";
 import { resolvePolymarketApiCreds } from "../execution/live-clients";
 import { logEvent, logThrottle } from "../logger";
@@ -153,16 +152,13 @@ export class PolymarketUserStreamClient {
     private readonly events: VenueOrderEventWriter,
     private readonly credentialsFactory: CredentialsFactory,
     private readonly wsFactory: WebSocketFactory = (wsUrl) => new WebSocket(wsUrl),
-    private readonly liveLocks?: LiveExecutionLockWriter,
   ) {}
 
-  static fromConfig(config: AppConfig, events: VenueOrderEventWriter, liveLocks?: LiveExecutionLockWriter): PolymarketUserStreamClient {
+  static fromConfig(config: AppConfig, events: VenueOrderEventWriter): PolymarketUserStreamClient {
     return new PolymarketUserStreamClient(
       config.polymarketUserWsUrl,
       events,
       async () => (await resolvePolymarketApiCreds(config)).creds,
-      undefined,
-      liveLocks,
     );
   }
 
@@ -229,15 +225,12 @@ export class PolymarketUserStreamClient {
     });
 
     socket.on("error", (error: Error) => {
-      const wasConnected = this.state.connected || this.state.lastConnectedAt != null;
       this.state = { ...this.state, lastError: error.message, reason: error.message };
       logEvent({ severity: "ERROR", category: "POLYMARKET_USER", message: "user websocket error", context: { error: error.message } });
-      if (wasConnected) void this.lockOnDisconnect(error.message);
     });
 
     socket.on("close", (_code: number, reason: Buffer) => {
       const reasonText = reason.toString() || "closed";
-      const wasConnected = this.state.connected || this.state.lastConnectedAt != null;
       const isCurrentSocket = this.socket === socket;
       if (isCurrentSocket) {
         this.socket = null;
@@ -245,7 +238,6 @@ export class PolymarketUserStreamClient {
         this.state = { ...this.state, connected: false, subscribed: false, reason: reasonText };
       }
       if (!this.intentionalClose && isCurrentSocket) {
-        if (wasConnected) void this.lockOnDisconnect(reasonText);
         this.scheduleReconnect(reasonText);
       }
     });
@@ -310,16 +302,5 @@ export class PolymarketUserStreamClient {
       this.reconnectTimer = null;
       void this.ensureSocket();
     }, delayMs);
-  }
-
-  private async lockOnDisconnect(reasonText: string): Promise<void> {
-    await this.liveLocks?.engageLock({
-      reason: `live safety lock engaged: Polymarket user stream disconnected: ${reasonText}`,
-      details: {
-        venue: "polymarket",
-        phase: "user_stream_disconnect",
-        reason: reasonText,
-      },
-    });
   }
 }

@@ -147,6 +147,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       liveHedgeFeeBufferDollars: runtime.config.liveHedgeFeeBufferDollars,
       liveParallelExecutionEnabled: runtime.config.liveParallelExecutionEnabled,
       liveUserStreamsEnabled: runtime.config.liveUserStreamsEnabled,
+      liveUserStreamPretradeGraceMs: runtime.config.liveUserStreamPretradeGraceMs,
       liveUserStreamConfirmTimeoutMs: runtime.config.liveUserStreamConfirmTimeoutMs,
       liveReconcileBeforeTrade: runtime.config.liveReconcileBeforeTrade,
     },

@@ -78,6 +78,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveKalshiOrderGroupEnabled: false,
     liveKalshiOrderGroupId: "",
     liveUserStreamsEnabled: false,
+    liveUserStreamPretradeGraceMs: 750,
     liveUserStreamConfirmTimeoutMs: 2_500,
     liveReconcileBeforeTrade: false,
     kalshiUserWsUrl: "",

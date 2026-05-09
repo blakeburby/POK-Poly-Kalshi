@@ -549,6 +549,7 @@ export interface DashboardSnapshot {
     liveHedgeFeeBufferDollars: number;
     liveParallelExecutionEnabled: boolean;
     liveUserStreamsEnabled: boolean;
+    liveUserStreamPretradeGraceMs: number;
     liveUserStreamConfirmTimeoutMs: number;
     liveReconcileBeforeTrade: boolean;
   };

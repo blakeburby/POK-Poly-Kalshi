@@ -53,6 +53,7 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_HEDGE_FEE_BUFFER_DOLLARS=0.01`: conservative fee allowance used when calculating post-fill hedge caps.
 - `LIVE_PARALLEL_EXECUTION_ENABLED=false`: keep the default Hybrid Safe sequential-hedge mode; only enable parallel canary after deliberate operator review.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated Kalshi/Polymarket private order streams before live orders can be considered safe.
+- `LIVE_USER_STREAM_PRETRADE_GRACE_MS=750`: short retry window for transient private-stream subscription refreshes before skipping a candidate. Pre-order stream unavailability skips the trade instead of creating a persistent live lock.
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: maximum wait for private-stream confirmation after REST order responses.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block live entries when recent audit rows, private-stream confirmations, or persistent locks show unresolved drift.
 - `KALSHI_USER_WS_URL=wss://api.elections.kalshi.com/trade-api/ws/v2`: Kalshi authenticated user stream endpoint.
@@ -69,9 +70,12 @@ Safe Kalshi-first canary posture. After an exact Kalshi REST fill it treats
 Polymarket as a risk-reducing hedge, bypassing the normal profit gate only when
 current depth can fill exact size inside the configured hedge loss cap, then
 requires authenticated
-user-stream confirmation for both legs. Any user-stream disconnect, confirmation
-timeout, failed Polymarket settlement event, fill-count mismatch, or dirty
-reconciliation state engages or keeps the persistent live circuit breaker.
+user-stream confirmation for both legs. Passive user-stream disconnects make
+readiness unhealthy and reconnect automatically; if they happen before any
+order submission the candidate is skipped. Confirmation timeout, failed
+Polymarket settlement event, fill-count mismatch, dirty reconciliation state,
+or any unsafe condition after an order may have been submitted engages or keeps
+the persistent live circuit breaker.
 
 ## Enable And Disable
 

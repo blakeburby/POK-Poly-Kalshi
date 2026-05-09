@@ -74,6 +74,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveKalshiOrderGroupEnabled: false,
     liveKalshiOrderGroupId: "",
     liveUserStreamsEnabled: false,
+    liveUserStreamPretradeGraceMs: 750,
     liveUserStreamConfirmTimeoutMs: 2_500,
     liveReconcileBeforeTrade: false,
     kalshiUserWsUrl: "",
@@ -938,6 +939,108 @@ test("live executor keeps immediate hedge flow and then requires private stream 
   assert.equal(polymarket.placed.length, 1);
   assert.equal(result.venueConfirmations?.kalshi?.status, "confirmed");
   assert.equal(result.venueConfirmations?.polymarket?.status, "confirmed");
+});
+
+test("live executor skips transient pre-trade user stream outage without persistent lock", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.preflightReason = "Polymarket user stream is not connected/subscribed";
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 0 }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /live user stream preflight skipped/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+  assert.equal(locks.engageCalls, 0);
+  assert.equal(await locks.getActiveLock(), null);
+});
+
+test("live executor grace-retries pre-trade user streams before submitting orders", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const locks = new FakeLiveLockStore();
+  class ReconnectingMonitor extends FakeConfirmationMonitor {
+    preflightCalls = 0;
+
+    async preflight(): Promise<string | null> {
+      this.preflightCalls += 1;
+      return this.preflightCalls === 1 ? "Polymarket user stream is not subscribed" : null;
+    }
+  }
+  const monitor = new ReconnectingMonitor();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 1 }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(monitor.preflightCalls, 2);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("live executor still locks persistent pre-trade reconciliation failures", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.preflightReason = "live reconciliation blocked: signal #7 has venue fills without private-stream confirmations";
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 0 }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.match(result.liveLockReason ?? "", /live reconciliation blocked/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+  assert.equal(locks.engageCalls, 1);
+  assert.match((await locks.getActiveLock())?.reason ?? "", /live reconciliation blocked/);
 });
 
 test("live executor locks when private stream confirmation times out", async () => {

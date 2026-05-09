@@ -1,7 +1,6 @@
 import WebSocket from "ws";
 import { getKalshiWebsocketHeaders } from "./auth";
 import { logEvent, logThrottle } from "../logger";
-import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { VenueOrderEventWriter } from "../db/venue-order-events";
 import type { UserStreamVenueState } from "../types";
 import { computeReconnectDelay, isRateLimitError } from "../ws/reconnect";
@@ -115,7 +114,6 @@ export class KalshiUserStreamClient {
     private readonly url: string,
     private readonly events: VenueOrderEventWriter,
     private readonly wsFactory: WebSocketFactory = (wsUrl, options) => new WebSocket(wsUrl, options),
-    private readonly liveLocks?: LiveExecutionLockWriter,
   ) {}
 
   status(): UserStreamVenueState {
@@ -179,19 +177,15 @@ export class KalshiUserStreamClient {
     });
 
     socket.on("error", (error: Error) => {
-      const wasConnected = this.state.connected || this.state.lastConnectedAt != null;
       this.state = { ...this.state, lastError: error.message, reason: error.message };
       logEvent({ severity: "ERROR", category: "KALSHI_USER", message: "user websocket error", context: { error: error.message } });
-      if (wasConnected) void this.lockOnDisconnect(error.message);
     });
 
     socket.on("close", (_code: number, reason: Buffer) => {
       const reasonText = reason.toString() || "closed";
-      const wasConnected = this.state.connected || this.state.lastConnectedAt != null;
       this.socket = null;
       this.state = { ...this.state, connected: false, subscribed: false, reason: reasonText };
       if (!this.intentionalClose) {
-        if (wasConnected) void this.lockOnDisconnect(reasonText);
         this.scheduleReconnect(reasonText);
       }
     });
@@ -221,16 +215,5 @@ export class KalshiUserStreamClient {
       this.reconnectTimer = null;
       this.ensureSocket();
     }, delayMs);
-  }
-
-  private async lockOnDisconnect(reasonText: string): Promise<void> {
-    await this.liveLocks?.engageLock({
-      reason: `live safety lock engaged: Kalshi user stream disconnected: ${reasonText}`,
-      details: {
-        venue: "kalshi",
-        phase: "user_stream_disconnect",
-        reason: reasonText,
-      },
-    });
   }
 }
