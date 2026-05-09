@@ -184,9 +184,12 @@ function StatusPill({ label, state }: { label: string; state: "live" | "stale" |
   return <span className={`status-pill status-${state}`}>{label}</span>;
 }
 
-function DashboardModeBadge({ kind, liveTrading }: { kind: DashboardKind; liveTrading: boolean }) {
-  const label = kind === "live" ? liveTrading ? "LIVE ARMED" : "LIVE STANDBY" : "PAPER SIM";
-  return <span className={`dashboard-mode-badge dashboard-mode-${kind} ${liveTrading ? "worker-live" : "worker-paper"}`}>{label}</span>;
+function DashboardModeBadge({ kind, liveTrading }: { kind: DashboardKind | null; liveTrading: boolean }) {
+  const label = kind == null
+    ? liveTrading ? "BOTH / LIVE ARMED" : "BOTH DASHBOARDS"
+    : kind === "live" ? liveTrading ? "LIVE ARMED" : "LIVE STANDBY" : "PAPER SIM";
+  const modeClass = kind ?? "combined";
+  return <span className={`dashboard-mode-badge dashboard-mode-${modeClass} ${liveTrading ? "worker-live" : "worker-paper"}`}>{label}</span>;
 }
 
 function formatReadiness(ready: boolean | undefined, reason: string | null | undefined): string {
@@ -700,8 +703,15 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
 function findTradeDetailByKey(snapshot: DashboardSnapshot, key: string): TradeDetailModel | null {
   const candidate = snapshot.liveCandidates.find((item) => tradeKeyFor("opportunity", item) === key);
   if (candidate) return buildTradeDetailModel("opportunity", candidate);
-  const signal = snapshot.recentSignals.find((item) => tradeKeyFor("signal", item) === key);
-  if (signal) return buildTradeDetailModel("signal", signal);
+  const signalPools = [
+    snapshot.live?.recentSignals ?? [],
+    snapshot.paper?.recentSignals ?? [],
+    snapshot.recentSignals,
+  ];
+  for (const signals of signalPools) {
+    const signal = signals.find((item) => tradeKeyFor("signal", item) === key);
+    if (signal) return buildTradeDetailModel("signal", signal);
+  }
   return null;
 }
 
@@ -1241,18 +1251,47 @@ export function RiskMeter({ insights }: { insights: DashboardInsightModel }) {
   );
 }
 
+function DashboardFocusControls({
+  activeDashboard,
+  onSelectDashboard,
+}: {
+  activeDashboard: DashboardKind | null;
+  onSelectDashboard: (kind: DashboardKind | null) => void;
+}) {
+  const controls: Array<{ kind: DashboardKind | null; label: string }> = [
+    { kind: null, label: "Show Both" },
+    { kind: "live", label: "View Live Only" },
+    { kind: "paper", label: "View Paper Only" },
+  ];
+  return (
+    <div className="dashboard-focus-controls" aria-label="Dashboard focus controls">
+      {controls.map((control) => (
+        <button
+          aria-pressed={activeDashboard === control.kind}
+          className={`selector-return-button ${activeDashboard === control.kind ? "active" : ""}`}
+          key={control.label}
+          onClick={() => onSelectDashboard(control.kind)}
+          type="button"
+        >
+          {control.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function GlobalStateBar({
   dashboardName,
   dashboardKind,
-  onExitToSelector,
+  onDashboardRouteChange,
   snapshot,
   streamState,
   viewMode,
   onViewModeChange,
 }: {
   dashboardName: string;
-  dashboardKind: DashboardKind;
-  onExitToSelector?: () => void;
+  dashboardKind: DashboardKind | null;
+  onDashboardRouteChange?: (kind: DashboardKind | null) => void;
   snapshot: DashboardSnapshot;
   streamState: StreamState;
   viewMode: DashboardViewMode;
@@ -1271,7 +1310,7 @@ function GlobalStateBar({
         <div className="dashboard-mode-row">
           <DashboardModeBadge kind={dashboardKind} liveTrading={snapshot.health.liveTrading} />
           {dashboardKind === "paper" && snapshot.health.liveTrading ? <StatusPill label="WORKER LIVE" state="warn" /> : null}
-          {onExitToSelector ? <button className="selector-return-button" onClick={onExitToSelector} type="button">Switch Dashboard</button> : null}
+          {onDashboardRouteChange ? <DashboardFocusControls activeDashboard={dashboardKind} onSelectDashboard={onDashboardRouteChange} /> : null}
         </div>
       </div>
 
@@ -2595,15 +2634,17 @@ function SignalTape({
   selectedTradeKey,
   onSelectTrade,
   dashboardKind = "paper",
+  sectionId = "signals",
 }: {
   signals: DashboardSignal[];
   now: number;
   selectedTradeKey: string | null;
   onSelectTrade: (trade: TradeDetailModel) => void;
   dashboardKind?: DashboardKind;
+  sectionId?: string;
 }) {
   return (
-    <section className="panel tape-panel" id="signals">
+    <section className="panel tape-panel" id={sectionId}>
       <div className="panel-header">
         <div>
           <p className="panel-kicker">audit log</p>
@@ -3081,16 +3122,40 @@ function PaperDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
   return <PerformanceDashboardSections dashboardKind="paper" snapshot={snapshot} />;
 }
 
+function CombinedDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
+  return (
+    <section className="combined-dashboard-stack" aria-label="Combined live and paper dashboards">
+      <article className="combined-dashboard-section combined-live-section">
+        <section className="panel combined-dashboard-heading">
+          <p className="panel-kicker">exchange-fill-backed audit</p>
+          <h2>Live Trading Dashboard</h2>
+          <p>Real trades only. This section is fed exclusively from the authoritative live execution slice.</p>
+        </section>
+        <LiveDashboardSections snapshot={snapshot} />
+      </article>
+
+      <article className="combined-dashboard-section combined-paper-section">
+        <section className="panel combined-dashboard-heading">
+          <p className="panel-kicker">simulated strategy history</p>
+          <h2>Current Paper Trading Dashboard</h2>
+          <p>Dry-run fills and simulated performance only. This section is fed exclusively from the paper slice.</p>
+        </section>
+        <PaperDashboardSections snapshot={snapshot} />
+      </article>
+    </section>
+  );
+}
+
 export function DashboardTerminalView({
   dashboardName,
-  dashboardKind = "live",
-  onExitToSelector,
+  dashboardKind = null,
+  onDashboardRouteChange,
   snapshot,
   streamState,
 }: {
   dashboardName: string;
-  dashboardKind?: DashboardKind;
-  onExitToSelector?: () => void;
+  dashboardKind?: DashboardKind | null;
+  onDashboardRouteChange?: (kind: DashboardKind | null) => void;
   snapshot: DashboardSnapshot | null;
   streamState: StreamState;
 }) {
@@ -3122,14 +3187,19 @@ export function DashboardTerminalView({
     );
   }
 
-  const selectedSnapshot = snapshotForDashboardKind(snapshot, dashboardKind);
+  const combinedView = dashboardKind == null;
+  const focusedDashboardKind: DashboardKind = dashboardKind ?? "live";
+  const liveSnapshot = snapshotForDashboardKind(snapshot, "live");
+  const paperSnapshot = snapshotForDashboardKind(snapshot, "paper");
+  const selectedSnapshot = combinedView ? liveSnapshot : snapshotForDashboardKind(snapshot, focusedDashboardKind);
+  const shellDashboardClass = combinedView ? "dashboard-combined" : `dashboard-${focusedDashboardKind}`;
 
   return (
-    <main className={`terminal-shell institutional-shell polished-shell dashboard-${dashboardKind} view-mode-${viewMode}`}>
+    <main className={`terminal-shell institutional-shell polished-shell ${shellDashboardClass} view-mode-${viewMode}`}>
       <GlobalStateBar
         dashboardKind={dashboardKind}
         dashboardName={dashboardName}
-        onExitToSelector={onExitToSelector}
+        onDashboardRouteChange={onDashboardRouteChange}
         onViewModeChange={setViewMode}
         snapshot={snapshot}
         streamState={streamState}
@@ -3141,16 +3211,21 @@ export function DashboardTerminalView({
         <div className="metric"><span>Guaranteed Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
         <div className="metric"><span>Re-entry Cadence</span><strong>{Math.round(snapshot.health.reentryIntervalMs / 1000)}s</strong></div>
         <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? formatCompactTime(Math.max(0, snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt)) : "--"}</strong></div>
-        <div className="metric"><span>Selected Dashboard</span><strong>{dashboardKind === "live" ? "LIVE" : "PAPER"}</strong></div>
+        <div className="metric"><span>Selected Dashboard</span><strong>{combinedView ? "BOTH" : focusedDashboardKind === "live" ? "LIVE" : "PAPER"}</strong></div>
         <div className="metric"><span>Selected Mode</span><strong>{viewMode.toUpperCase()}</strong></div>
         <div className="metric"><span>Venue Readiness</span><strong>{snapshot.execution ? `${snapshot.execution.kalshi.ready ? "K" : "K!"}/${snapshot.execution.polymarket.ready ? "P" : "P!"}` : "--"}</strong></div>
         <div className="metric"><span>Partial Fill Lock</span><strong>{snapshot.execution?.partialFillLocked ? "LOCKED" : "CLEAR"}</strong></div>
       </section>
 
-      {dashboardKind === "live" ? <LiveDashboardSections snapshot={snapshot} /> : <PaperDashboardSections snapshot={snapshot} />}
+      {combinedView ? <CombinedDashboardSections snapshot={snapshot} /> : focusedDashboardKind === "live" ? <LiveDashboardSections snapshot={snapshot} /> : <PaperDashboardSections snapshot={snapshot} />}
 
-      <section className="institutional-command-grid">
-        <AnalyticsPanel dashboardKind={dashboardKind} snapshot={selectedSnapshot} />
+      <section className={`institutional-command-grid ${combinedView ? "combined-command-grid" : ""}`}>
+        {combinedView ? (
+          <>
+            <AnalyticsPanel dashboardKind="live" snapshot={liveSnapshot} />
+            <AnalyticsPanel dashboardKind="paper" snapshot={paperSnapshot} />
+          </>
+        ) : <AnalyticsPanel dashboardKind={focusedDashboardKind} snapshot={selectedSnapshot} />}
         <RiskIntelligencePanel selectedTrade={selectedTrade} snapshot={selectedSnapshot} />
       </section>
 
@@ -3173,8 +3248,13 @@ export function DashboardTerminalView({
 
       <PolymarketDiagnosticsPanel snapshot={snapshot} />
 
-      <section className="activity-grid" aria-label="Signal and runtime activity">
-        <SignalTape dashboardKind={dashboardKind} onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={selectedSnapshot.recentSignals} now={snapshot.generatedAt} />
+      <section className={`activity-grid ${combinedView ? "combined-activity-grid" : ""}`} aria-label="Signal and runtime activity">
+        {combinedView ? (
+          <>
+            <SignalTape dashboardKind="live" onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={liveSnapshot.recentSignals} now={snapshot.generatedAt} />
+            <SignalTape dashboardKind="paper" onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={paperSnapshot.recentSignals} now={snapshot.generatedAt} sectionId="signals-paper" />
+          </>
+        ) : <SignalTape dashboardKind={focusedDashboardKind} onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={selectedSnapshot.recentSignals} now={snapshot.generatedAt} />}
         <EventTape logs={snapshot.logs} />
       </section>
     </main>
@@ -3234,22 +3314,11 @@ export default function DashboardTerminal({
     writeDashboardRoute(kind);
   };
 
-  if (!selectedDashboard) {
-    return (
-      <DashboardSelector
-        dashboardName={dashboardName}
-        onSelect={(kind) => selectDashboard(kind)}
-        snapshot={snapshot}
-        streamState={streamState}
-      />
-    );
-  }
-
   return (
     <DashboardTerminalView
       dashboardKind={selectedDashboard}
       dashboardName={dashboardName}
-      onExitToSelector={() => selectDashboard(null)}
+      onDashboardRouteChange={selectDashboard}
       snapshot={snapshot}
       streamState={streamState}
     />

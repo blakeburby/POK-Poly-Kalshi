@@ -3909,9 +3909,22 @@ tbody tr:hover {
   box-shadow: 0 0 22px rgba(70, 214, 125, 0.1);
 }
 
+.dashboard-mode-combined {
+  border-color: rgba(76, 201, 240, 0.5);
+  color: var(--cyan);
+  box-shadow: 0 0 22px rgba(76, 201, 240, 0.12);
+}
+
 .dashboard-mode-live.worker-paper {
   border-color: rgba(255, 189, 82, 0.52);
   color: var(--amber);
+}
+
+.dashboard-focus-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .selector-return-button {
@@ -3933,6 +3946,13 @@ tbody tr:hover {
   border-color: rgba(76, 201, 240, 0.52);
   color: var(--cyan);
   outline: none;
+}
+
+.selector-return-button.active,
+.selector-return-button[aria-pressed="true"] {
+  border-color: rgba(76, 201, 240, 0.62);
+  color: var(--text);
+  box-shadow: 0 0 18px rgba(76, 201, 240, 0.12);
 }
 
 .live-safety-banner {
@@ -4114,6 +4134,58 @@ tbody tr:hover {
   gap: 14px;
 }
 
+.combined-dashboard-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.combined-dashboard-section {
+  display: grid;
+  gap: 14px;
+}
+
+.combined-dashboard-heading {
+  background:
+    linear-gradient(120deg, rgba(76, 201, 240, 0.08), transparent 54%),
+    rgba(3, 7, 12, 0.5);
+  padding: var(--panel-pad);
+}
+
+.combined-paper-section .combined-dashboard-heading {
+  background:
+    linear-gradient(120deg, rgba(70, 214, 125, 0.08), transparent 54%),
+    rgba(3, 7, 12, 0.5);
+}
+
+.combined-dashboard-heading h2 {
+  font-size: clamp(28px, 3vw, 48px);
+  letter-spacing: -0.055em;
+  margin: 2px 0 8px;
+}
+
+.combined-dashboard-heading p:not(.panel-kicker) {
+  color: #9fb0c4;
+  font-family: var(--font-mono);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.combined-command-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.combined-command-grid .risk-intelligence-panel {
+  grid-column: 1 / -1;
+}
+
+.combined-activity-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.combined-activity-grid > .tape-panel:last-child {
+  grid-column: 1 / -1;
+}
+
 .live-safety-compact {
   align-items: center;
   border-color: rgba(255, 94, 94, 0.26);
@@ -4162,6 +4234,8 @@ tbody tr:hover {
 
 @media (max-width: 1280px) {
   .selector-hero,
+  .combined-activity-grid,
+  .combined-command-grid,
   .live-safety-banner,
   .live-ops-grid,
   .live-audit-grid,

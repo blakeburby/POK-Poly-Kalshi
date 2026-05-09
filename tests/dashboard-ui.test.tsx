@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  DashboardSelector,
   DashboardTerminalView,
   InlineTradePayoffGraph,
   RiskMeter,
@@ -222,14 +221,27 @@ test("dashboard password helper rejects unauthenticated access inputs", () => {
   assert.equal(isValidDashboardSession(undefined), false);
 });
 
-test("dashboard selector exposes live and current paper dashboard choices", () => {
+test("default dashboard view renders live and current paper sections together", () => {
+  const now = snapshot().generatedAt;
+  const liveSignal = signal({
+    id: 77,
+    executionMode: "live",
+    kalshiFillId: "real-kalshi-order",
+    polymarketFillId: "real-poly-order",
+  });
+  const paperSignal = signal({
+    id: 42,
+    executionMode: "paper",
+    kalshiFillId: "dry-run-kalshi-paper",
+    polymarketFillId: "dry-run-poly-paper",
+  });
   const markup = renderToStaticMarkup(
-    <DashboardSelector
+    <DashboardTerminalView
       dashboardName="POK Terminal"
-      onSelect={() => undefined}
+      onDashboardRouteChange={() => undefined}
       snapshot={snapshot({
-        live: { recentSignals: [signal({ executionMode: "live", id: 77 })], analytics: buildDashboardAnalytics([signal({ executionMode: "live", id: 77 })], snapshot().generatedAt) },
-        paper: { recentSignals: [signal({ executionMode: "paper", id: 42 })], analytics: buildDashboardAnalytics([signal({ executionMode: "paper", id: 42 })], snapshot().generatedAt) },
+        live: { recentSignals: [liveSignal], analytics: buildDashboardAnalytics([liveSignal], now) },
+        paper: { recentSignals: [paperSignal], analytics: buildDashboardAnalytics([paperSignal], now) },
       })}
       streamState="live"
     />,
@@ -237,10 +249,30 @@ test("dashboard selector exposes live and current paper dashboard choices", () =
 
   assert.match(markup, /Live Trading Dashboard/);
   assert.match(markup, /Current Paper Trading Dashboard/);
+  assert.match(markup, /View Live Only/);
+  assert.match(markup, /View Paper Only/);
+  assert.match(markup, /Show Both/);
+  assert.match(markup, /Selected Dashboard/);
+  assert.match(markup, /BOTH/);
   assert.match(markup, /Real trades only/);
-  assert.match(markup, /simulated\/dry-run strategy history/i);
-  assert.doesNotMatch(markup, /Open Live Command/);
-  assert.doesNotMatch(markup, /Open Paper Analytics/);
+  assert.match(markup, /Dry-run fills and simulated performance only/);
+  assert.doesNotMatch(markup, /Switch Dashboard/);
+
+  const liveTapeStart = markup.indexOf("Live Signal Tape");
+  const paperTapeStart = markup.indexOf("Paper Signal Tape");
+  assert.ok(liveTapeStart >= 0);
+  assert.ok(paperTapeStart > liveTapeStart);
+
+  const liveTapeMarkup = markup.slice(liveTapeStart, paperTapeStart);
+  const paperTapeMarkup = markup.slice(paperTapeStart);
+  assert.match(liveTapeMarkup, /real-kalshi-order/);
+  assert.match(liveTapeMarkup, /real-poly-order/);
+  assert.doesNotMatch(liveTapeMarkup, /dry-run-kalshi-paper/);
+  assert.doesNotMatch(liveTapeMarkup, /dry-run-poly-paper/);
+  assert.match(paperTapeMarkup, /dry-run-kalshi-paper/);
+  assert.match(paperTapeMarkup, /dry-run-poly-paper/);
+  assert.doesNotMatch(paperTapeMarkup, /real-kalshi-order/);
+  assert.doesNotMatch(paperTapeMarkup, /real-poly-order/);
 });
 
 test("opportunity blotter sorts by guaranteed profit and stale helper flags old books", () => {
@@ -676,6 +708,38 @@ test("live dashboard signal tape excludes paper simulated fills", () => {
   assert.match(markup, /real-poly-order/);
   assert.doesNotMatch(markup, /dry-run-kalshi-paper/);
   assert.doesNotMatch(markup, /dry-run-poly-paper/);
+});
+
+test("paper dashboard signal tape excludes real live fills", () => {
+  const liveSignal = signal({
+    id: 88,
+    executionMode: "live",
+    kalshiFillId: "real-kalshi-order",
+    polymarketFillId: "real-poly-order",
+  });
+  const paperSignal = signal({
+    id: 42,
+    executionMode: "paper",
+    kalshiFillId: "dry-run-kalshi-paper",
+    polymarketFillId: "dry-run-poly-paper",
+  });
+  const markup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="paper"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        live: { recentSignals: [liveSignal], analytics: buildDashboardAnalytics([liveSignal], snapshot().generatedAt) },
+        paper: { recentSignals: [paperSignal], analytics: buildDashboardAnalytics([paperSignal], snapshot().generatedAt) },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /Paper Signal Tape/);
+  assert.match(markup, /dry-run-kalshi-paper/);
+  assert.match(markup, /dry-run-poly-paper/);
+  assert.doesNotMatch(markup, /real-kalshi-order/);
+  assert.doesNotMatch(markup, /real-poly-order/);
 });
 
 test("trade detail drawer renders detailed payoff diagram with protected and dead-zone shading", () => {
