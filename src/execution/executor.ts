@@ -189,6 +189,12 @@ interface ExecutionMetadata {
   postFillHedgeDecisionMs?: number | null;
 }
 
+interface SequentialFirstVenueDecision {
+  firstVenue: Venue;
+  firstVenueReason: string;
+  firstVenueVwap: number | null;
+}
+
 function emptyVenueReadiness(reason: string, now: number): VenueExecutionReadiness {
   return {
     configured: false,
@@ -313,20 +319,20 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketLeg = legForVenue(candidate, "polymarket");
     if (!kalshiLeg || !polymarketLeg) return this.failed("candidate must contain one Kalshi leg and one Polymarket leg");
 
-    const prepared = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
+    let prepared = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
     if (typeof prepared === "string") return skipped(prepared);
 
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
-    const kalshiContext: LiveOrderContext = {
+    let kalshiContext: LiveOrderContext = {
       executionGroupId,
       clientOrderId: kalshiClientOrderId,
       size: this.config.liveOrderSize,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
       orderGroupId: this.config.liveKalshiOrderGroupEnabled ? this.config.liveKalshiOrderGroupId || undefined : undefined,
     };
-    const polymarketContext: LiveOrderContext = {
+    let polymarketContext: LiveOrderContext = {
       executionGroupId,
       clientOrderId: polymarketClientOrderId,
       size: this.config.liveOrderSize,
@@ -348,6 +354,32 @@ export class LiveExecutor implements ArbExecutor {
         executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt }),
       };
     }
+    if (preflightCompletedAt - preflightStartedAt > this.config.liveQuoteMaxAgeMs) {
+      return {
+        ...skipped(`live preflight took ${preflightCompletedAt - preflightStartedAt}ms, exceeding quote freshness window ${this.config.liveQuoteMaxAgeMs}ms`),
+        quoteSnapshot: prepared.quoteSnapshot,
+        depthVwap: prepared.quoteSnapshot.projectedPremium,
+        projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
+        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt }),
+      };
+    }
+    const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
+    if (typeof refreshed === "string") {
+      return {
+        ...skipped(`live quote revalidation after preflight failed: ${refreshed}`),
+        quoteSnapshot: prepared.quoteSnapshot,
+        depthVwap: prepared.quoteSnapshot.projectedPremium,
+        projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
+        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt }),
+      };
+    }
+    prepared = refreshed;
+    kalshiContext = { ...kalshiContext, maxBuyPrice: prepared.kalshi.maxBuyPrice };
+    polymarketContext = {
+      ...polymarketContext,
+      maxBuyPrice: prepared.polymarket.maxBuyPrice,
+      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
+    };
 
     if (this.config.liveParallelExecutionEnabled) {
       const [kalshi, polymarket] = await Promise.all([
@@ -360,7 +392,13 @@ export class LiveExecutor implements ArbExecutor {
       ]);
       return await this.resultFromVenueOrders(executionGroupId, kalshi, polymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, kalshi, polymarket, { preflightStartedAt, preflightCompletedAt }),
+        executionTimings: this.executionTimings(executeStartedAt, kalshi, polymarket, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          firstVenue: null,
+          firstVenueReason: "parallel orders submitted concurrently",
+          firstVenueVwap: null,
+        }),
         venueConfirmations,
         executionStrategy: "parallel_canary",
         riskHedge: false,
@@ -381,7 +419,8 @@ export class LiveExecutor implements ArbExecutor {
       context: polymarketContext,
       clientOrderId: polymarketClientOrderId,
     };
-    const firstPlan = candidate.lower.venue === "kalshi" ? kalshiPlan : polymarketPlan;
+    const firstDecision = this.selectSequentialFirstVenue(prepared);
+    const firstPlan = firstDecision.firstVenue === "kalshi" ? kalshiPlan : polymarketPlan;
     const hedgePlan = firstPlan.venue === "kalshi" ? polymarketPlan : kalshiPlan;
     const results: Partial<Record<Venue, VenueOrderResult>> = {};
 
@@ -397,7 +436,11 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt }),
+        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          ...firstDecision,
+        }),
         executionStrategy: "sequential_hedge",
         riskHedge: false,
       });
@@ -415,7 +458,12 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
+        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          postFillHedgeDecisionMs,
+          ...firstDecision,
+        }),
         executionStrategy: "sequential_hedge",
         riskHedge: true,
         hedgeCapPrice: null,
@@ -440,7 +488,12 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: hedge.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
+        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          postFillHedgeDecisionMs,
+          ...firstDecision,
+        }),
         executionStrategy: "sequential_hedge",
         riskHedge: true,
         hedgeCapPrice: hedge.hedgeCapPrice,
@@ -457,7 +510,12 @@ export class LiveExecutor implements ArbExecutor {
 
     return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
       quoteSnapshot: hedge.quoteSnapshot,
-      executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
+      executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+        preflightStartedAt,
+        preflightCompletedAt,
+        postFillHedgeDecisionMs,
+        ...firstDecision,
+      }),
       venueConfirmations,
       executionStrategy: "sequential_hedge",
       riskHedge: true,
@@ -544,6 +602,31 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
+  private selectSequentialFirstVenue(prepared: PreparedExecution): SequentialFirstVenueDecision {
+    const kalshiVwap = prepared.quoteSnapshot.kalshi?.vwap ?? prepared.kalshi.maxBuyPrice;
+    const polymarketVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
+    const kalshiWorstAsk = prepared.quoteSnapshot.kalshi?.worstAsk ?? prepared.kalshi.maxBuyPrice;
+    const polymarketWorstAsk = prepared.quoteSnapshot.polymarket?.worstAsk ?? prepared.polymarket.maxBuyPrice;
+    const reason = `fresh depth VWAP kalshi=${kalshiVwap.toFixed(4)} polymarket=${polymarketVwap.toFixed(4)}`;
+    if (kalshiVwap < polymarketVwap - 1e-9) {
+      return { firstVenue: "kalshi", firstVenueReason: reason, firstVenueVwap: kalshiVwap };
+    }
+    if (polymarketVwap < kalshiVwap - 1e-9) {
+      return { firstVenue: "polymarket", firstVenueReason: reason, firstVenueVwap: polymarketVwap };
+    }
+    if (kalshiWorstAsk < polymarketWorstAsk - 1e-9) {
+      return { firstVenue: "kalshi", firstVenueReason: `${reason}; tie broken by worst ask`, firstVenueVwap: kalshiVwap };
+    }
+    if (polymarketWorstAsk < kalshiWorstAsk - 1e-9) {
+      return { firstVenue: "polymarket", firstVenueReason: `${reason}; tie broken by worst ask`, firstVenueVwap: polymarketVwap };
+    }
+    return {
+      firstVenue: "polymarket",
+      firstVenueReason: `${reason}; exact tie broken toward Polymarket to reduce CLOB stale-quote exposure`,
+      firstVenueVwap: polymarketVwap,
+    };
+  }
+
   private liveBooksForPreflight(kalshiLeg: ArbLeg, polymarketLeg: ArbLeg): { kalshi: BinaryContract[]; polymarket: BinaryContract[] } {
     if (this.books) return this.books.snapshot();
     const synthetic = (leg: ArbLeg): BinaryContract => ({
@@ -612,15 +695,15 @@ export class LiveExecutor implements ArbExecutor {
   private async preflightVenueOrders(
     orders: Array<{ client: VenueOrderClient; leg: ArbLeg; context: LiveOrderContext }>,
   ): Promise<string | null> {
-    for (const order of orders) {
+    const results = await Promise.all(orders.map(async (order) => {
       try {
         const reason = await order.client.preflightOrder?.(order.leg, order.context);
-        if (reason) return reason;
+        return reason ? `${venueLabel(order.client.venue)} live preflight failed: ${reason}` : null;
       } catch (error) {
-        return `${order.client.venue} live preflight failed: ${error instanceof Error ? error.message : String(error)}`;
+        return `${venueLabel(order.client.venue)} live preflight failed: ${error instanceof Error ? error.message : String(error)}`;
       }
-    }
-    return null;
+    }));
+    return results.find((reason): reason is string => reason != null) ?? null;
   }
 
   private async confirmationPreflight(candidate: ArbCandidate): Promise<ExecutionResult | null> {
@@ -835,7 +918,14 @@ export class LiveExecutor implements ArbExecutor {
     startedAt: number,
     kalshi: VenueOrderResult | null,
     polymarket: VenueOrderResult | null,
-    metadata: { preflightStartedAt?: number; preflightCompletedAt?: number; postFillHedgeDecisionMs?: number | null } = {},
+    metadata: {
+      preflightStartedAt?: number;
+      preflightCompletedAt?: number;
+      postFillHedgeDecisionMs?: number | null;
+      firstVenue?: Venue | null;
+      firstVenueReason?: string | null;
+      firstVenueVwap?: number | null;
+    } = {},
   ): ExecutionTimings {
     const timing = (result: VenueOrderResult | null): number | null => {
       if (!result) return null;
@@ -873,6 +963,9 @@ export class LiveExecutor implements ArbExecutor {
       polymarketOrderRttMs,
       venueSubmitSkewMs,
       totalMs: Number.isFinite(completedAt) ? Math.max(0, completedAt - startedAt) : null,
+      firstVenue: metadata.firstVenue ?? null,
+      firstVenueReason: metadata.firstVenueReason ?? null,
+      firstVenueVwap: metadata.firstVenueVwap ?? null,
     };
   }
 

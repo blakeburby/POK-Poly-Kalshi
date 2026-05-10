@@ -143,7 +143,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
     liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
     liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),
-    liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", false),
+    liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", true),
     liveKalshiOrderGroupEnabled: envBoolean(env, "LIVE_KALSHI_ORDER_GROUP_ENABLED", true),
     liveKalshiOrderGroupId: envString(env, "LIVE_KALSHI_ORDER_GROUP_ID"),
     liveUserStreamsEnabled: envBoolean(env, "LIVE_USER_STREAMS_ENABLED", true),

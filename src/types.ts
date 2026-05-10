@@ -137,6 +137,9 @@ export interface ExecutionTimings {
   polymarketOrderRttMs?: number | null;
   venueSubmitSkewMs?: number | null;
   totalMs?: number | null;
+  firstVenue?: Venue | null;
+  firstVenueReason?: string | null;
+  firstVenueVwap?: number | null;
 }
 
 export interface VenueConfirmations {

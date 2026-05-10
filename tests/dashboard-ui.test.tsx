@@ -626,6 +626,16 @@ test("analytics panel renders empty worker and no-trade states", () => {
 });
 
 test("signal tape renders detailed venue fills, timestamps, and failures", () => {
+  const parallel = signal({
+    executionStrategy: "parallel_canary",
+    executionTimings: {
+      firstVenue: null,
+      firstVenueReason: "parallel orders submitted concurrently",
+      firstVenueVwap: null,
+      kalshiRttMs: 12,
+      polymarketRttMs: 14,
+    },
+  });
   const failed = signal({
     id: 43,
     action: "failed",
@@ -639,7 +649,7 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
     <DashboardTerminalView
       dashboardKind="paper"
       dashboardName="POK Terminal"
-      snapshot={snapshot({ recentSignals: [signal(), failed] })}
+      snapshot={snapshot({ recentSignals: [parallel, failed] })}
       streamState="live"
     />,
   );
@@ -655,6 +665,9 @@ test("signal tape renders detailed venue fills, timestamps, and failures", () =>
   assert.match(markup, /dateTime="2026-04-29T20:00:00.000Z"/);
   assert.match(markup, /Latency/);
   assert.match(markup, /1.3s/);
+  assert.match(markup, /parallel canary/);
+  assert.match(markup, /First Venue/);
+  assert.match(markup, /BOTH/);
   assert.match(markup, /KALSHI/);
   assert.match(markup, /POLYMARKET/);
   assert.match(markup, /\$1,502.00/);

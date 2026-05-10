@@ -2698,6 +2698,8 @@ function SignalTape({
                     <div><span className="signal-label">Overlap</span><strong>{formatCents(signal.overlapProfit)}</strong></div>
                     <div><span className="signal-label">Gate</span><strong>{formatCents(signal.threshold)}</strong></div>
                     <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
+                    <div><span className="signal-label">Strategy</span><strong>{signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</strong></div>
+                    <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" ? "BOTH" : "--"}</strong></div>
                   </div>
 
                   {signal.risk ? (
@@ -3022,6 +3024,8 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <span>VWAP {formatDollars(signal.depthVwap ?? null)}</span>
             <span>Edge {formatSignedCents(signal.projectedEdgeAfterFees ?? signal.guaranteedProfit)}</span>
             <span>Skew {signal.quoteSnapshot?.quoteSkewMs == null ? "--" : `${Math.round(signal.quoteSnapshot.quoteSkewMs)}ms`}</span>
+            <span>Strategy {signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</span>
+            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" ? "BOTH" : "--"}</span>
             <span>RTT K {signal.executionTimings?.kalshiRttMs == null ? "--" : `${Math.round(signal.executionTimings.kalshiRttMs)}ms`}</span>
             <span>Partial {signal.partialFill ? "YES" : "NO"}</span>
             <span>K {signal.kalshiFillCount ?? "--"} / P {signal.polymarketFillCount ?? "--"}</span>

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AssetType, OrderType, Side, type BalanceAllowanceResponse, type SignedOrder } from "@polymarket/clob-client-v2";
 import type { AppConfig } from "../src/config";
+import { loadConfig } from "../src/config";
 import { BookStore } from "../src/books/book-store";
 import { LiveExecutor } from "../src/execution/executor";
 import {
@@ -681,11 +682,13 @@ test("Polymarket readiness syncs CLOB balance allowance before deciding readines
   assert.equal(fake.updateCalls, 1);
 });
 
-test("Polymarket live preflight forces fresh collateral for candidate-specific spend", async () => {
+test("Polymarket live preflight reuses cached collateral when it covers candidate spend", async () => {
   class BalanceChangingFakeClob implements PolymarketClobLike {
     balanceCalls = 0;
+    orderBookCalls = 0;
 
     async getOrderBook() {
+      this.orderBookCalls += 1;
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
@@ -736,7 +739,86 @@ test("Polymarket live preflight forces fresh collateral for candidate-specific s
     requestedAt: 1_800_000_000_500,
   });
 
-  assert.match(reason ?? "", /balance 2 is below required live collateral 4.8/);
+  assert.equal(reason, null);
+  assert.equal(fake.balanceCalls, 1);
+  assert.equal(fake.orderBookCalls, 1);
+
+  const secondReason = await client.preflightOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.9,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group-2",
+    clientOrderId: "client-2",
+    size: 5,
+    maxBuyPrice: 0.9,
+    requiredCollateral: 4.75,
+    requestedAt: 1_800_000_000_700,
+  });
+  assert.equal(secondReason, null);
+  assert.equal(fake.balanceCalls, 1);
+  assert.equal(fake.orderBookCalls, 1);
+});
+
+test("Polymarket live preflight refreshes collateral when cached readiness does not cover candidate spend", async () => {
+  class BalanceChangingFakeClob implements PolymarketClobLike {
+    balanceCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      this.balanceCalls += 1;
+      return {
+        balance: this.balanceCalls === 1 ? "2000000" : "9000000",
+        allowance: "10000000",
+      };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+
+  const fake = new BalanceChangingFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveOrderSize: 2,
+    liveCollateralBufferDollars: 0.25,
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => fake, allowedGeoblock);
+
+  const cached = await client.readiness(1_800_000_000_000);
+  assert.equal(cached.ready, true);
+  assert.equal(cached.balance, 2);
+
+  const reason = await client.preflightOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.91,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.91,
+    requiredCollateral: 4.8,
+    requestedAt: 1_800_000_000_500,
+  });
+
+  assert.equal(reason, null);
   assert.equal(fake.balanceCalls, 2);
 });
 
@@ -785,6 +867,54 @@ test("live executor captures the cheaper Polymarket leg before hedging Kalshi", 
 
   assert.equal(result.action, "filled");
   assert.deepEqual(order, ["polymarket", "kalshi"]);
+});
+
+test("live executor sequential fallback chooses live VWAP over lower-strike venue", async () => {
+  const now = 1_799_999_900_000;
+  const lower = contract({
+    venue: "kalshi",
+    contractId: "kalshi-lower-strike",
+    strike: 1500,
+    yesAsk: 0.65,
+    yesAskLevels: [{ price: 0.61, size: 5 }],
+    updatedAt: now,
+  });
+  const higher = contract({
+    venue: "polymarket",
+    contractId: "poly-higher-strike",
+    strike: 1502,
+    noAsk: 0.23,
+    noAskLevels: [{ price: 0.25, size: 5 }],
+    noTokenId: "no-token",
+    updatedAt: now,
+  });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+  const books = new BookStore();
+  books.setKalshiContracts([lower]);
+  books.setPolymarketContracts([higher]);
+  const order: Venue[] = [];
+  class OrderedClient extends FakeVenueClient {
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      order.push(this.venue);
+      return super.placeOrder(leg, context);
+    }
+  }
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5 }),
+    books,
+    new OrderedClient("kalshi"),
+    new OrderedClient("polymarket"),
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.deepEqual(order, ["polymarket", "kalshi"]);
+  assert.equal(result.executionTimings?.firstVenue, "polymarket");
+  assert.equal(result.executionTimings?.firstVenueVwap, 0.25);
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /kalshi=0.6100 polymarket=0.2500/);
 });
 
 test("live executor supports configured venue minimum size when both venues fill exactly", async () => {
@@ -908,8 +1038,8 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   assert.equal(result.executionTimings?.polymarketRttMs, 15);
 });
 
-test("live executor keeps parallel canary disabled by default and starts both venue orders concurrently when enabled", async () => {
-  assert.equal(config().liveParallelExecutionEnabled, false);
+test("live executor defaults to parallel canary and starts both venue orders concurrently after preflight", async () => {
+  assert.equal(loadConfig({}).liveParallelExecutionEnabled, true);
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -929,7 +1059,7 @@ test("live executor keeps parallel canary disabled by default and starts both ve
     }
   }
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 1, liveParallelExecutionEnabled: true, liveOrderTimeoutMs: 5_000 }),
+    config({ liveOrderSize: 1, liveParallelExecutionEnabled: loadConfig({}).liveParallelExecutionEnabled, liveOrderTimeoutMs: 5_000 }),
     books,
     new ParallelClient("kalshi"),
     new ParallelClient("polymarket"),
@@ -943,7 +1073,68 @@ test("live executor keeps parallel canary disabled by default and starts both ve
 
   assert.equal(result.executionStrategy, "parallel_canary");
   assert.equal(result.action, "filled");
+  assert.equal(result.executionTimings?.firstVenue, null);
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /concurrently/);
   assert.deepEqual(starts.sort(), ["kalshi", "polymarket"]);
+});
+
+test("live executor skips without submitting when preflight exceeds quote freshness window", async () => {
+  let now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  class SlowPreflightClient extends FakeVenueClient {
+    constructor(venue: Venue, private readonly preflightMs: number) {
+      super(venue);
+    }
+
+    async preflightOrder(): Promise<string | null> {
+      now += this.preflightMs;
+      return null;
+    }
+  }
+  const kalshi = new SlowPreflightClient("kalshi", 800);
+  const polymarket = new SlowPreflightClient("polymarket", 0);
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 1, liveParallelExecutionEnabled: true, liveQuoteMaxAgeMs: 750 }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /preflight took 800ms/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+});
+
+test("live executor locks parallel one-sided fills", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveParallelExecutionEnabled: true }),
+    books,
+    new FakeVenueClient("kalshi", { fillCount: 5 }),
+    new FakeVenueClient("polymarket", { status: "failed", fillCount: 0, error: "venue rejected" }),
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_canary");
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /venue fill mismatch kalshi=5 polymarket=0/);
+  assert.equal(locks.engageCalls, 1);
 });
 
 test("live executor keeps immediate hedge flow and then requires private stream confirmations", async () => {

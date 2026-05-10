@@ -446,6 +446,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
   readonly venue = "polymarket" as const;
   private clientPromise: Promise<PolymarketClobLike | PolymarketClobClientBundle> | null = null;
   private cachedReadiness: VenueExecutionReadiness | null = null;
+  private readonly orderBookCache = new Map<string, { checkedAt: number; book: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk"> }>();
 
   constructor(
     private readonly config: AppConfig,
@@ -462,8 +463,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
     options: { force?: boolean; requiredCollateral?: number } = {},
   ): Promise<VenueExecutionReadiness> {
     const requiredCollateral = options.requiredCollateral ?? this.config.liveOrderSize;
-    const useCache = !options.force && options.requiredCollateral == null;
-    if (useCache && this.cachedReadiness && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000) return this.cachedReadiness;
+    const useCache = !options.force;
+    const cachedRequiredCollateral = this.cachedReadiness?.requiredCollateral ?? 0;
+    if (
+      useCache
+      && this.cachedReadiness?.ready
+      && cachedRequiredCollateral + 1e-9 >= requiredCollateral
+      && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000
+    ) {
+      return this.cachedReadiness;
+    }
     if (!this.config.polymarketPrivateKey) {
       const readiness = configuredReadiness(false, "POLYMARKET_PRIVATE_KEY is required for signing live Polymarket orders", now);
       if (useCache) this.cachedReadiness = readiness;
@@ -598,7 +607,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const tokenId = leg.tokenId;
     const requestedAt = context.requestedAt ?? Date.now();
     const { client } = await this.client();
-    const book = context.preflight?.polymarketOrderBook ?? await withMutedPolymarketClientLogs(() => client.getOrderBook(tokenId));
+    const book = context.preflight?.polymarketOrderBook ?? await this.getOrderBook(tokenId, context.requestedAt ?? Date.now());
     const minOrderSize = finiteOrNull(book.min_order_size);
     if (minOrderSize != null && minOrderSize > context.size) {
       throw new Error(`Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`);
@@ -660,12 +669,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
     if (!leg.tokenId) return "Polymarket token id is required for live trading";
     const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
     const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
-      force: true,
       requiredCollateral,
     });
     if (!readiness.ready) return readiness.reason ?? "Polymarket live readiness failed";
-    const { client } = await this.client();
-    const book = await withMutedPolymarketClientLogs(() => client.getOrderBook(leg.tokenId as string));
+    const book = await this.getOrderBook(leg.tokenId, context.requestedAt ?? Date.now());
     const minOrderSize = finiteOrNull(book.min_order_size);
     if (minOrderSize != null && minOrderSize > context.size) {
       return `Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`;
@@ -682,6 +689,15 @@ export class PolymarketOrderClient implements VenueOrderClient {
   private async client(): Promise<PolymarketClobClientBundle> {
     this.clientPromise ??= this.clientFactory(this.config);
     return asPolymarketClientBundle(await this.clientPromise);
+  }
+
+  private async getOrderBook(tokenId: string, now = Date.now()): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">> {
+    const cached = this.orderBookCache.get(tokenId);
+    if (cached && now - cached.checkedAt < 30_000) return cached.book;
+    const { client } = await this.client();
+    const book = await withMutedPolymarketClientLogs(() => client.getOrderBook(tokenId));
+    this.orderBookCache.set(tokenId, { checkedAt: now, book });
+    return book;
   }
 }
 
