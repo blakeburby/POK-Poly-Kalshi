@@ -144,6 +144,64 @@ test("scanner processes candidate executions through a bounded queue without dup
   assert.equal(scanner.status().activeExecutions, 0);
 });
 
+test("live hot-path scanner submits before live signal persistence", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesTokenId: "yes-token", updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
+  ]);
+
+  const order: string[] = [];
+  const scanner = new CrossVenueArbScanner(
+    books,
+    {
+      async insertSignal() {
+        order.push("insert");
+        return 1;
+      },
+      async updateSignal() {
+        order.push("update");
+        return undefined;
+      },
+    },
+    {
+      async execute(): Promise<ExecutionResult> {
+        order.push("execute");
+        return {
+          action: "filled",
+          failureReason: null,
+          kalshiFillId: "kalshi-fill",
+          polymarketFillId: "poly-fill",
+          kalshiFillPrice: 0.5,
+          polymarketFillPrice: 0.4,
+        };
+      },
+    },
+    new ReentryThrottle(15_000),
+    {
+      enabled: true,
+      minProfitDollars: 0.05,
+      staleBookMs: 10_000,
+      executionConcurrency: 1,
+      liveTrading: true,
+      deferLivePersistence: true,
+      liveExposure: {
+        async liveExposureBlockReason() {
+          return null;
+        },
+      },
+    },
+  );
+
+  const accepted = await scanner.scan(now);
+  assert.equal(accepted.length, 1);
+  await waitFor(() => order.includes("update"));
+  assert.deepEqual(order, ["execute", "insert", "update"]);
+});
+
 test("live scanner limits canary execution to one candidate per expiry window", async () => {
   const books = new BookStore();
   const now = 1_800_000_000_000;

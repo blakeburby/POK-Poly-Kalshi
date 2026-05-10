@@ -126,6 +126,9 @@ export interface QuoteSnapshot {
 
 export interface ExecutionTimings {
   candidateToSubmitMs?: number | null;
+  hotGateMs?: number | null;
+  preSubmitDbMs?: number | null;
+  polymarketSignMs?: number | null;
   kalshiRttMs?: number | null;
   polymarketRttMs?: number | null;
   preflightMs?: number | null;
@@ -355,6 +358,9 @@ export interface LiveExecutionReadiness {
   hedgeMaxLossDollars?: number;
   hedgeFeeBufferDollars?: number;
   parallelExecutionEnabled?: boolean;
+  hotPathEnabled?: boolean;
+  hotPathCacheMaxAgeMs?: number;
+  polymarketPresignEnabled?: boolean;
   orderTimeoutMs: number;
   kalshiOrderGroupEnabled: boolean;
   userStreams: UserStreamReadiness;
@@ -504,6 +510,7 @@ export interface DashboardLatencySnapshot {
   wsToBookApplyMs: Record<Venue, DashboardLatencyStats>;
   scanner: {
     scanDurationMs: DashboardLatencyStats;
+    bookUpdateToDecisionMs: DashboardLatencyStats;
     queueDepth: number;
     activeExecutions: number;
     lastScanStartedAt: number | null;
@@ -514,9 +521,11 @@ export interface DashboardLatencySnapshot {
   persistence: {
     insertMs: DashboardLatencyStats;
     updateMs: DashboardLatencyStats;
+    preSubmitDbMs: DashboardLatencyStats;
   };
   execution: {
     durationMs: DashboardLatencyStats;
+    hotGateMs: DashboardLatencyStats;
   };
   dashboard: {
     snapshotBuildMs: DashboardLatencyStats;
@@ -544,6 +553,12 @@ export interface DashboardSnapshot {
     liveHedgeMaxLossDollars: number;
     liveHedgeFeeBufferDollars: number;
     liveParallelExecutionEnabled: boolean;
+    liveHotPathEnabled: boolean;
+    liveHotPathCacheMaxAgeMs: number;
+    liveHotPathWarmIntervalMs: number;
+    livePolymarketPresignEnabled: boolean;
+    livePolymarketSignedOrderTtlMs: number;
+    liveLowLatencyHttpEnabled: boolean;
     liveUserStreamsEnabled: boolean;
     liveUserStreamPretradeGraceMs: number;
     liveUserStreamConfirmTimeoutMs: number;

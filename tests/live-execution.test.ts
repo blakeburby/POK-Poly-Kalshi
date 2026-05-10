@@ -70,6 +70,12 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,
     liveParallelExecutionEnabled: false,
+    liveHotPathEnabled: false,
+    liveHotPathCacheMaxAgeMs: 5_000,
+    liveHotPathWarmIntervalMs: 1_000,
+    livePolymarketPresignEnabled: false,
+    livePolymarketSignedOrderTtlMs: 5_000,
+    liveLowLatencyHttpEnabled: true,
     liveKalshiOrderGroupEnabled: false,
     liveKalshiOrderGroupId: "",
     liveUserStreamsEnabled: false,
@@ -375,6 +381,210 @@ test("Polymarket order client reuses fresh preflight readiness and orderbook dat
   assert.equal(result.fillCount, 5);
   assert.equal(fake.balanceCalls, 1);
   assert.equal(fake.bookCalls, 1);
+});
+
+test("Polymarket hot-path preflight uses warmed readiness and metadata without network calls", async () => {
+  const now = 1_800_000_000_000;
+  class HotFakeClob implements PolymarketClobLike {
+    balanceCalls = 0;
+    bookCalls = 0;
+    tickCalls = 0;
+    negRiskCalls = 0;
+    versionCalls = 0;
+    createCalls = 0;
+
+    async getOrderBook() {
+      this.bookCalls += 1;
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async getTickSize() {
+      this.tickCalls += 1;
+      return "0.01" as const;
+    }
+
+    async getNegRisk() {
+      this.negRiskCalls += 1;
+      return false;
+    }
+
+    async resolveVersion() {
+      this.versionCalls += 1;
+      return 2;
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      this.createCalls += 1;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      this.balanceCalls += 1;
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new HotFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveHotPathEnabled: true,
+    liveHotPathCacheMaxAgeMs: 5_000,
+  }), async () => fake, allowedGeoblock);
+  await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  assert.equal(fake.balanceCalls, 1);
+  assert.equal(fake.bookCalls, 1);
+
+  fake.balanceCalls = 0;
+  fake.bookCalls = 0;
+  fake.tickCalls = 0;
+  fake.negRiskCalls = 0;
+  fake.versionCalls = 0;
+
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.41,
+    requiredCollateral: 2.3,
+    requestedAt: now + 100,
+  };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
+
+  assert.equal(await client.preflightOrder(leg, context), null);
+  const result = await client.placeOrder(leg, context);
+
+  assert.equal(result.fillCount, 5);
+  assert.equal(fake.balanceCalls, 0);
+  assert.equal(fake.bookCalls, 0);
+  assert.equal(fake.tickCalls, 0);
+  assert.equal(fake.negRiskCalls, 0);
+  assert.equal(fake.versionCalls, 0);
+  assert.equal(fake.createCalls, 1);
+});
+
+test("Polymarket optional pre-sign stores signed order for hot-path placement", async () => {
+  const now = 1_800_000_000_000;
+  class PresignFakeClob implements PolymarketClobLike {
+    createCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      this.createCalls += 1;
+      return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new PresignFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveHotPathEnabled: true,
+    livePolymarketPresignEnabled: true,
+  }), async () => fake, allowedGeoblock);
+  await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.41,
+    requiredCollateral: 2.3,
+    requestedAt: now + 100,
+  };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
+
+  assert.equal(await client.preflightOrder(leg, context), null);
+  assert.equal(fake.createCalls, 1);
+  const result = await client.placeOrder(leg, context);
+
+  assert.equal(result.fillCount, 5);
+  assert.equal(fake.createCalls, 1);
+  assert.equal(result.signMs, context.preflight?.polymarketSignMs ?? 0);
+});
+
+test("Polymarket expired pre-signed order falls back to live signing", async () => {
+  const now = 1_800_000_000_000;
+  class PresignFakeClob implements PolymarketClobLike {
+    createCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      this.createCalls += 1;
+      return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new PresignFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveHotPathEnabled: true,
+    livePolymarketPresignEnabled: true,
+    livePolymarketSignedOrderTtlMs: 50,
+  }), async () => fake, allowedGeoblock);
+  await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.41,
+    requiredCollateral: 2.3,
+    requestedAt: now + 100,
+  };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
+
+  assert.equal(await client.preflightOrder(leg, context), null);
+  assert.equal(fake.createCalls, 1);
+  context.preflight!.polymarketSignedOrderCreatedAt = now - 10_000;
+
+  const result = await client.placeOrder(leg, context);
+
+  assert.equal(result.fillCount, 5);
+  assert.equal(fake.createCalls, 2);
 });
 
 test("Polymarket order client cancels open remainders and flags non-exact fills", async () => {
@@ -1195,6 +1405,45 @@ test("live executor skips transient pre-trade user stream outage without persist
   assert.equal(polymarket.placed.length, 0);
   assert.equal(locks.engageCalls, 0);
   assert.equal(await locks.getActiveLock(), null);
+});
+
+test("live hot-path user stream outage skips immediately without grace retry", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const locks = new FakeLiveLockStore();
+  class FlappingMonitor extends FakeConfirmationMonitor {
+    preflightCalls = 0;
+
+    async preflight(): Promise<string | null> {
+      this.preflightCalls += 1;
+      return "Polymarket user stream is not subscribed";
+    }
+  }
+  const monitor = new FlappingMonitor();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 750, liveHotPathEnabled: true }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /live hot-path user stream preflight skipped/);
+  assert.equal(monitor.preflightCalls, 1);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+  assert.equal(locks.engageCalls, 0);
 });
 
 for (const preflightReason of [

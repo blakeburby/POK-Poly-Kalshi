@@ -23,6 +23,7 @@ node - "$HEALTH_FILE" "$SNAPSHOT_FILE" <<'NODE'
 const fs = require("node:fs");
 const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const snapshot = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const runtimeHealth = snapshot.health ?? {};
 const execution = snapshot.execution ?? {};
 const kalshi = execution.kalshi ?? {};
 const polymarket = execution.polymarket ?? {};
@@ -45,9 +46,11 @@ const checks = [
   ["execution.quoteSyncMaxSkewMs<=250", Number(execution.quoteSyncMaxSkewMs) <= 250],
   ["execution.minBookDepthShares>=orderSize", Number(execution.minBookDepthShares) >= Number(execution.orderSize)],
   ["execution.orderTimeoutMs<=2500", Number(execution.orderTimeoutMs) <= 2500],
-  ["execution.userStreams.ready=true", health.liveUserStreamsEnabled !== true || userStreams.ready === true],
-  ["execution.reconciliation.clean=true", health.liveReconcileBeforeTrade !== true || reconciliation.clean === true],
-  ["execution.userStreams.confirmTimeoutMs<=2500", health.liveUserStreamsEnabled !== true || Number(userStreams.confirmTimeoutMs) <= 2500],
+  ["snapshot.health.liveHotPathEnabled=true", runtimeHealth.liveHotPathEnabled === true],
+  ["snapshot.health.liveLowLatencyHttpEnabled=true", runtimeHealth.liveLowLatencyHttpEnabled === true],
+  ["execution.userStreams.ready=true", runtimeHealth.liveUserStreamsEnabled !== true || userStreams.ready === true],
+  ["execution.reconciliation.clean=true", runtimeHealth.liveReconcileBeforeTrade !== true || reconciliation.clean === true],
+  ["execution.userStreams.confirmTimeoutMs<=2500", runtimeHealth.liveUserStreamsEnabled !== true || Number(userStreams.confirmTimeoutMs) <= 2500],
   ["books.kalshi.length>0", Array.isArray(books.kalshi) && books.kalshi.length > 0],
   ["books.polymarket.length>0", Array.isArray(books.polymarket) && books.polymarket.length > 0],
 ];
@@ -68,8 +71,13 @@ console.log(JSON.stringify({
   quoteMaxAgeMs: execution.quoteMaxAgeMs,
   quoteSyncMaxSkewMs: execution.quoteSyncMaxSkewMs,
   minBookDepthShares: execution.minBookDepthShares,
-  edgeBufferDollars: execution.edgeBufferDollars,
   orderTimeoutMs: execution.orderTimeoutMs,
+  liveHotPathEnabled: runtimeHealth.liveHotPathEnabled,
+  liveHotPathCacheMaxAgeMs: runtimeHealth.liveHotPathCacheMaxAgeMs,
+  liveHotPathWarmIntervalMs: runtimeHealth.liveHotPathWarmIntervalMs,
+  liveLowLatencyHttpEnabled: runtimeHealth.liveLowLatencyHttpEnabled,
+  livePolymarketPresignEnabled: runtimeHealth.livePolymarketPresignEnabled,
+  livePolymarketSignedOrderTtlMs: runtimeHealth.livePolymarketSignedOrderTtlMs,
   userStreamsEnabled: userStreams.enabled,
   userStreamsReady: userStreams.ready,
   userStreamsReason: userStreams.reason,

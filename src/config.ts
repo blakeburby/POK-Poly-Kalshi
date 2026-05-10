@@ -44,6 +44,12 @@ export interface AppConfig {
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
   liveParallelExecutionEnabled: boolean;
+  liveHotPathEnabled: boolean;
+  liveHotPathCacheMaxAgeMs: number;
+  liveHotPathWarmIntervalMs: number;
+  livePolymarketPresignEnabled: boolean;
+  livePolymarketSignedOrderTtlMs: number;
+  liveLowLatencyHttpEnabled: boolean;
   liveKalshiOrderGroupEnabled: boolean;
   liveKalshiOrderGroupId: string;
   liveUserStreamsEnabled: boolean;
@@ -140,6 +146,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
     liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),
     liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", true),
+    liveHotPathEnabled: envBoolean(env, "LIVE_HOT_PATH_ENABLED", true),
+    liveHotPathCacheMaxAgeMs: envNumber(env, "LIVE_HOT_PATH_CACHE_MAX_AGE_MS", 5_000),
+    liveHotPathWarmIntervalMs: envNumber(env, "LIVE_HOT_PATH_WARM_INTERVAL_MS", 1_000),
+    livePolymarketPresignEnabled: envBoolean(env, "LIVE_POLYMARKET_PRESIGN_ENABLED", false),
+    livePolymarketSignedOrderTtlMs: envNumber(env, "LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS", 5_000),
+    liveLowLatencyHttpEnabled: envBoolean(env, "LIVE_LOW_LATENCY_HTTP_ENABLED", true),
     liveKalshiOrderGroupEnabled: envBoolean(env, "LIVE_KALSHI_ORDER_GROUP_ENABLED", true),
     liveKalshiOrderGroupId: envString(env, "LIVE_KALSHI_ORDER_GROUP_ID"),
     liveUserStreamsEnabled: envBoolean(env, "LIVE_USER_STREAMS_ENABLED", true),

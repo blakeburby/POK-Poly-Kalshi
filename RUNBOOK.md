@@ -51,6 +51,12 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_HEDGE_MAX_LOSS_DOLLARS=0.02`: maximum accepted realized loss per protected spread when hedging after the first venue fills.
 - `LIVE_HEDGE_FEE_BUFFER_DOLLARS=0.01`: conservative fee allowance used when calculating post-fill hedge caps.
 - `LIVE_PARALLEL_EXECUTION_ENABLED=true`: default low-latency live mode. The worker submits both venues concurrently after strict preflight, private-stream readiness, and reconciliation checks pass.
+- `LIVE_HOT_PATH_ENABLED=true`: keep live locks, exposure/reconciliation state, Polymarket readiness, CLOB client, token metadata, and order construction inputs warm in memory so a qualifying book update can submit orders before DB persistence.
+- `LIVE_HOT_PATH_CACHE_MAX_AGE_MS=5000`: maximum age for hot-path safety caches. If a cache is stale, the candidate is skipped or blocked rather than refreshing on the submit path.
+- `LIVE_HOT_PATH_WARM_INTERVAL_MS=1000`: background warm cadence for lock/exposure state, Polymarket collateral/geoblock/readiness, CLOB version, and token metadata.
+- `LIVE_LOW_LATENCY_HTTP_ENABLED=true`: install keep-alive HTTP transports for Axios/Polymarket and Node fetch/Kalshi, plus startup preconnect probes.
+- `LIVE_POLYMARKET_PRESIGN_ENABLED=false`: optional experimental mode that signs a short-lived Polymarket order during preflight so placement can reuse it. Keep disabled unless actively testing signed-order freshness.
+- `LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS=5000`: maximum age for any pre-signed Polymarket order. Expired signed orders are discarded and rebuilt before posting.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated Kalshi/Polymarket private order streams before live orders can be considered safe.
 - `LIVE_USER_STREAM_PRETRADE_GRACE_MS=750`: short retry window for transient private-stream subscription refreshes before skipping a candidate. Pre-order stream unavailability skips the trade instead of creating a persistent live lock.
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: maximum wait for private-stream confirmation after REST order responses.
@@ -64,17 +70,16 @@ unfilled remainder. If Polymarket reports a fill count different from
 `LIVE_ORDER_SIZE`, the worker marks the attempt failed and engages the
 persistent live circuit breaker.
 
-Private-stream safety note: in default live mode the worker keeps the Hybrid
-Safe Kalshi-first canary posture. After an exact Kalshi REST fill it treats
-Polymarket as a risk-reducing hedge, bypassing the normal profit gate only when
-current depth can fill exact size inside the configured hedge loss cap, then
-requires authenticated
-user-stream confirmation for both legs. Passive user-stream disconnects make
-readiness unhealthy and reconnect automatically; if they happen before any
-order submission the candidate is skipped. Confirmation timeout, failed
-Polymarket settlement event, fill-count mismatch, dirty reconciliation state,
-or any unsafe condition after an order may have been submitted engages or keeps
-the persistent live circuit breaker.
+Private-stream safety note: in default live mode the worker uses the parallel
+hot path. A fresh book edge must pass raw executable VWAP, freshness, depth,
+expiry, reconciliation, lock, and private-stream readiness gates from hot
+in-memory state; then Kalshi and Polymarket submit concurrently and the audit row
+is persisted after submission/confirmation. Passive user-stream disconnects make
+readiness unhealthy and skip new candidates immediately. Confirmation timeout,
+failed settlement event, fill-count mismatch, dirty reconciliation state, or any
+unsafe condition after an order may have been submitted engages or keeps the
+persistent live circuit breaker. The sequential hedge path remains as fallback
+logic and still uses the configured hedge loss cap if only the first venue fills.
 
 ## Enable And Disable
 
@@ -177,11 +182,11 @@ bash /opt/pok-poly-kalshi/scripts/verify-live-readiness.sh
 - Polymarket contracts do not enter `books.polymarket` until they have token IDs, expiry, an exact persisted or page-metadata `priceToBeat`, and live CLOB quotes.
 - The worker stores Polymarket opening strikes in `polymarket_price_beats`; this lets restarts resume without approximating from late spot ticks.
 - If Polymarket appears empty on the dashboard, check `Price-To-Beat Diagnostics` for `pending_strike`, `missing_strike`, Chainlink tick age, and skipped/backfill reasons.
-- Every attempted threshold-crossing entry is inserted before execution and then updated with `filled`, `skipped`, or `failed`.
+- Paper/dry-run threshold-crossing entries are inserted before execution and then updated with `filled`, `skipped`, or `failed`. In live hot-path mode, the worker creates an in-memory pending execution, submits both venues first, then persists the full audit row after submit/confirmation so DB latency cannot delay the order path.
 - Scanner work is coalesced under load: if a WS update lands while a scan is active, one immediate follow-up scan runs with the newest books.
 - Dashboard latency fields are worker-observed freshness/timing metrics, not exchange-internal latency unless a venue exposes reliable exchange timestamps.
 - Dry-run fills simulate conservative buy-side slippage and persist the simulated fill prices into the audit row; live mode records actual venue order IDs, statuses, fill counts, and fill prices.
-- Live mode rechecks current top-of-book freshness, expiry distance, capped edge, and the protected-spread-only guard immediately before order placement.
+- Live mode rechecks current depth VWAP edge, book freshness/skew, expiry distance, tick/order metadata freshness, private-stream readiness, and the protected-spread-only guard immediately before order placement from warmed in-memory state.
 - Live mode allows only one canary spread per expiry window by default and blocks reused live legs from the audit table before placing a new order.
 - Kalshi live execution uses the V2 event-order endpoint. Buying NO is mapped onto Kalshi's YES book by sending an `ask` at the complementary YES price.
 - Polymarket live execution uses the official CLOB client with EIP-712 signing plus derived L2 API credentials.

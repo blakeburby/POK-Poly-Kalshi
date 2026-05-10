@@ -22,14 +22,19 @@ export interface ScannerOptions {
   maxLiveTradesPerWindow?: number;
   liveExposure?: {
     liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null>;
+    observeSignal?(signal: DashboardSignal): void;
   };
   liveLocks?: LiveExecutionLockWriter;
+  deferLivePersistence?: boolean;
   latency?: {
     recordScanStarted(at?: number): void;
     recordScanDuration(durationMs: number, completedAt?: number): void;
+    recordBookUpdateToDecision?(durationMs: number): void;
     recordDbInsert(durationMs: number): void;
     recordDbUpdate(durationMs: number): void;
+    recordPreSubmitDb?(durationMs: number): void;
     recordExecution(durationMs: number): void;
+    recordHotGate?(durationMs: number): void;
     recordQueueState(queueDepth: number, activeExecutions: number): void;
     recordDuplicateCandidateSkip(): void;
   };
@@ -159,6 +164,7 @@ export class CrossVenueArbScanner {
     }
     this.activePairs.add(candidate.pairKey);
     if (this.options.liveTrading) this.reserveLiveCandidate(candidate);
+    this.options.latency?.recordBookUpdateToDecision?.(Math.max(0, Date.now() - now));
     this.executionQueue.push({ candidate, now });
     this.recordQueueState();
     this.drainExecutionQueue();
@@ -186,6 +192,11 @@ export class CrossVenueArbScanner {
   }
 
   private async handleCandidate(candidate: ArbCandidate, now: number): Promise<void> {
+    if (this.options.liveTrading && this.options.deferLivePersistence) {
+      await this.handleDeferredLiveCandidate(candidate, now);
+      return;
+    }
+
     const insertStartedAt = Date.now();
     const signalId = await this.signals.insertSignal({
       candidate,
@@ -193,11 +204,15 @@ export class CrossVenueArbScanner {
       action: "skipped",
       failureReason: "pending_execution",
     });
-    this.options.latency?.recordDbInsert(Date.now() - insertStartedAt);
+    const insertMs = Date.now() - insertStartedAt;
+    this.options.latency?.recordDbInsert(insertMs);
+    this.options.latency?.recordPreSubmitDb?.(insertMs);
     try {
       const executionStartedAt = Date.now();
       const result = await this.executor.execute(candidate);
       this.options.latency?.recordExecution(Date.now() - executionStartedAt);
+      if (result.executionTimings?.hotGateMs != null) this.options.latency?.recordHotGate?.(result.executionTimings.hotGateMs);
+      result.executionTimings = { ...result.executionTimings, preSubmitDbMs: insertMs };
       const updateStartedAt = Date.now();
       const updatedSignal = await this.signals.updateSignal(signalId, result);
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
@@ -236,6 +251,85 @@ export class CrossVenueArbScanner {
         category: "SCANNER",
         message: "candidate execution failed",
         context: { pairKey: candidate.pairKey, error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  private async handleDeferredLiveCandidate(candidate: ArbCandidate, now: number): Promise<void> {
+    try {
+      this.options.latency?.recordPreSubmitDb?.(0);
+      const executionStartedAt = Date.now();
+      const result = await this.executor.execute(candidate);
+      this.options.latency?.recordExecution(Date.now() - executionStartedAt);
+      if (result.executionTimings?.hotGateMs != null) this.options.latency?.recordHotGate?.(result.executionTimings.hotGateMs);
+      result.executionTimings = { ...result.executionTimings, preSubmitDbMs: 0 };
+
+      const insertStartedAt = Date.now();
+      const signalId = await this.signals.insertSignal({
+        candidate,
+        executionMode: "live",
+        action: result.action,
+        failureReason: result.failureReason,
+      });
+      this.options.latency?.recordDbInsert(Date.now() - insertStartedAt);
+
+      const updateStartedAt = Date.now();
+      const updatedSignal = await this.signals.updateSignal(signalId, result);
+      this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
+      if (updatedSignal) {
+        this.options.analytics?.recordSignal(updatedSignal);
+        this.options.liveExposure?.observeSignal?.(updatedSignal);
+      }
+      if (result.liveLockReason) {
+        await this.options.liveLocks?.engageLock({
+          reason: result.liveLockReason,
+          sourceSignalId: signalId,
+          executionGroupId: result.executionGroupId ?? null,
+          details: {
+            pairKey: candidate.pairKey,
+            expiryMs: candidate.expiryMs,
+            action: result.action,
+            kalshiFillCount: result.kalshiFillCount ?? null,
+            polymarketFillCount: result.polymarketFillCount ?? null,
+            kalshiFillPrice: result.kalshiFillPrice ?? null,
+            polymarketFillPrice: result.polymarketFillPrice ?? null,
+          },
+        });
+      }
+      if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
+      else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
+      logEvent({
+        category: "SCANNER",
+        message: "candidate processed",
+        context: { pairKey: candidate.pairKey, action: result.action, guaranteedProfit: candidate.guaranteedProfit },
+      });
+    } catch (error) {
+      const failureReason = error instanceof Error ? error.message : String(error);
+      try {
+        const signalId = await this.signals.insertSignal({
+          candidate,
+          executionMode: "live",
+          action: "failed",
+          failureReason,
+        });
+        const updatedSignal = await this.signals.updateSignal(signalId, {
+          action: "failed",
+          failureReason,
+        });
+        if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
+      } catch (persistError) {
+        logEvent({
+          severity: "ERROR",
+          category: "DB",
+          message: "failed to persist deferred live execution error",
+          context: { error: persistError instanceof Error ? persistError.message : String(persistError) },
+        });
+      }
+      logEvent({
+        severity: "ERROR",
+        category: "SCANNER",
+        message: "candidate execution failed",
+        context: { pairKey: candidate.pairKey, error: failureReason },
       });
     }
   }

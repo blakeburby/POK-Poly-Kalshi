@@ -53,9 +53,12 @@ export class LatencyMonitor {
     polymarket: new RollingSamples(),
   };
   private readonly scanDuration = new RollingSamples();
+  private readonly bookUpdateToDecision = new RollingSamples();
   private readonly dbInsert = new RollingSamples();
   private readonly dbUpdate = new RollingSamples();
+  private readonly preSubmitDb = new RollingSamples();
   private readonly execution = new RollingSamples();
+  private readonly hotGate = new RollingSamples();
   private readonly snapshotBuild = new RollingSamples();
   private queueDepth = 0;
   private activeExecutions = 0;
@@ -77,6 +80,10 @@ export class LatencyMonitor {
     this.lastScanCompletedAt = completedAt;
   }
 
+  recordBookUpdateToDecision(durationMs: number): void {
+    this.bookUpdateToDecision.add(durationMs);
+  }
+
   recordDbInsert(durationMs: number): void {
     this.dbInsert.add(durationMs);
   }
@@ -85,8 +92,16 @@ export class LatencyMonitor {
     this.dbUpdate.add(durationMs);
   }
 
+  recordPreSubmitDb(durationMs: number): void {
+    this.preSubmitDb.add(durationMs);
+  }
+
   recordExecution(durationMs: number): void {
     this.execution.add(durationMs);
+  }
+
+  recordHotGate(durationMs: number): void {
+    this.hotGate.add(durationMs);
   }
 
   recordSnapshotBuild(durationMs: number): void {
@@ -125,6 +140,7 @@ export class LatencyMonitor {
       },
       scanner: {
         scanDurationMs: this.scanDuration.snapshot(),
+        bookUpdateToDecisionMs: this.bookUpdateToDecision.snapshot(),
         queueDepth: this.queueDepth,
         activeExecutions: this.activeExecutions,
         lastScanStartedAt: this.lastScanStartedAt,
@@ -135,9 +151,11 @@ export class LatencyMonitor {
       persistence: {
         insertMs: this.dbInsert.snapshot(),
         updateMs: this.dbUpdate.snapshot(),
+        preSubmitDbMs: this.preSubmitDb.snapshot(),
       },
       execution: {
         durationMs: this.execution.snapshot(),
+        hotGateMs: this.hotGate.snapshot(),
       },
       dashboard: {
         snapshotBuildMs: this.snapshotBuild.snapshot(snapshotBuildMs ?? null),

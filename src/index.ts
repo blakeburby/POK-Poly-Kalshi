@@ -13,6 +13,8 @@ import { VenueOrderEventHub, VenueOrderEventStore } from "./db/venue-order-event
 import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
 import { DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
+import { installLowLatencyHttpTransport, preconnectLiveHttpEndpoints } from "./execution/http-transport";
+import { CachedLiveExecutionLockStore, LiveExposureCache } from "./execution/live-hot-path";
 import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator } from "./execution/venue-confirmations";
 import { KalshiTickerClient } from "./kalshi/client";
 import { KalshiUserStreamClient } from "./kalshi/user-stream";
@@ -33,12 +35,18 @@ function sendJson(response: import("node:http").ServerResponse, status: number, 
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  installLowLatencyHttpTransport(config);
+  void preconnectLiveHttpEndpoints(config);
   const pool = createPool(config);
   await runMigrations(pool);
 
   const books = new BookStore();
   const signals = new SignalStore(pool);
-  const liveLocks = new LiveExecutionLockStore(pool);
+  const baseLiveLocks = new LiveExecutionLockStore(pool);
+  const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs) : null;
+  const liveLocks = cachedLiveLocks ?? baseLiveLocks;
+  const liveExposureCache = config.liveHotPathEnabled ? new LiveExposureCache(signals, config.liveHotPathCacheMaxAgeMs) : null;
+  const liveExposure = liveExposureCache ?? signals;
   const orderEvents = new VenueOrderEventHub(new VenueOrderEventStore(pool));
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
@@ -71,7 +79,7 @@ async function main(): Promise<void> {
       polymarketUserStream?.status(),
       now,
     ),
-    reconciliationStore: signals,
+    reconciliationStore: liveExposure,
     liveLocks,
     now: Date.now,
   });
@@ -84,8 +92,9 @@ async function main(): Promise<void> {
     executionConcurrency: config.executionConcurrency,
     liveTrading: config.liveTrading,
     maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
-    liveExposure: signals,
+    liveExposure,
     liveLocks,
+    deferLivePersistence: config.liveHotPathEnabled,
     latency,
     analytics: config.liveTrading ? liveAnalytics : paperAnalytics,
   });
@@ -147,6 +156,11 @@ async function main(): Promise<void> {
           kalshiUserStream?.setSubscriptions(books.getKalshiTickers());
           polymarketUserStream?.setSubscriptions(books.getPolymarketConditionIds());
         }
+        if (config.liveHotPathEnabled) {
+          void warmHotPath().catch((error) => {
+            logEvent({ severity: "WARN", category: "DISCOVERY", message: "hot-path warmup after discovery failed", context: { error: error instanceof Error ? error.message : String(error) } });
+          });
+        }
         lastDiscoveryAt = Date.now();
         lastDiscoveryError = null;
       } catch (error) {
@@ -189,7 +203,24 @@ async function main(): Promise<void> {
 
   polymarketPriceToBeat.start();
   await refreshDiscovery();
+  async function warmHotPath(): Promise<void> {
+    if (!config.liveHotPathEnabled) return;
+    const now = Date.now();
+    await Promise.all([
+      cachedLiveLocks?.refresh() ?? Promise.resolve(),
+      liveExposureCache?.refresh(now) ?? Promise.resolve(),
+      liveReadinessProbe.warm({ now, tokenIds: books.getPolymarketTokenIds() }),
+    ]);
+  }
+  await warmHotPath().catch((error) => {
+    logEvent({ severity: "WARN", category: "BOOT", message: "initial hot-path warmup failed", context: { error: error instanceof Error ? error.message : String(error) } });
+  });
   const discoveryTimer = setInterval(() => void refreshDiscovery(), config.marketDiscoveryIntervalMs);
+  const hotPathWarmTimer = setInterval(() => {
+    void warmHotPath().catch((error) => {
+      logEvent({ severity: "WARN", category: "BOOT", message: "hot-path warmup failed", context: { error: error instanceof Error ? error.message : String(error) } });
+    });
+  }, Math.max(250, config.liveHotPathWarmIntervalMs));
   const analyticsTimer = setInterval(() => void reconcileAnalytics().catch((error) => {
     logEvent({ severity: "ERROR", category: "DB", message: "analytics reconciliation failed", context: { error: error instanceof Error ? error.message : String(error) } });
   }), Math.max(1_000, config.dashboardAnalyticsRefreshMs));
@@ -252,6 +283,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     clearInterval(discoveryTimer);
+    clearInterval(hotPathWarmTimer);
     clearInterval(analyticsTimer);
     for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();

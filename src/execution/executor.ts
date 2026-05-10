@@ -187,6 +187,8 @@ interface ExecutionMetadata {
   hedgeCapPrice?: number | null;
   hedgeFailureReason?: string | null;
   postFillHedgeDecisionMs?: number | null;
+  hotGateStartedAt?: number;
+  hotGateCompletedAt?: number;
 }
 
 interface SequentialFirstVenueDecision {
@@ -223,6 +225,9 @@ export function dryRunExecutionReadiness(config: AppConfig, now = Date.now()): L
     hedgeMaxLossDollars: config.liveHedgeMaxLossDollars,
     hedgeFeeBufferDollars: config.liveHedgeFeeBufferDollars,
     parallelExecutionEnabled: config.liveParallelExecutionEnabled,
+    hotPathEnabled: config.liveHotPathEnabled,
+    hotPathCacheMaxAgeMs: config.liveHotPathCacheMaxAgeMs,
+    polymarketPresignEnabled: config.livePolymarketPresignEnabled,
     orderTimeoutMs: config.liveOrderTimeoutMs,
     kalshiOrderGroupEnabled: config.liveKalshiOrderGroupEnabled && Boolean(config.liveKalshiOrderGroupId),
     userStreams: buildUserStreamReadiness(false, config.liveUserStreamConfirmTimeoutMs, undefined, undefined, now),
@@ -251,6 +256,15 @@ export class LiveExecutor implements ArbExecutor {
     private readonly orderEvents?: VenueOrderEventWriter,
     private readonly confirmationMonitor?: VenueConfirmationMonitor,
   ) {}
+
+  async warm(options: { tokenIds?: string[]; now?: number } = {}): Promise<void> {
+    const now = options.now ?? this.now();
+    const requiredCollateral = roundPrice(this.config.liveOrderSize + this.config.liveCollateralBufferDollars);
+    await Promise.all([
+      this.kalshiClient.warm?.({ now, requiredCollateral }) ?? Promise.resolve(),
+      this.polymarketClient.warm?.({ now, tokenIds: options.tokenIds, requiredCollateral }) ?? Promise.resolve(),
+    ]);
+  }
 
   async readiness(now = this.now()): Promise<LiveExecutionReadiness> {
     const [kalshi, polymarket, activeLock] = await Promise.all([
@@ -288,6 +302,9 @@ export class LiveExecutor implements ArbExecutor {
       hedgeMaxLossDollars: this.config.liveHedgeMaxLossDollars,
       hedgeFeeBufferDollars: this.config.liveHedgeFeeBufferDollars,
       parallelExecutionEnabled: this.config.liveParallelExecutionEnabled,
+      hotPathEnabled: this.config.liveHotPathEnabled,
+      hotPathCacheMaxAgeMs: this.config.liveHotPathCacheMaxAgeMs,
+      polymarketPresignEnabled: this.config.livePolymarketPresignEnabled,
       orderTimeoutMs: this.config.liveOrderTimeoutMs,
       kalshiOrderGroupEnabled: this.config.liveKalshiOrderGroupEnabled && Boolean(this.config.liveKalshiOrderGroupId),
       userStreams,
@@ -304,6 +321,7 @@ export class LiveExecutor implements ArbExecutor {
 
   async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
     const executeStartedAt = this.now();
+    const hotGateStartedAt = executeStartedAt;
     const guardFailure = protectedGuardFailure(candidate, this.config.minProfitDollars);
     if (guardFailure) return guardFailure;
     const activeLock = await this.liveLocks?.getActiveLock();
@@ -347,7 +365,7 @@ export class LiveExecutor implements ArbExecutor {
         quoteSnapshot: prepared.quoteSnapshot,
         depthVwap: prepared.quoteSnapshot.projectedPremium,
         projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
-        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt }),
+        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
       };
     }
     if (preflightCompletedAt - preflightStartedAt > this.config.liveQuoteMaxAgeMs) {
@@ -356,7 +374,7 @@ export class LiveExecutor implements ArbExecutor {
         quoteSnapshot: prepared.quoteSnapshot,
         depthVwap: prepared.quoteSnapshot.projectedPremium,
         projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
-        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt }),
+        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
       };
     }
     const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
@@ -366,7 +384,7 @@ export class LiveExecutor implements ArbExecutor {
         quoteSnapshot: prepared.quoteSnapshot,
         depthVwap: prepared.quoteSnapshot.projectedPremium,
         projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
-        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt }),
+        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
       };
     }
     prepared = refreshed;
@@ -376,6 +394,7 @@ export class LiveExecutor implements ArbExecutor {
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
       requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
     };
+    const hotGateCompletedAt = this.now();
 
     if (this.config.liveParallelExecutionEnabled) {
       const [kalshi, polymarket] = await Promise.all([
@@ -394,6 +413,8 @@ export class LiveExecutor implements ArbExecutor {
           firstVenue: null,
           firstVenueReason: "parallel orders submitted concurrently",
           firstVenueVwap: null,
+          hotGateStartedAt,
+          hotGateCompletedAt,
         }),
         venueConfirmations,
         executionStrategy: "parallel_canary",
@@ -435,6 +456,8 @@ export class LiveExecutor implements ArbExecutor {
         executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
           preflightStartedAt,
           preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt,
           ...firstDecision,
         }),
         executionStrategy: "sequential_hedge",
@@ -457,6 +480,8 @@ export class LiveExecutor implements ArbExecutor {
         executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
           preflightStartedAt,
           preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt,
           postFillHedgeDecisionMs,
           ...firstDecision,
         }),
@@ -487,6 +512,8 @@ export class LiveExecutor implements ArbExecutor {
         executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
           preflightStartedAt,
           preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt,
           postFillHedgeDecisionMs,
           ...firstDecision,
         }),
@@ -509,6 +536,8 @@ export class LiveExecutor implements ArbExecutor {
       executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
         preflightStartedAt,
         preflightCompletedAt,
+        hotGateStartedAt,
+        hotGateCompletedAt,
         postFillHedgeDecisionMs,
         ...firstDecision,
       }),
@@ -708,6 +737,9 @@ export class LiveExecutor implements ArbExecutor {
       ? await this.confirmationMonitor.preflight(candidate, this.now())
       : "live user stream confirmation is enabled but not configured";
     if (!reason) return null;
+    if (this.config.liveHotPathEnabled && isUserStreamPreflightReason(reason)) {
+      return skipped(`live hot-path user stream preflight skipped: ${reason}`);
+    }
     if (isUserStreamPreflightReason(reason)) {
       const graceMs = Math.max(0, this.config.liveUserStreamPretradeGraceMs);
       if (graceMs > 0 && this.confirmationMonitor) {
@@ -921,6 +953,8 @@ export class LiveExecutor implements ArbExecutor {
       firstVenue?: Venue | null;
       firstVenueReason?: string | null;
       firstVenueVwap?: number | null;
+      hotGateStartedAt?: number;
+      hotGateCompletedAt?: number;
     } = {},
   ): ExecutionTimings {
     const timing = (result: VenueOrderResult | null): number | null => {
@@ -944,6 +978,9 @@ export class LiveExecutor implements ArbExecutor {
     const preflightMs = metadata.preflightStartedAt != null && metadata.preflightCompletedAt != null
       ? Math.max(0, metadata.preflightCompletedAt - metadata.preflightStartedAt)
       : null;
+    const hotGateMs = metadata.hotGateStartedAt != null && metadata.hotGateCompletedAt != null
+      ? Math.max(0, metadata.hotGateCompletedAt - metadata.hotGateStartedAt)
+      : null;
     const venueSubmitSkewMs = kalshiRequestedAt != null && polymarketRequestedAt != null
       ? Math.abs(kalshiRequestedAt - polymarketRequestedAt)
       : null;
@@ -951,6 +988,8 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketOrderRttMs = timing(polymarket);
     return {
       candidateToSubmitMs: Math.max(0, (firstRequestedAt ?? startedAt) - startedAt),
+      hotGateMs,
+      polymarketSignMs: polymarket?.signMs ?? null,
       preflightMs,
       kalshiRttMs: kalshiOrderRttMs,
       polymarketRttMs: polymarketOrderRttMs,

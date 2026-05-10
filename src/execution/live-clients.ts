@@ -35,6 +35,9 @@ export interface LiveOrderPreflight {
   polymarketReadiness?: VenueExecutionReadiness;
   polymarketRequiredCollateral?: number;
   polymarketOrderBook?: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">;
+  polymarketSignedOrder?: SignedOrder;
+  polymarketSignedOrderCreatedAt?: number;
+  polymarketSignMs?: number;
 }
 
 export interface VenueOrderResult {
@@ -49,6 +52,7 @@ export interface VenueOrderResult {
   error: string | null;
   fee?: number | null;
   exchangeTimestampMs?: number | null;
+  signMs?: number | null;
 }
 
 export interface VenueOrderClient {
@@ -56,10 +60,13 @@ export interface VenueOrderClient {
   preflightOrder?(leg: ArbLeg, context: LiveOrderContext): Promise<string | null>;
   placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult>;
   readiness(now?: number): Promise<VenueExecutionReadiness>;
+  warm?(options?: { now?: number; tokenIds?: string[]; requiredCollateral?: number }): Promise<void>;
 }
 
 export interface PolymarketClobLike {
   getOrderBook(tokenID: string): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">>;
+  getTickSize?(tokenID: string): Promise<TickSize | string>;
+  getNegRisk?(tokenID: string): Promise<boolean>;
   createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }, options: { tickSize: TickSize; negRisk?: boolean }): Promise<SignedOrder>;
   postOrder(order: SignedOrder, orderType?: OrderType): Promise<unknown>;
   cancelOrder?(payload: { orderID: string }): Promise<unknown>;
@@ -458,6 +465,30 @@ export class PolymarketOrderClient implements VenueOrderClient {
     return this.checkReadiness(now);
   }
 
+  async warm(options: { now?: number; tokenIds?: string[]; requiredCollateral?: number } = {}): Promise<void> {
+    const now = options.now ?? Date.now();
+    const requiredCollateral = options.requiredCollateral ?? roundPrice(this.config.liveOrderSize + this.config.liveCollateralBufferDollars);
+    const ageMs = this.cachedReadiness?.lastCheckedAt == null ? Number.POSITIVE_INFINITY : now - this.cachedReadiness.lastCheckedAt;
+    const readiness = await this.checkReadiness(now, {
+      force: this.config.liveHotPathEnabled && this.cachedReadiness != null && ageMs > Math.max(250, this.config.liveHotPathCacheMaxAgeMs / 2),
+      requiredCollateral,
+    });
+    if (this.config.liveHotPathEnabled) this.cachedReadiness = readiness;
+    if (!readiness.ready) return;
+    const bundle = await this.client();
+    await (bundle.client as unknown as { resolveVersion?: (forceUpdate?: boolean) => Promise<number> }).resolveVersion?.();
+    await Promise.all((options.tokenIds ?? []).map((tokenId) => this.warmTokenMetadata(bundle.client, tokenId, now)));
+  }
+
+  private async warmTokenMetadata(client: PolymarketClobLike, tokenId: string, now: number): Promise<void> {
+    if (!tokenId) return;
+    await Promise.allSettled([
+      this.getOrderBook(tokenId, now),
+      client.getTickSize?.(tokenId),
+      client.getNegRisk?.(tokenId),
+    ]);
+  }
+
   private async checkReadiness(
     now = Date.now(),
     options: { force?: boolean; requiredCollateral?: number } = {},
@@ -613,7 +644,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
       throw new Error(`Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`);
     }
 
-    const signedOrder = await client.createOrder({
+    const preflight = context.preflight;
+    const preflightSignedOrderAgeMs = preflight?.polymarketSignedOrderCreatedAt == null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
+    const preflightSignedOrder = preflight?.polymarketSignedOrder
+      && preflightSignedOrderAgeMs <= this.config.livePolymarketSignedOrderTtlMs
+      ? preflight.polymarketSignedOrder
+      : null;
+    const signStartedAt = Date.now();
+    const signedOrder = preflightSignedOrder ?? await client.createOrder({
       tokenID: tokenId,
       price: roundPrice(context.maxBuyPrice),
       size: context.size,
@@ -623,6 +663,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       tickSize: book.tick_size as TickSize,
       negRisk: Boolean(book.neg_risk),
     });
+    const signMs = preflightSignedOrder
+      ? preflight?.polymarketSignMs ?? 0
+      : Math.max(0, Date.now() - signStartedAt);
     // Polymarket FOK/FAK BUY orders are notional-based: if the market improves,
     // a "5 share" canary can spend the whole max notional and receive many more
     // shares. Use a marketable GTC limit order to cap the token amount, then
@@ -662,17 +705,22 @@ export class PolymarketOrderClient implements VenueOrderClient {
       error: fillError,
       fee: null,
       exchangeTimestampMs: null,
+      signMs,
     };
   }
 
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     if (!leg.tokenId) return "Polymarket token id is required for live trading";
     const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
-    const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
-      requiredCollateral,
-    });
+    const now = context.requestedAt ?? Date.now();
+    const readiness = this.config.liveHotPathEnabled
+      ? this.cachedHotReadiness(now, requiredCollateral)
+      : await this.checkReadiness(now, { requiredCollateral });
     if (!readiness.ready) return readiness.reason ?? "Polymarket live readiness failed";
-    const book = await this.getOrderBook(leg.tokenId, context.requestedAt ?? Date.now());
+    const book = this.config.liveHotPathEnabled
+      ? this.cachedHotOrderBook(leg.tokenId, now)
+      : await this.getOrderBook(leg.tokenId, now);
+    if (!book) return `Polymarket hot order metadata cache is stale for token ${leg.tokenId}`;
     const minOrderSize = finiteOrNull(book.min_order_size);
     if (minOrderSize != null && minOrderSize > context.size) {
       return `Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`;
@@ -683,7 +731,62 @@ export class PolymarketOrderClient implements VenueOrderClient {
       polymarketRequiredCollateral: requiredCollateral,
       polymarketOrderBook: book,
     };
+    if (this.config.livePolymarketPresignEnabled) {
+      try {
+        const signStartedAt = Date.now();
+        const { client } = await this.client();
+        const signedOrder = await client.createOrder({
+          tokenID: leg.tokenId,
+          price: roundPrice(context.maxBuyPrice),
+          size: context.size,
+          side: Side.BUY,
+          metadata: metadataFromClientOrderId(context.clientOrderId),
+        }, {
+          tickSize: book.tick_size as TickSize,
+          negRisk: Boolean(book.neg_risk),
+        });
+        const signMs = Math.max(0, Date.now() - signStartedAt);
+        context.preflight = {
+          ...context.preflight,
+          polymarketSignedOrder: signedOrder,
+          polymarketSignedOrderCreatedAt: now,
+          polymarketSignMs: signMs,
+        };
+      } catch (error) {
+        return `Polymarket signed-order warmup failed: ${sanitizeError(error)}`;
+      }
+    }
     return null;
+  }
+
+  private cachedHotReadiness(now: number, requiredCollateral: number): VenueExecutionReadiness {
+    const cached = this.cachedReadiness;
+    const ageMs = cached?.lastCheckedAt == null ? Number.POSITIVE_INFINITY : now - cached.lastCheckedAt;
+    if (!cached || ageMs > this.config.liveHotPathCacheMaxAgeMs) {
+      return {
+        configured: Boolean(this.config.polymarketPrivateKey),
+        ready: false,
+        reason: `Polymarket hot readiness cache is stale: age ${Number.isFinite(ageMs) ? ageMs : "unknown"}ms exceeds ${this.config.liveHotPathCacheMaxAgeMs}ms`,
+        balance: cached?.balance ?? null,
+        allowance: cached?.allowance ?? null,
+        lastCheckedAt: cached?.lastCheckedAt ?? null,
+      };
+    }
+    if ((cached.requiredCollateral ?? 0) + 1e-9 < requiredCollateral) {
+      return {
+        ...cached,
+        ready: false,
+        reason: `Polymarket hot readiness cache covers ${cached.requiredCollateral ?? 0} collateral but ${requiredCollateral} is required`,
+      };
+    }
+    return cached;
+  }
+
+  private cachedHotOrderBook(tokenId: string, now: number): Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk"> | null {
+    const cached = this.orderBookCache.get(tokenId);
+    if (!cached) return null;
+    const maxAgeMs = Math.max(30_000, this.config.liveHotPathCacheMaxAgeMs);
+    return now - cached.checkedAt <= maxAgeMs ? cached.book : null;
   }
 
   private async client(): Promise<PolymarketClobClientBundle> {

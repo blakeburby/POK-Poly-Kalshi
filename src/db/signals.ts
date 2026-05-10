@@ -406,6 +406,27 @@ export class SignalStore {
     return null;
   }
 
+  async listLiveExposureSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
+    const result = await this.db.query<DashboardSignalRow>(`
+      SELECT ${SIGNAL_COLUMNS}
+      FROM cross_venue_arb_signals
+      WHERE execution_mode = 'live'
+        AND execution_group_id IS NOT NULL
+        AND expiry_ms > $1
+        AND (
+          action = 'filled'
+          OR partial_fill = TRUE
+          OR COALESCE(kalshi_fill_count, 0) > 0
+          OR COALESCE(polymarket_fill_count, 0) > 0
+          OR kalshi_status IN ('unknown', 'unexpected_fill_count')
+          OR polymarket_status IN ('unknown', 'unexpected_fill_count')
+        )
+      ORDER BY updated_at DESC
+      LIMIT $2
+    `, [now, limit]);
+    return result.rows.map(signalFromRow);
+  }
+
   async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
     const result = await this.db.query<LiveReconciliationRow>(`
       SELECT id, action, partial_fill, kalshi_status, polymarket_status,
