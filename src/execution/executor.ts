@@ -77,6 +77,10 @@ function waitMs(ms: number): Promise<void> {
   return ms <= 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function venueLabel(venue: Venue): string {
+  return venue === "kalshi" ? "Kalshi" : "Polymarket";
+}
+
 function isUserStreamPreflightReason(reason: string): boolean {
   const normalized = reason.toLowerCase();
   const mentionsUserStream = normalized.includes("user stream") || normalized.includes("user subscription");
@@ -164,6 +168,14 @@ interface PreparedHedge {
   requiredCollateral: number;
   hedgeCapPrice: number;
   quoteSnapshot: QuoteSnapshot;
+}
+
+interface VenueExecutionPlan {
+  venue: Venue;
+  client: VenueOrderClient;
+  prepared: PreparedLeg;
+  context: LiveOrderContext;
+  clientOrderId: string;
 }
 
 interface ExecutionMetadata {
@@ -355,91 +367,97 @@ export class LiveExecutor implements ArbExecutor {
       });
     }
 
-    // Submit Kalshi first during live canary. A read-only Kalshi key returns a
-    // write-scope 403; placing Polymarket in parallel would create a one-sided
-    // position. If Kalshi is not accepted exactly, abort before Polymarket.
-    const kalshi = await this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, kalshiContext);
-    if (!this.isExactVenueFill(kalshi)) {
-      return await this.resultFromVenueOrders(executionGroupId, kalshi, {
-        venue: "polymarket",
-        clientOrderId: polymarketClientOrderId,
-        orderId: null,
-        status: "not_submitted",
-        fillPrice: null,
-        fillCount: null,
-        requestedAt: new Date(this.now()).toISOString(),
-        respondedAt: new Date(this.now()).toISOString(),
-        error: "not submitted because Kalshi leg did not fill exactly",
-      }, {
+    const kalshiPlan: VenueExecutionPlan = {
+      venue: "kalshi",
+      client: this.kalshiClient,
+      prepared: prepared.kalshi,
+      context: kalshiContext,
+      clientOrderId: kalshiClientOrderId,
+    };
+    const polymarketPlan: VenueExecutionPlan = {
+      venue: "polymarket",
+      client: this.polymarketClient,
+      prepared: prepared.polymarket,
+      context: polymarketContext,
+      clientOrderId: polymarketClientOrderId,
+    };
+    const firstPlan = candidate.lower.venue === "kalshi" ? kalshiPlan : polymarketPlan;
+    const hedgePlan = firstPlan.venue === "kalshi" ? polymarketPlan : kalshiPlan;
+    const results: Partial<Record<Venue, VenueOrderResult>> = {};
+
+    // Capture the cheap leg first. The old Kalshi-first sequence let fast-moving
+    // Polymarket mispricings disappear before the Polymarket order was ever sent.
+    const firstResult = await this.placeVenueOrder(firstPlan.client, firstPlan.prepared.leg, firstPlan.context);
+    results[firstPlan.venue] = firstResult;
+    if (!this.isExactVenueFill(firstResult)) {
+      results[hedgePlan.venue] = this.notSubmittedResult(
+        hedgePlan.venue,
+        hedgePlan.clientOrderId,
+        `not submitted because ${venueLabel(firstPlan.venue)} leg did not fill exactly`,
+      );
+      return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, kalshi, null, { preflightStartedAt, preflightCompletedAt }),
+        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt }),
         executionStrategy: "sequential_hedge",
         riskHedge: false,
       });
     }
 
     const hedgeDecisionStartedAt = this.now();
-    const hedge = this.preparePolymarketHedge(candidate, prepared.kalshi.leg, prepared.polymarket.leg, kalshi);
+    const hedge = this.prepareVenueHedge(candidate, firstPlan.prepared.leg, hedgePlan.prepared.leg, firstResult);
     const postFillHedgeDecisionMs = Math.max(0, this.now() - hedgeDecisionStartedAt);
     if (typeof hedge === "string") {
-      return await this.resultFromVenueOrders(executionGroupId, kalshi, {
-        venue: "polymarket",
-        clientOrderId: polymarketClientOrderId,
-        orderId: null,
-        status: "not_submitted",
-        fillPrice: null,
-        fillCount: null,
-        requestedAt: new Date(this.now()).toISOString(),
-        respondedAt: new Date(this.now()).toISOString(),
-        error: `not submitted because Polymarket hedge cap preflight failed: ${hedge}`,
-      }, {
+      const hedgeFailureReason = `${venueLabel(hedgePlan.venue)} hedge cap preflight failed: ${hedge}`;
+      results[hedgePlan.venue] = this.notSubmittedResult(
+        hedgePlan.venue,
+        hedgePlan.clientOrderId,
+        `not submitted because ${hedgeFailureReason}`,
+      );
+      return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, kalshi, null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
+        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
         executionStrategy: "sequential_hedge",
         riskHedge: true,
         hedgeCapPrice: null,
-        hedgeFailureReason: `Polymarket hedge cap preflight failed: ${hedge}`,
+        hedgeFailureReason,
       });
     }
 
-    const hedgePolymarketContext: LiveOrderContext = {
-      ...polymarketContext,
+    const hedgeContext: LiveOrderContext = {
+      ...hedgePlan.context,
       maxBuyPrice: hedge.maxBuyPrice,
       requiredCollateral: hedge.requiredCollateral,
     };
     const postFillPreflight = await this.preflightVenueOrders([
-      { client: this.polymarketClient, leg: hedge.leg, context: hedgePolymarketContext },
+      { client: hedgePlan.client, leg: hedge.leg, context: hedgeContext },
     ]);
     if (postFillPreflight) {
-      return await this.resultFromVenueOrders(executionGroupId, kalshi, {
-        venue: "polymarket",
-        clientOrderId: polymarketClientOrderId,
-        orderId: null,
-        status: "not_submitted",
-        fillPrice: null,
-        fillCount: null,
-        requestedAt: new Date(this.now()).toISOString(),
-        respondedAt: new Date(this.now()).toISOString(),
-        error: `not submitted because fresh Polymarket preflight failed: ${postFillPreflight}`,
-      }, {
+      const hedgeFailureReason = `fresh ${venueLabel(hedgePlan.venue)} preflight failed: ${postFillPreflight}`;
+      results[hedgePlan.venue] = this.notSubmittedResult(
+        hedgePlan.venue,
+        hedgePlan.clientOrderId,
+        `not submitted because ${hedgeFailureReason}`,
+      );
+      return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: hedge.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, kalshi, null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
+        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
         executionStrategy: "sequential_hedge",
         riskHedge: true,
         hedgeCapPrice: hedge.hedgeCapPrice,
-        hedgeFailureReason: `fresh Polymarket preflight failed: ${postFillPreflight}`,
+        hedgeFailureReason,
       });
     }
 
-    const polymarket = await this.placeVenueOrder(this.polymarketClient, hedge.leg, hedgePolymarketContext);
+    const hedgeResult = await this.placeVenueOrder(hedgePlan.client, hedge.leg, hedgeContext);
+    results[hedgePlan.venue] = hedgeResult;
     const venueConfirmations = await this.confirmVenueOrders(executionGroupId, [
-      { result: kalshi, leg: prepared.kalshi.leg, submittedAtMs: Date.parse(kalshi.requestedAt) },
-      { result: polymarket, leg: hedge.leg, submittedAtMs: Date.parse(polymarket.requestedAt) },
+      { result: firstResult, leg: firstPlan.prepared.leg, submittedAtMs: Date.parse(firstResult.requestedAt) },
+      { result: hedgeResult, leg: hedge.leg, submittedAtMs: Date.parse(hedgeResult.requestedAt) },
     ]);
 
-    return await this.resultFromVenueOrders(executionGroupId, kalshi, polymarket, {
+    return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
       quoteSnapshot: hedge.quoteSnapshot,
-      executionTimings: this.executionTimings(executeStartedAt, kalshi, polymarket, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
+      executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, { preflightStartedAt, preflightCompletedAt, postFillHedgeDecisionMs }),
       venueConfirmations,
       executionStrategy: "sequential_hedge",
       riskHedge: true,
@@ -449,6 +467,21 @@ export class LiveExecutor implements ArbExecutor {
 
   private failed(reason: string): ExecutionResult {
     return failed(reason);
+  }
+
+  private notSubmittedResult(venue: Venue, clientOrderId: string, error: string): VenueOrderResult {
+    const now = new Date(this.now()).toISOString();
+    return {
+      venue,
+      clientOrderId,
+      orderId: null,
+      status: "not_submitted",
+      fillPrice: null,
+      fillCount: null,
+      requestedAt: now,
+      respondedAt: now,
+      error,
+    };
   }
 
   private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg): PreparedExecution | string {
@@ -467,36 +500,41 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
-  private preparePolymarketHedge(
+  private prepareVenueHedge(
     candidate: ArbCandidate,
-    kalshiLeg: ArbLeg,
-    polymarketLeg: ArbLeg,
-    kalshi: VenueOrderResult,
+    filledLeg: ArbLeg,
+    hedgeLeg: ArbLeg,
+    filled: VenueOrderResult,
   ): PreparedHedge | string {
     const now = this.now();
-    if (candidate.expiryMs <= now) return "candidate expired before Polymarket hedge could be submitted";
-    if (kalshi.fillPrice == null) return "Kalshi fill price missing; cannot calculate Polymarket hedge cap";
-    const knownKalshiFee = Math.max(0, kalshi.fee ?? 0);
-    const rawHedgeCapPrice = 1 - kalshi.fillPrice - knownKalshiFee - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars;
+    const hedgeVenue = venueLabel(hedgeLeg.venue);
+    if (candidate.expiryMs <= now) return `candidate expired before ${hedgeVenue} hedge could be submitted`;
+    if (filled.fillPrice == null) return `${venueLabel(filledLeg.venue)} fill price missing; cannot calculate ${hedgeVenue} hedge cap`;
+    const knownFilledFee = Math.max(0, filled.fee ?? 0);
+    const rawHedgeCapPrice = 1 - filled.fillPrice - knownFilledFee - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars;
     const hedgeCapPrice = roundPrice(Math.min(1, Math.max(0, rawHedgeCapPrice)));
     if (!Number.isFinite(hedgeCapPrice) || hedgeCapPrice <= 0) {
-      return `computed Polymarket hedge cap ${hedgeCapPrice.toFixed(4)} is not executable`;
+      return `computed ${hedgeVenue} hedge cap ${hedgeCapPrice.toFixed(4)} is not executable`;
     }
 
+    const kalshiLeg = filledLeg.venue === "kalshi" ? filledLeg : hedgeLeg;
+    const polymarketLeg = filledLeg.venue === "polymarket" ? filledLeg : hedgeLeg;
     const evaluation = evaluateLiveQuoteQuality(candidate, this.liveBooksForPreflight(kalshiLeg, polymarketLeg), this.config, now);
-    const polymarketQuote = evaluation.snapshot.polymarket;
-    if (!polymarketQuote) return "Polymarket quote missing for hedge";
-    if (polymarketQuote.quoteAgeMs != null && polymarketQuote.quoteAgeMs > this.config.liveQuoteMaxAgeMs) {
-      return `Polymarket hedge quote is stale: age ${polymarketQuote.quoteAgeMs}ms exceeds ${this.config.liveQuoteMaxAgeMs}ms`;
+    const hedgeQuote = hedgeLeg.venue === "kalshi" ? evaluation.snapshot.kalshi : evaluation.snapshot.polymarket;
+    if (!hedgeQuote) return `${hedgeVenue} quote missing for hedge`;
+    if (hedgeQuote.quoteAgeMs != null && hedgeQuote.quoteAgeMs > this.config.liveQuoteMaxAgeMs) {
+      return `${hedgeVenue} hedge quote is stale: age ${hedgeQuote.quoteAgeMs}ms exceeds ${this.config.liveQuoteMaxAgeMs}ms`;
     }
-    if (polymarketQuote.topAsk == null) return "Polymarket hedge ask is unavailable";
-    if (polymarketQuote.worstAsk == null || polymarketQuote.vwap == null) {
-      return `Polymarket hedge depth ${roundPrice(polymarketQuote.depth)} below required ${polymarketQuote.depthRequired}`;
+    if (hedgeQuote.topAsk == null) return `${hedgeVenue} hedge ask is unavailable`;
+    if (hedgeQuote.worstAsk == null || hedgeQuote.vwap == null) {
+      return `${hedgeVenue} hedge depth ${roundPrice(hedgeQuote.depth)} below required ${hedgeQuote.depthRequired}`;
     }
-    if (polymarketQuote.worstAsk > hedgeCapPrice + 1e-9) {
-      return `Polymarket hedge worst ask ${polymarketQuote.worstAsk.toFixed(4)} exceeds cap ${hedgeCapPrice.toFixed(4)}`;
+    if (hedgeQuote.worstAsk > hedgeCapPrice + 1e-9) {
+      return `${hedgeVenue} hedge worst ask ${hedgeQuote.worstAsk.toFixed(4)} exceeds cap ${hedgeCapPrice.toFixed(4)}`;
     }
-    const leg = evaluation.polymarketLeg ?? { ...polymarketLeg, ask: polymarketQuote.topAsk };
+    const leg = hedgeLeg.venue === "kalshi"
+      ? evaluation.kalshiLeg ?? { ...hedgeLeg, ask: hedgeQuote.topAsk }
+      : evaluation.polymarketLeg ?? { ...hedgeLeg, ask: hedgeQuote.topAsk };
     return {
       leg,
       maxBuyPrice: hedgeCapPrice,
@@ -813,6 +851,9 @@ export class LiveExecutor implements ArbExecutor {
     };
     const kalshiRequestedAt = requested(kalshi);
     const polymarketRequestedAt = requested(polymarket);
+    const firstRequestedAt = [kalshiRequestedAt, polymarketRequestedAt]
+      .filter((value): value is number => value != null)
+      .sort((a, b) => a - b)[0] ?? null;
     const completedAt = polymarket ? Date.parse(polymarket.respondedAt) : kalshi ? Date.parse(kalshi.respondedAt) : this.now();
     const preflightMs = metadata.preflightStartedAt != null && metadata.preflightCompletedAt != null
       ? Math.max(0, metadata.preflightCompletedAt - metadata.preflightStartedAt)
@@ -823,7 +864,7 @@ export class LiveExecutor implements ArbExecutor {
     const kalshiOrderRttMs = timing(kalshi);
     const polymarketOrderRttMs = timing(polymarket);
     return {
-      candidateToSubmitMs: Math.max(0, (kalshiRequestedAt ?? startedAt) - startedAt),
+      candidateToSubmitMs: Math.max(0, (firstRequestedAt ?? startedAt) - startedAt),
       preflightMs,
       kalshiRttMs: kalshiOrderRttMs,
       polymarketRttMs: polymarketOrderRttMs,

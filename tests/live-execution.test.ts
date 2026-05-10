@@ -236,6 +236,14 @@ function liveCandidate(now: number) {
   return { candidate, lower, higher };
 }
 
+function kalshiLowerLiveCandidate(now: number) {
+  const lower = contract({ venue: "kalshi", contractId: "kalshi", strike: 1500, yesAsk: 0.4, updatedAt: now });
+  const higher = contract({ venue: "polymarket", contractId: "poly", strike: 1502, noAsk: 0.5, noTokenId: "no-token", updatedAt: now });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+  return { candidate, lower, higher };
+}
+
 test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => {
   const yes = buildKalshiV2OrderBody({
     venue: "kalshi",
@@ -748,8 +756,35 @@ test("live executor fills only protected candidates after stale book and capped-
   assert.equal(result.partialFill, false);
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed.length, 1);
-  assert.equal(kalshi.placed[0].context.maxBuyPrice, 0.51);
-  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.51);
+  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.4);
+  assert.equal(kalshi.placed[0].context.maxBuyPrice, 0.61);
+});
+
+test("live executor captures the cheaper Polymarket leg before hedging Kalshi", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const order: Venue[] = [];
+  class OrderedClient extends FakeVenueClient {
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      order.push(this.venue);
+      return super.placeOrder(leg, context);
+    }
+  }
+  const executor = new LiveExecutor(
+    config(),
+    books,
+    new OrderedClient("kalshi"),
+    new OrderedClient("polymarket"),
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.deepEqual(order, ["polymarket", "kalshi"]);
 });
 
 test("live executor supports configured venue minimum size when both venues fill exactly", async () => {
@@ -774,11 +809,11 @@ test("live executor supports configured venue minimum size when both venues fill
 
 test("live executor hedges Polymarket after Kalshi fill even when refreshed arb edge is below threshold", async () => {
   const now = 1_799_999_900_000;
-  const { candidate, lower, higher } = liveCandidate(now);
+  const { candidate, lower, higher } = kalshiLowerLiveCandidate(now);
   const books = new BookStore();
-  books.setPolymarketContracts([lower]);
-  books.setKalshiContracts([higher]);
-  const movedPolymarket = { ...lower, yesAsk: 0.5, yesAskLevels: [{ price: 0.5, size: 5 }], updatedAt: now };
+  books.setKalshiContracts([lower]);
+  books.setPolymarketContracts([higher]);
+  const movedPolymarket = { ...higher, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 5 }], updatedAt: now };
   const kalshi = new MutatingVenueClient("kalshi", { fillPrice: 0.5, fillCount: 5 }, () => {
     books.setPolymarketContracts([movedPolymarket]);
   });
@@ -800,11 +835,11 @@ test("live executor hedges Polymarket after Kalshi fill even when refreshed arb 
 
 test("live executor locks with hedge-cap reason when Polymarket cannot hedge within max loss", async () => {
   const now = 1_799_999_900_000;
-  const { candidate, lower, higher } = liveCandidate(now);
+  const { candidate, lower, higher } = kalshiLowerLiveCandidate(now);
   const books = new BookStore();
-  books.setPolymarketContracts([lower]);
-  books.setKalshiContracts([higher]);
-  const movedPolymarket = { ...lower, yesAsk: 0.52, yesAskLevels: [{ price: 0.52, size: 5 }], updatedAt: now };
+  books.setKalshiContracts([lower]);
+  books.setPolymarketContracts([higher]);
+  const movedPolymarket = { ...higher, noAsk: 0.52, noAskLevels: [{ price: 0.52, size: 5 }], updatedAt: now };
   const locks = new FakeLiveLockStore();
   const kalshi = new MutatingVenueClient("kalshi", { fillPrice: 0.5, fillCount: 5 }, () => {
     books.setPolymarketContracts([movedPolymarket]);
@@ -934,7 +969,7 @@ test("live executor keeps immediate hedge flow and then requires private stream 
   const result = await executor.execute(candidate);
 
   assert.equal(result.action, "filled");
-  assert.deepEqual(monitor.waitCalls, ["kalshi", "polymarket"]);
+  assert.deepEqual(monitor.waitCalls, ["polymarket", "kalshi"]);
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed.length, 1);
   assert.equal(result.venueConfirmations?.kalshi?.status, "confirmed");
@@ -1110,10 +1145,10 @@ test("live executor locks when private stream confirmation times out", async () 
 
 test("live executor locks when realized fills no longer satisfy guaranteed edge", async () => {
   const now = 1_799_999_900_000;
-  const { candidate, lower, higher } = liveCandidate(now);
+  const { candidate, lower, higher } = kalshiLowerLiveCandidate(now);
   const books = new BookStore();
-  books.setPolymarketContracts([lower]);
-  books.setKalshiContracts([higher]);
+  books.setKalshiContracts([lower]);
+  books.setPolymarketContracts([higher]);
   const locks = new FakeLiveLockStore();
   const executor = new LiveExecutor(
     config({ liveOrderSize: 5, minProfitDollars: 0.05 }),
@@ -1159,12 +1194,12 @@ test("live executor refuses to trade when a persistent circuit breaker is active
   assert.equal(readiness.circuitBreaker?.executionGroupId, "prior-group");
 });
 
-test("live executor does not submit Polymarket when Kalshi fails first", async () => {
+test("live executor does not submit Polymarket when first Kalshi leg fails", async () => {
   const now = 1_799_999_900_000;
-  const { candidate, lower, higher } = liveCandidate(now);
+  const { candidate, lower, higher } = kalshiLowerLiveCandidate(now);
   const books = new BookStore();
-  books.setPolymarketContracts([lower]);
-  books.setKalshiContracts([higher]);
+  books.setKalshiContracts([lower]);
+  books.setPolymarketContracts([higher]);
   const kalshi = new FakeVenueClient("kalshi", {
     status: "failed",
     fillCount: null,
@@ -1275,10 +1310,10 @@ test("live executor rejects dead-zone candidates and locks after one-sided fills
   assert.equal(blocked.action, "failed");
   assert.match(blocked.failureReason ?? "", /protected-spread-only guard/);
 
-  const { candidate, lower, higher } = liveCandidate(now);
+  const { candidate, lower, higher } = kalshiLowerLiveCandidate(now);
   const books = new BookStore();
-  books.setPolymarketContracts([lower]);
-  books.setKalshiContracts([higher]);
+  books.setKalshiContracts([lower]);
+  books.setPolymarketContracts([higher]);
   const executor = new LiveExecutor(
     config(),
     books,
