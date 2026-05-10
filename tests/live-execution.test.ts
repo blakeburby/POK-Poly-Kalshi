@@ -66,8 +66,6 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
-    liveEdgeBufferDollars: 0.03,
-    liveEntryLatencyEdgeBufferDollars: 0.02,
     liveOrderTimeoutMs: 2_500,
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,

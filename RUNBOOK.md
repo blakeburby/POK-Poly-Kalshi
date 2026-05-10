@@ -48,7 +48,6 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_MIN_EXPIRY_MS=120000`: production recommendation to skip entries too close to settlement.
 - `LIVE_MAX_TRADES_PER_WINDOW=1`: hard live canary cap per 15-minute expiry window.
 - `LIVE_COLLATERAL_BUFFER_DOLLARS=0.25`: extra Polymarket collateral required during fresh execution preflight.
-- `LIVE_ENTRY_LATENCY_EDGE_BUFFER_DOLLARS=0.02`: extra entry-only edge cushion so live does not arm barely-threshold quotes.
 - `LIVE_HEDGE_MAX_LOSS_DOLLARS=0.02`: maximum accepted realized loss per protected spread when hedging after the first venue fills.
 - `LIVE_HEDGE_FEE_BUFFER_DOLLARS=0.01`: conservative fee allowance used when calculating post-fill hedge caps.
 - `LIVE_PARALLEL_EXECUTION_ENABLED=true`: default low-latency live mode. The worker submits both venues concurrently after strict preflight, private-stream readiness, and reconciliation checks pass.

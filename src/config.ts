@@ -40,8 +40,6 @@ export interface AppConfig {
   liveQuoteMaxAgeMs: number;
   liveQuoteSyncMaxSkewMs: number;
   liveMinBookDepthShares: number;
-  liveEdgeBufferDollars: number;
-  liveEntryLatencyEdgeBufferDollars: number;
   liveOrderTimeoutMs: number;
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
@@ -138,8 +136,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveQuoteMaxAgeMs: envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
     liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
     liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", liveOrderSize),
-    liveEdgeBufferDollars: envNumber(env, "LIVE_EDGE_BUFFER_DOLLARS", 0.03),
-    liveEntryLatencyEdgeBufferDollars: envNumber(env, "LIVE_ENTRY_LATENCY_EDGE_BUFFER_DOLLARS", 0.02),
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
     liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
     liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),

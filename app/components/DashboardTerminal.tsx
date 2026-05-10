@@ -2896,7 +2896,7 @@ function ExecutionControlsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Quote Max Age</span><strong>{execution ? formatCompactTime(execution.quoteMaxAgeMs) : formatCompactTime(snapshot.health.liveQuoteMaxAgeMs)}</strong></div>
         <div><span>Quote Sync Skew</span><strong>{execution ? formatCompactTime(execution.quoteSyncMaxSkewMs) : formatCompactTime(snapshot.health.liveQuoteSyncMaxSkewMs)}</strong></div>
         <div><span>Min Depth</span><strong>{execution?.minBookDepthShares ?? snapshot.health.liveMinBookDepthShares}</strong></div>
-        <div><span>Edge Buffer</span><strong>{formatSignedCents(-(execution?.edgeBufferDollars ?? snapshot.health.liveEdgeBufferDollars))}</strong></div>
+        <div><span>Edge Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
         <div><span>Order Timeout</span><strong>{execution ? formatCompactTime(execution.orderTimeoutMs) : formatCompactTime(snapshot.health.liveOrderTimeoutMs)}</strong></div>
         <div><span>Stream Confirm</span><strong>{execution?.userStreams ? formatCompactTime(execution.userStreams.confirmTimeoutMs) : formatCompactTime(snapshot.health.liveUserStreamConfirmTimeoutMs)}</strong></div>
         <div><span>User Streams</span><strong className={execution?.userStreams?.ready ? "profit" : "loss"}>{execution?.userStreams?.enabled ? execution.userStreams.ready ? "READY" : "BLOCKED" : "OFF"}</strong></div>

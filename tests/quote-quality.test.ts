@@ -13,8 +13,6 @@ function safetyConfig(input: Partial<AppConfig> = {}): AppConfig {
       LIVE_ORDER_SIZE: "5",
       LIVE_MIN_BOOK_DEPTH_SHARES: "5",
       ARB_MIN_PROFIT_DOLLARS: "0.05",
-      LIVE_EDGE_BUFFER_DOLLARS: "0.03",
-      LIVE_ENTRY_LATENCY_EDGE_BUFFER_DOLLARS: "0.02",
       LIVE_QUOTE_MAX_AGE_MS: "750",
       LIVE_QUOTE_SYNC_MAX_SKEW_MS: "250",
     }),
@@ -44,7 +42,7 @@ test("depthWeightedAsk computes order-size VWAP and fails when depth is insuffic
   assert.equal(depthWeightedAsk([{ price: 0.4, size: 2 }], 5), null);
 });
 
-test("live quote quality rejects stale, skewed, shallow, tick-changing, and buffered negative-edge quotes", () => {
+test("live quote quality rejects stale, skewed, shallow, tick-changing, and raw negative-edge quotes", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig();
   const poly = contract({
@@ -68,7 +66,7 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and buff
 
   const ok = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
   assert.equal(ok.ok, true);
-  assert.equal(ok.snapshot.projectedEdgeAfterFees, 0.05);
+  assert.equal(ok.snapshot.projectedEdgeAfterFees, 0.1);
 
   const stale = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 751 }] }, config, now);
   assert.equal(stale.ok, false);
@@ -87,11 +85,47 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and buff
   assert.match(tickChanged.reason ?? "", /tick size/);
 
   const noEdge = evaluateLiveQuoteQuality(candidate, {
-    kalshi: [{ ...kalshi, noAsk: 0.55, noAskLevels: [{ price: 0.55, size: 5 }] }],
+    kalshi: [{ ...kalshi, noAsk: 0.56, noAskLevels: [{ price: 0.56, size: 5 }] }],
     polymarket: [{ ...poly, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }] }],
   }, config, now);
   assert.equal(noEdge.ok, false);
-  assert.match(noEdge.reason ?? "", /after buffer below threshold/);
+  assert.match(noEdge.reason ?? "", /depth VWAP edge 0.0400 below threshold 0.0500/);
+});
+
+test("live quote quality uses raw VWAP edge without extra live edge buffers", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig();
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.55,
+    noAskLevels: [{ price: 0.55, size: 5 }],
+    updatedAt: now,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const fiveCentEdge = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(fiveCentEdge.ok, true);
+  assert.equal(fiveCentEdge.snapshot.projectedEdge, 0.05);
+  assert.equal(fiveCentEdge.snapshot.projectedEdgeAfterFees, 0.05);
+
+  const fourCentEdge = evaluateLiveQuoteQuality(candidate, {
+    kalshi: [{ ...kalshi, noAsk: 0.56, noAskLevels: [{ price: 0.56, size: 5 }] }],
+    polymarket: [poly],
+  }, config, now);
+  assert.equal(fourCentEdge.ok, false);
+  assert.equal(fourCentEdge.snapshot.projectedEdge, 0.04);
+  assert.match(fourCentEdge.reason ?? "", /depth VWAP edge 0.0400 below threshold 0.0500/);
 });
 
 test("incident-shaped Kalshi 30 NO versus Polymarket 5 YES cannot pass live quote gates", () => {
@@ -120,5 +154,5 @@ test("incident-shaped Kalshi 30 NO versus Polymarket 5 YES cannot pass live quot
   assert.equal(result.snapshot.kalshi?.depth, 5);
   assert.equal(result.snapshot.polymarket?.depth, 5);
   assert.equal(result.snapshot.projectedPremium, 1.1);
-  assert.match(result.reason ?? "", /after buffer below threshold/);
+  assert.match(result.reason ?? "", /depth VWAP edge -0.1000 below threshold 0.0500/);
 });

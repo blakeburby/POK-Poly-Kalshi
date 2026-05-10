@@ -121,9 +121,6 @@ export interface QuoteSnapshot {
   projectedEdge: number | null;
   projectedEdgeAfterFees: number | null;
   minProfitDollars: number;
-  edgeBufferDollars: number;
-  entryLatencyEdgeBufferDollars?: number | null;
-  totalEdgeBufferDollars?: number | null;
   failureReason: string | null;
 }
 
@@ -355,8 +352,6 @@ export interface LiveExecutionReadiness {
   quoteMaxAgeMs: number;
   quoteSyncMaxSkewMs: number;
   minBookDepthShares: number;
-  edgeBufferDollars: number;
-  entryLatencyEdgeBufferDollars?: number;
   hedgeMaxLossDollars?: number;
   hedgeFeeBufferDollars?: number;
   parallelExecutionEnabled?: boolean;
@@ -545,8 +540,6 @@ export interface DashboardSnapshot {
     liveQuoteMaxAgeMs: number;
     liveQuoteSyncMaxSkewMs: number;
     liveMinBookDepthShares: number;
-    liveEdgeBufferDollars: number;
-    liveEntryLatencyEdgeBufferDollars: number;
     liveOrderTimeoutMs: number;
     liveHedgeMaxLossDollars: number;
     liveHedgeFeeBufferDollars: number;
