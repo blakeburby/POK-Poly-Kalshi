@@ -59,6 +59,11 @@ export interface AppConfig {
   liveUserStreamsEnabled: boolean;
   liveUserStreamPretradeGraceMs: number;
   liveUserStreamConfirmTimeoutMs: number;
+  livePretradeRetryAttempts: number;
+  livePretradeRetryDelayMs: number;
+  liveFinalRecoveryTimeoutMs: number;
+  liveFinalRecoveryPollMs: number;
+  liveAutoResolveVerifiedIncidents: boolean;
   liveReconcileBeforeTrade: boolean;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
@@ -169,6 +174,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveUserStreamsEnabled: envBoolean(env, "LIVE_USER_STREAMS_ENABLED", true),
     liveUserStreamPretradeGraceMs: envNumber(env, "LIVE_USER_STREAM_PRETRADE_GRACE_MS", 750),
     liveUserStreamConfirmTimeoutMs: envNumber(env, "LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS", 2_500),
+    livePretradeRetryAttempts: envNumber(env, "LIVE_PRETRADE_RETRY_ATTEMPTS", 2),
+    livePretradeRetryDelayMs: envNumber(env, "LIVE_PRETRADE_RETRY_DELAY_MS", 100),
+    liveFinalRecoveryTimeoutMs: envNumber(env, "LIVE_FINAL_RECOVERY_TIMEOUT_MS", 3_000),
+    liveFinalRecoveryPollMs: envNumber(env, "LIVE_FINAL_RECOVERY_POLL_MS", 250),
+    liveAutoResolveVerifiedIncidents: envBoolean(env, "LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS", true),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
     kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
     polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),

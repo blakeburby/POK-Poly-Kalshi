@@ -107,6 +107,11 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveUserStreamsEnabled: false,
     liveUserStreamPretradeGraceMs: 750,
     liveUserStreamConfirmTimeoutMs: 2_500,
+    livePretradeRetryAttempts: 2,
+    livePretradeRetryDelayMs: 100,
+    liveFinalRecoveryTimeoutMs: 3_000,
+    liveFinalRecoveryPollMs: 250,
+    liveAutoResolveVerifiedIncidents: true,
     liveReconcileBeforeTrade: false,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
@@ -1655,6 +1660,31 @@ test("live executor locks parallel one-sided fills", async () => {
   assert.equal(locks.engageCalls, 1);
 });
 
+test("live executor treats exact paired fills as filled even when realized edge is below entry threshold", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveParallelExecutionEnabled: true, minProfitDollars: 0.05 }),
+    books,
+    new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.55 }),
+    new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.5 }),
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.realizedGuaranteedProfit, -0.05);
+  assert.equal(result.liveLockReason, null);
+  assert.equal(locks.engageCalls, 0);
+});
+
 test("live executor resolves a Kalshi timeout from private-stream confirmation before locking", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
@@ -1719,6 +1749,8 @@ test("live executor resolves a Kalshi timeout from private-stream confirmation b
   assert.equal(result.kalshiFillPrice, 0.31);
   assert.equal(result.polymarketFillCount, 5);
   assert.equal(result.realizedGuaranteedProfit, 0.07);
+  assert.equal(result.recoveryStatus, "auto_resolved_paired_fill");
+  assert.equal(result.finalizationMs, 3_457);
   assert.equal(result.executionTimings?.totalMs, 3_457);
   assert.deepEqual(monitor.waitCalls.sort(), ["kalshi", "polymarket"]);
   assert.equal(locks.engageCalls, 0);
@@ -1758,6 +1790,7 @@ test("live executor keeps the lock when a timed-out venue is unresolved by strea
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, true);
   assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(result.recoveryStatus, "operator_required");
   assert.equal(locks.engageCalls, 1);
 });
 
@@ -1783,6 +1816,8 @@ test("live executor does not lock when both parallel limit orders cancel with ze
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, false);
   assert.equal(result.liveLockReason, null);
+  assert.equal(result.recoveryStatus, "auto_resolved_no_exposure");
+  assert.match(result.reconciliationResolutionReason ?? "", /verified both venues have zero fill/);
   assert.equal(locks.engageCalls, 0);
 });
 
@@ -1808,6 +1843,7 @@ test("live executor locks when aggressive limit cancellation cannot be verified"
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, false);
   assert.match(result.liveLockReason ?? "", /timeout\/unknown/);
+  assert.equal(result.recoveryStatus, "operator_required");
   assert.equal(locks.engageCalls, 1);
 });
 
@@ -1900,7 +1936,7 @@ test("live executor skips transient pre-trade user stream outage without persist
   assert.equal(await locks.getActiveLock(), null);
 });
 
-test("live hot-path user stream outage skips immediately without grace retry", async () => {
+test("live hot-path user stream outage bounded-retries before skipping without a persistent lock", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -1919,7 +1955,7 @@ test("live hot-path user stream outage skips immediately without grace retry", a
   }
   const monitor = new FlappingMonitor();
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 750, liveHotPathEnabled: true }),
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 750, liveHotPathEnabled: true, livePretradeRetryAttempts: 2, livePretradeRetryDelayMs: 1 }),
     books,
     kalshi,
     polymarket,
@@ -1933,7 +1969,9 @@ test("live hot-path user stream outage skips immediately without grace retry", a
 
   assert.equal(result.action, "skipped");
   assert.match(result.failureReason ?? "", /live hot-path user stream preflight skipped/);
-  assert.equal(monitor.preflightCalls, 1);
+  assert.equal(result.recoveryStatus, "pretrade_retry");
+  assert.equal(result.recoveryAttempts, 2);
+  assert.equal(monitor.preflightCalls, 3);
   assert.equal(kalshi.placed.length, 0);
   assert.equal(polymarket.placed.length, 0);
   assert.equal(locks.engageCalls, 0);
@@ -2014,7 +2052,83 @@ test("live executor grace-retries pre-trade user streams before submitting order
   assert.equal(locks.engageCalls, 0);
 });
 
-test("live executor still locks persistent pre-trade reconciliation failures", async () => {
+test("live executor bounded-retries transient pre-trade user stream state before submitting orders", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const locks = new FakeLiveLockStore();
+  class ReconnectingMonitor extends FakeConfirmationMonitor {
+    preflightCalls = 0;
+
+    async preflight(): Promise<string | null> {
+      this.preflightCalls += 1;
+      return this.preflightCalls < 3 ? "refreshing Polymarket user subscriptions" : null;
+    }
+  }
+  const monitor = new ReconnectingMonitor();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 0, livePretradeRetryAttempts: 2, livePretradeRetryDelayMs: 1 }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.recoveryStatus, "pretrade_retry");
+  assert.equal(result.recoveryAttempts, 2);
+  assert.equal(monitor.preflightCalls, 3);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("live executor bounded-retries stale hot-path preflight cache before submitting orders", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  class StaleThenReadyClient extends FakeVenueClient {
+    preflightCalls = 0;
+
+    async preflightOrder(): Promise<string | null> {
+      this.preflightCalls += 1;
+      return this.preflightCalls === 1
+        ? "Polymarket hot readiness cache is stale: age 6000ms exceeds 5000ms"
+        : null;
+    }
+  }
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new StaleThenReadyClient("polymarket");
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, livePretradeRetryAttempts: 2, livePretradeRetryDelayMs: 1 }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.recoveryStatus, "pretrade_retry");
+  assert.equal(result.recoveryAttempts, 1);
+  assert.equal(polymarket.preflightCalls, 2);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
+});
+
+test("live executor blocks persistent pre-trade reconciliation failures without creating a new lock", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -2039,11 +2153,12 @@ test("live executor still locks persistent pre-trade reconciliation failures", a
   const result = await executor.execute(candidate);
 
   assert.equal(result.action, "failed");
-  assert.match(result.liveLockReason ?? "", /live reconciliation blocked/);
+  assert.match(result.failureReason ?? "", /live preflight blocked before order submission/);
+  assert.equal(result.liveLockReason, undefined);
   assert.equal(kalshi.placed.length, 0);
   assert.equal(polymarket.placed.length, 0);
-  assert.equal(locks.engageCalls, 1);
-  assert.match((await locks.getActiveLock())?.reason ?? "", /live reconciliation blocked/);
+  assert.equal(locks.engageCalls, 0);
+  assert.equal(await locks.getActiveLock(), null);
 });
 
 test("live executor locks when private stream confirmation times out", async () => {

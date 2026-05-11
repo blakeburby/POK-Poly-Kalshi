@@ -2203,6 +2203,13 @@ function isResolvedPartialSignal(signal: DashboardSignal): boolean {
   return signal.reconciliationResolvedAt != null;
 }
 
+function reconciliationResolutionLabel(signal: DashboardSignal): string {
+  const resolutionType = signal.reconciliationResolution?.resolutionType;
+  return typeof resolutionType === "string" && resolutionType.startsWith("auto")
+    ? "Auto reconciliation"
+    : "Manual reconciliation";
+}
+
 function signalActionLabel(signal: DashboardSignal): string {
   if (isResolvedPartialSignal(signal) && signal.partialFill) return "resolved partial";
   return signal.action;
@@ -2715,6 +2722,7 @@ function SignalTape({
                     <div><span className="signal-label">Strategy</span><strong>{signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</strong></div>
                     <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</strong></div>
                     <div><span className="signal-label">Reconciliation</span><strong className={isResolvedPartialSignal(signal) ? "warn" : signal.partialFill ? "loss" : "profit"}>{isResolvedPartialSignal(signal) ? "RESOLVED" : signal.partialFill ? "PARTIAL" : "NORMAL"}</strong></div>
+                    <div><span className="signal-label">Recovery</span><strong>{signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</strong></div>
                   </div>
 
                   {signal.risk ? (
@@ -2737,7 +2745,7 @@ function SignalTape({
 
                   {signal.reconciliationResolvedAt ? (
                     <div className="signal-reconciliation">
-                      Manual reconciliation: {signal.reconciliationResolutionReason ?? "operator verified and resolved this live incident"} at {formatTimestamp(signal.reconciliationResolvedAt)}
+                      {reconciliationResolutionLabel(signal)}: {signal.reconciliationResolutionReason ?? "verified and resolved this live incident"} at {formatTimestamp(signal.reconciliationResolvedAt)}
                     </div>
                   ) : null}
                   {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
@@ -3036,6 +3044,7 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Partial Fill</span><strong className={execution?.lastAttempt?.partialFill ? "loss" : "profit"}>{execution?.lastAttempt?.partialFill ? "YES" : "NO"}</strong></div>
         <div><span>Kalshi Status</span><strong>{formatExecutionState(execution?.lastAttempt?.kalshiStatus)}</strong></div>
         <div><span>Polymarket Status</span><strong>{formatExecutionState(execution?.lastAttempt?.polymarketStatus)}</strong></div>
+        <div><span>Recovery</span><strong>{formatExecutionState(execution?.lastAttempt?.recoveryStatus)}</strong></div>
         <div><span>Lock Reason</span><strong className={execution?.circuitBreakerReason ? "loss" : ""}>{execution?.circuitBreakerReason ? shortReason(execution.circuitBreakerReason) : "--"}</strong></div>
       </div>
       <div className="audit-tape">
@@ -3048,6 +3057,7 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <span>Skew {signal.quoteSnapshot?.quoteSkewMs == null ? "--" : `${Math.round(signal.quoteSnapshot.quoteSkewMs)}ms`}</span>
             <span>Strategy {signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</span>
             <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</span>
+            <span>Recovery {signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</span>
             <span>RTT K {signal.executionTimings?.kalshiRttMs == null ? "--" : `${Math.round(signal.executionTimings.kalshiRttMs)}ms`}</span>
             <span>Partial {signal.partialFill ? "YES" : "NO"}</span>
             <span>K {signal.kalshiFillCount ?? "--"} / P {signal.polymarketFillCount ?? "--"}</span>
@@ -3067,6 +3077,15 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
   const reconciliationClean = execution?.reconciliation?.clean ?? false;
   const circuitLocked = execution?.circuitBreakerLocked ?? false;
   const partialLocked = execution?.partialFillLocked ?? false;
+  const riskState = execution?.riskState ?? "blocked";
+  const riskStateLabel = riskState === "hard_locked"
+    ? "HARD LOCKED"
+    : riskState === "recovering"
+      ? "RECOVERING"
+      : riskState === "blocked"
+        ? "BLOCKED"
+        : "TRADING";
+  const riskStatePill = riskState === "trading" ? "live" : riskState === "recovering" ? "warn" : "stale";
   return (
     <section className="panel live-safety-compact" aria-label="Live execution safety state">
       <div>
@@ -3076,6 +3095,7 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
       </div>
       <div className="status-rail">
         <StatusPill label={snapshot.health.liveTrading ? "LIVE ENABLED" : "LIVE OFF"} state={snapshot.health.liveTrading ? "warn" : "off"} />
+        <StatusPill label={riskStateLabel} state={riskStatePill} />
         <StatusPill label={circuitLocked ? "CIRCUIT LOCK" : "CIRCUIT CLEAR"} state={circuitLocked ? "stale" : "live"} />
         <StatusPill label={kalshiReady && polymarketReady ? "VENUES READY" : "VENUE CHECK"} state={kalshiReady && polymarketReady ? "live" : "warn"} />
         <StatusPill label={streamsReady ? "STREAMS READY" : "STREAM CHECK"} state={streamsReady ? "live" : "warn"} />
@@ -3083,6 +3103,7 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
         <StatusPill label={partialLocked ? "PARTIAL LOCK" : "PARTIAL CLEAR"} state={partialLocked ? "stale" : "live"} />
       </div>
       {execution?.circuitBreakerReason ? <p className="live-lock-reason">LOCK REASON: {execution.circuitBreakerReason}</p> : null}
+      {!execution?.circuitBreakerReason && execution?.riskStateReason ? <p className="live-lock-reason">RISK STATE: {execution.riskStateReason}</p> : null}
     </section>
   );
 }

@@ -7,6 +7,7 @@ import type {
   LegDirection,
   QuoteSnapshot,
   ReconciliationResolution,
+  LiveRecoveryStatus,
   SignalAction,
   SignalInsert,
   SignalUpdate,
@@ -79,6 +80,10 @@ interface DashboardSignalRow {
   reconciliation_resolved_at: string | Date | null;
   reconciliation_resolution_reason: string | null;
   reconciliation_resolution: ReconciliationResolution | string | null;
+  recovery_status: string | null;
+  recovery_attempts: string | number | null;
+  recovery_evidence: Record<string, unknown> | string | null;
+  finalization_ms: string | number | null;
 }
 
 interface LiveExposureRow {
@@ -123,7 +128,8 @@ const SIGNAL_COLUMNS = `
   kalshi_error, polymarket_error, partial_fill,
   quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations,
   execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
-  reconciliation_resolved_at, reconciliation_resolution_reason, reconciliation_resolution
+  reconciliation_resolved_at, reconciliation_resolution_reason, reconciliation_resolution,
+  recovery_status, recovery_attempts, recovery_evidence, finalization_ms
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -148,6 +154,18 @@ function booleanFrom(value: boolean | string | null): boolean {
 
 function executionModeFrom(value: string | null | undefined): ExecutionMode {
   return value === "live" ? "live" : "paper";
+}
+
+function recoveryStatusFrom(value: string | null | undefined): LiveRecoveryStatus | null {
+  if (
+    value === "none"
+    || value === "pretrade_retry"
+    || value === "finalizing"
+    || value === "auto_resolved_no_exposure"
+    || value === "auto_resolved_paired_fill"
+    || value === "operator_required"
+  ) return value;
+  return null;
 }
 
 function confirmationStatus(confirmations: VenueConfirmations | null, venue: Venue): string | null {
@@ -241,6 +259,10 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     reconciliationResolvedAt: optionalDateString(row.reconciliation_resolved_at),
     reconciliationResolutionReason: row.reconciliation_resolution_reason,
     reconciliationResolution: jsonFromRow<ReconciliationResolution>(row.reconciliation_resolution),
+    recoveryStatus: recoveryStatusFrom(row.recovery_status),
+    recoveryAttempts: numberFrom(row.recovery_attempts),
+    recoveryEvidence: jsonFromRow<Record<string, unknown>>(row.recovery_evidence),
+    finalizationMs: numberFrom(row.finalization_ms),
     risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
@@ -326,6 +348,10 @@ export class SignalStore {
           reconciliation_resolved_at = CASE WHEN $31::TEXT IS NULL THEN NULL ELSE $31::TIMESTAMPTZ END,
           reconciliation_resolution_reason = $32,
           reconciliation_resolution = CASE WHEN $33::TEXT IS NULL THEN NULL ELSE $33::JSONB END,
+          recovery_status = $34,
+          recovery_attempts = $35,
+          recovery_evidence = CASE WHEN $36::TEXT IS NULL THEN NULL ELSE $36::JSONB END,
+          finalization_ms = $37,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -363,6 +389,10 @@ export class SignalStore {
       update.reconciliationResolvedAt ?? null,
       update.reconciliationResolutionReason ?? null,
       update.reconciliationResolution == null ? null : JSON.stringify(update.reconciliationResolution),
+      update.recoveryStatus ?? null,
+      update.recoveryAttempts ?? null,
+      update.recoveryEvidence == null ? null : JSON.stringify(update.recoveryEvidence),
+      update.finalizationMs ?? null,
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }

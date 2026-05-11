@@ -56,6 +56,22 @@ class FakeDb implements Queryable {
           kalshi_error: values?.[18] ?? null,
           polymarket_error: values?.[19] ?? null,
           partial_fill: values?.[20] ?? false,
+          quote_snapshot: values?.[21] ?? null,
+          depth_vwap: values?.[22] ?? null,
+          projected_edge_after_fees: values?.[23] ?? null,
+          execution_timings: values?.[24] ?? null,
+          venue_confirmations: values?.[25] ?? null,
+          execution_strategy: values?.[26] ?? null,
+          risk_hedge: values?.[27] ?? false,
+          realized_guaranteed_profit: values?.[28] ?? null,
+          hedge_cap_price: values?.[29] ?? null,
+          reconciliation_resolved_at: values?.[30] ?? null,
+          reconciliation_resolution_reason: values?.[31] ?? null,
+          reconciliation_resolution: values?.[32] ?? null,
+          recovery_status: values?.[33] ?? null,
+          recovery_attempts: values?.[34] ?? null,
+          recovery_evidence: values?.[35] ?? null,
+          finalization_ms: values?.[36] ?? null,
         } as T],
       };
     }
@@ -195,12 +211,19 @@ test("signal persistence inserts threshold-crossing candidate before execution u
     polymarketRequestedAt: "2026-04-29T20:00:00.500Z",
     polymarketRespondedAt: "2026-04-29T20:00:00.900Z",
     partialFill: false,
+    recoveryStatus: "auto_resolved_paired_fill",
+    recoveryAttempts: 1,
+    recoveryEvidence: { source: "test" },
+    finalizationMs: 3400,
   });
   assert.match(db.calls[2].sql, /UPDATE cross_venue_arb_signals/);
   assert.equal(db.calls[2].values?.[0], 42);
   assert.equal(db.calls[2].values?.[1], "filled");
   assert.equal(db.calls[2].values?.[7], "group");
   assert.equal(db.calls[2].values?.[20], false);
+  assert.equal(db.calls[2].values?.[33], "auto_resolved_paired_fill");
+  assert.equal(db.calls[2].values?.[34], 1);
+  assert.equal(db.calls[2].values?.[36], 3400);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -251,6 +274,14 @@ test("reconciliation resolution migration adds operator-resolved incident marker
   assert.match(sql, /ADD COLUMN IF NOT EXISTS reconciliation_resolution_reason TEXT/);
   assert.match(sql, /ADD COLUMN IF NOT EXISTS reconciliation_resolution JSONB/);
   assert.match(sql, /reconciliation_resolved_at IS NULL/);
+});
+
+test("recovery metadata migration adds verified recovery audit columns", () => {
+  const sql = readFileSync("src/db/migrations/012_add_live_recovery_metadata.sql", "utf8");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS recovery_status TEXT/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS recovery_attempts INTEGER/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS recovery_evidence JSONB/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS finalization_ms INTEGER/);
 });
 
 test("signal persistence blocks live candidates with same-window exposure", async () => {

@@ -62,6 +62,11 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated Kalshi/Polymarket private order streams before live orders can be considered safe.
 - `LIVE_USER_STREAM_PRETRADE_GRACE_MS=750`: short retry window for transient private-stream subscription refreshes before skipping a candidate. Pre-order stream unavailability skips the trade instead of creating a persistent live lock.
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: maximum wait for private-stream confirmation after REST order responses.
+- `LIVE_PRETRADE_RETRY_ATTEMPTS=2`: bounded retry count for transient pre-submit states such as stream refreshes, stale hot-path caches, or stale quote revalidation. Strategy failures still skip immediately.
+- `LIVE_PRETRADE_RETRY_DELAY_MS=100`: delay between bounded pre-submit retries.
+- `LIVE_FINAL_RECOVERY_TIMEOUT_MS=3000`: extra post-submit finalization window for timeout/unknown venue responses before a persistent lock is engaged.
+- `LIVE_FINAL_RECOVERY_POLL_MS=250`: intended poll cadence for venue finalization/recovery checks.
+- `LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS=true`: allow the worker to auto-resolve only authoritative no-exposure or exact paired-fill outcomes; unresolved one-sided exposure still hard-locks.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block live entries when recent audit rows, private-stream confirmations, or persistent locks show unresolved drift.
 - `KALSHI_USER_WS_URL=wss://api.elections.kalshi.com/trade-api/ws/v2`: Kalshi authenticated user stream endpoint.
 - `POLYMARKET_USER_WS_URL=wss://ws-subscriptions-clob.polymarket.com/ws/user`: Polymarket authenticated CLOB user stream endpoint.
@@ -79,11 +84,14 @@ hot path. A fresh book edge must pass raw executable VWAP, freshness, depth,
 expiry, reconciliation, lock, and private-stream readiness gates from hot
 in-memory state; then Kalshi and Polymarket submit concurrently and the audit row
 is persisted after submission/confirmation. Passive user-stream disconnects make
-readiness unhealthy and skip new candidates immediately. Confirmation timeout,
-failed settlement event, fill-count mismatch, dirty reconciliation state, or any
-unsafe condition after an order may have been submitted engages or keeps the
-persistent live circuit breaker. The sequential hedge path remains as fallback
-logic and still uses the configured hedge loss cap if only the first venue fills.
+readiness unhealthy and retry briefly before skipping new candidates. Confirmation
+timeout, failed settlement event, fill-count mismatch, dirty reconciliation
+state, open remainder, failed cancel verification, or any unsafe condition after
+an order may have been submitted engages or keeps the persistent live circuit
+breaker. Verified exact paired fills and verified zero-fill/no-open-order
+outcomes do not create a persistent lock. The sequential hedge path remains as
+fallback logic and still uses the configured hedge loss cap if only the first
+venue fills.
 
 ## Enable And Disable
 
@@ -197,7 +205,7 @@ bash /opt/pok-poly-kalshi/scripts/verify-live-readiness.sh
 - Polymarket readiness includes the worker's own geoblock preflight. If `execution.polymarket.geoblockBlocked` is `true` or `null`, live execution is blocked before any Kalshi order can be placed. Move the worker to a compliant egress region/host and verify `geoblockBlocked=false` before live canary.
 - Polymarket execution preflight forces a fresh collateral check for each candidate using `LIVE_ORDER_SIZE * maxPolymarketPrice + LIVE_COLLATERAL_BUFFER_DOLLARS`; the 30-second dashboard readiness cache is never trusted before submitting Kalshi.
 - Authenticated Kalshi and Polymarket user streams persist append-only order lifecycle events in `venue_order_events`; live execution requires private-stream confirmations before an attempt is considered safe.
-- If a one-sided fill, private-stream timeout, failed settlement event, unexpected fill count, or realized edge below `ARB_MIN_PROFIT_DOLLARS` is detected, the executor writes the audit detail and persists a live circuit breaker in `live_execution_locks`.
+- If a one-sided fill, unresolved timeout/unknown venue state, failed settlement event, unexpected fill count, open remainder, or failed cancel verification is detected, the executor writes the audit detail and persists a live circuit breaker in `live_execution_locks`.
 - Re-entry is tracked by pair key and hydrated from filled audit rows on startup.
 - The dashboard is read-only in v1: no threshold edits, manual orders, kill switch, or live/dry-run toggles.
 - Rotate any private key pasted into chat or logs before enabling live mode.

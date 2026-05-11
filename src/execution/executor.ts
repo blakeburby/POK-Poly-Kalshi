@@ -4,7 +4,7 @@ import { loadConfig } from "../config";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { VenueOrderEventWriter } from "../db/venue-order-events";
 import { protectedCandidateBlockReason } from "../scanner/safety";
-import type { ArbCandidate, ArbLeg, BinaryContract, ExecutionResult, ExecutionStrategy, ExecutionTimings, LiveExecutionLastAttempt, LiveExecutionReadiness, QuoteSnapshot, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
+import type { ArbCandidate, ArbLeg, BinaryContract, ExecutionResult, ExecutionStrategy, ExecutionTimings, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
 import {
   failedVenueResult,
   generatedClientOrderId,
@@ -96,6 +96,32 @@ function isUserStreamPreflightReason(reason: string): boolean {
       || normalized.includes("not configured")
       || normalized.includes("refreshing")
     );
+}
+
+function isRetryablePreSubmitReason(reason: string | null | undefined): boolean {
+  if (!reason) return false;
+  const normalized = reason.toLowerCase();
+  if (isUserStreamPreflightReason(reason)) return true;
+  if (
+    normalized.includes("hot-path lock cache has not been hydrated")
+    || normalized.includes("hot-path lock cache is stale")
+    || normalized.includes("hot-path exposure cache is stale")
+    || normalized.includes("hot readiness cache is stale")
+    || normalized.includes("readiness cache is stale")
+  ) return true;
+  if (
+    normalized.includes("quote revalidation after preflight failed")
+    && (
+      normalized.includes("quote is stale")
+      || normalized.includes("quote skew")
+      || normalized.includes("tick size changed")
+    )
+  ) return true;
+  return false;
+}
+
+function recoveryStatusLabel(status: LiveRecoveryStatus | null | undefined): string {
+  return status?.replace(/_/g, " ") ?? "none";
 }
 
 function protectedGuardFailure(candidate: ArbCandidate, minProfitDollars: number): ExecutionResult | null {
@@ -193,6 +219,13 @@ interface ExecutionMetadata {
   postFillHedgeDecisionMs?: number | null;
   hotGateStartedAt?: number;
   hotGateCompletedAt?: number;
+  recoveryStatus?: LiveRecoveryStatus | null;
+  recoveryAttempts?: number | null;
+  recoveryEvidence?: Record<string, unknown> | null;
+  finalizationMs?: number | null;
+  reconciliationResolvedAt?: string | null;
+  reconciliationResolutionReason?: string | null;
+  reconciliationResolution?: ReconciliationResolution | null;
 }
 
 interface SequentialFirstVenueDecision {
@@ -238,6 +271,8 @@ export function dryRunExecutionReadiness(config: AppConfig, now = Date.now()): L
     kalshiOrderGroupEnabled: config.liveKalshiOrderGroupEnabled && Boolean(config.liveKalshiOrderGroupId),
     userStreams: buildUserStreamReadiness(false, config.liveUserStreamConfirmTimeoutMs, undefined, undefined, now),
     reconciliation: defaultReconciliationReadiness(false, null, null),
+    riskState: "trading",
+    riskStateReason: null,
     partialFillLocked: false,
     circuitBreakerLocked: false,
     circuitBreakerReason: null,
@@ -292,6 +327,7 @@ export class LiveExecutor implements ArbExecutor {
         null,
         this.config.liveUserStreamsEnabled ? "live reconciliation monitor is not configured" : null,
       );
+    const riskState = this.liveRiskState(activeLock?.reason ?? null, reconciliation.reason, userStreams.reason);
     return {
       mode: "live",
       liveTrading: this.config.liveTrading,
@@ -317,6 +353,8 @@ export class LiveExecutor implements ArbExecutor {
       kalshiOrderGroupEnabled: this.config.liveKalshiOrderGroupEnabled && Boolean(this.config.liveKalshiOrderGroupId),
       userStreams,
       reconciliation,
+      riskState: riskState.state,
+      riskStateReason: riskState.reason,
       partialFillLocked: this.partialFillLocked,
       circuitBreakerLocked: Boolean(activeLock),
       circuitBreakerReason: activeLock?.reason ?? null,
@@ -328,6 +366,38 @@ export class LiveExecutor implements ArbExecutor {
   }
 
   async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
+    const maxRetries = Math.max(0, Math.floor(this.config.livePretradeRetryAttempts));
+    const retryDelayMs = Math.max(0, this.config.livePretradeRetryDelayMs);
+    const evidence: Array<Record<string, unknown>> = [];
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const result = await this.executeOnce(candidate);
+      const shouldRetry = result.executionGroupId == null
+        && isRetryablePreSubmitReason(result.failureReason)
+        && attempt < maxRetries;
+      if (!shouldRetry) {
+        return this.withRecoveryMetadata(result, {
+          status: evidence.length > 0 ? "pretrade_retry" : result.recoveryStatus ?? "none",
+          attempts: evidence.length,
+          evidence: evidence.length > 0 ? { pretradeRetries: evidence } : result.recoveryEvidence ?? null,
+        });
+      }
+      evidence.push({
+        attempt: attempt + 1,
+        reason: result.failureReason,
+        at: this.now(),
+      });
+      await waitMs(retryDelayMs);
+    }
+
+    return this.withRecoveryMetadata(skipped("live pretrade retry loop exhausted unexpectedly"), {
+      status: "pretrade_retry",
+      attempts: evidence.length,
+      evidence: { pretradeRetries: evidence },
+    });
+  }
+
+  private async executeOnce(candidate: ArbCandidate): Promise<ExecutionResult> {
     const executeStartedAt = this.now();
     const hotGateStartedAt = executeStartedAt;
     const guardFailure = protectedGuardFailure(candidate, this.config.minProfitDollars);
@@ -572,6 +642,38 @@ export class LiveExecutor implements ArbExecutor {
     return failed(reason);
   }
 
+  private withRecoveryMetadata(
+    result: ExecutionResult,
+    recovery: { status: LiveRecoveryStatus; attempts?: number | null; evidence?: Record<string, unknown> | null; finalizationMs?: number | null },
+  ): ExecutionResult {
+    const recoveryEvidence = recovery.evidence && result.recoveryEvidence
+      ? { ...result.recoveryEvidence, ...recovery.evidence }
+      : recovery.evidence ?? result.recoveryEvidence ?? null;
+    return {
+      ...result,
+      recoveryStatus: recovery.status,
+      recoveryAttempts: recovery.attempts ?? result.recoveryAttempts ?? 0,
+      recoveryEvidence,
+      finalizationMs: recovery.finalizationMs ?? result.finalizationMs ?? null,
+    };
+  }
+
+  private liveRiskState(
+    circuitBreakerReason: string | null,
+    reconciliationReason: string | null,
+    userStreamReason: string | null,
+  ): { state: LiveRiskState; reason: string | null } {
+    if (circuitBreakerReason) return { state: "hard_locked", reason: circuitBreakerReason };
+    if (this.partialFillLocked) return { state: "hard_locked", reason: "in-memory partial-fill latch is set" };
+    if (reconciliationReason) return { state: "blocked", reason: reconciliationReason };
+    if (userStreamReason) return { state: "blocked", reason: userStreamReason };
+    const status = this.lastAttempt?.recoveryStatus ?? null;
+    if (status === "finalizing" || status === "pretrade_retry") {
+      return { state: "recovering", reason: `last attempt recovery status: ${recoveryStatusLabel(status)}` };
+    }
+    return { state: "trading", reason: null };
+  }
+
   private notSubmittedResult(venue: Venue, clientOrderId: string, error: string): VenueOrderResult {
     const now = new Date(this.now()).toISOString();
     return {
@@ -794,9 +896,7 @@ export class LiveExecutor implements ArbExecutor {
         return skipped(`live user stream preflight skipped: ${reason}`);
       }
     }
-    const lockReason = `live safety lock engaged: ${reason}`;
-    await this.liveLocks?.engageLock({ reason: lockReason, details: { phase: "user_stream_preflight" } });
-    return liveLocked(lockReason);
+    return failed(`live preflight blocked before order submission: ${reason}`);
   }
 
   private isExactVenueFill(result: VenueOrderResult): boolean {
@@ -816,11 +916,17 @@ export class LiveExecutor implements ArbExecutor {
         expectedSize: this.config.liveOrderSize,
         leg,
         submittedAtMs,
-        timeoutMs: this.config.liveUserStreamConfirmTimeoutMs,
+        timeoutMs: this.confirmationTimeoutMs(result),
       });
       return [result.venue, this.confirmationRecord(confirmation)] as const;
     }));
     return Object.fromEntries(entries);
+  }
+
+  private confirmationTimeoutMs(result: VenueOrderResult): number {
+    const base = Math.max(1, this.config.liveUserStreamConfirmTimeoutMs);
+    if (isTimeoutOrUnknownResult(result)) return base + Math.max(0, this.config.liveFinalRecoveryTimeoutMs);
+    return base;
   }
 
   private confirmationRecord(confirmation: VenueConfirmationResult): Record<string, unknown> {
@@ -895,6 +1001,85 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
+  private hasRecoveryEvidence(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined): boolean {
+    const metadata = result.metadata ?? {};
+    return Boolean(
+      metadata.pendingReconciliation
+      || metadata.resolvedFromPrivateStreamConfirmation
+      || metadata.timeoutRecoveryError
+      || metadata.orderResponseTimeoutMs
+      || metadata.kalshiFinalFillSource
+      || metadata.polymarketFinalFillSource
+      || metadata.cancelStatus
+      || metadata.canceledOpenRemainder
+      || confirmation?.status === "timeout"
+      || confirmation?.status === "mismatch"
+      || confirmation?.status === "failed"
+      || result.status === "unknown"
+      || result.status === "canceled"
+      || result.status === "cancelled"
+      || result.error?.toLowerCase().includes("timeout") === true,
+    );
+  }
+
+  private recoveryEvidenceFor(kalshi: VenueOrderResult, polymarket: VenueOrderResult, venueConfirmations: VenueConfirmations): Record<string, unknown> {
+    return {
+      kalshi: {
+        status: kalshi.status,
+        fillCount: kalshi.fillCount ?? null,
+        fillPrice: kalshi.fillPrice ?? null,
+        error: kalshi.error ?? null,
+        orderId: kalshi.orderId ?? null,
+        metadata: kalshi.metadata ?? null,
+        confirmation: venueConfirmations.kalshi ?? null,
+      },
+      polymarket: {
+        status: polymarket.status,
+        fillCount: polymarket.fillCount ?? null,
+        fillPrice: polymarket.fillPrice ?? null,
+        error: polymarket.error ?? null,
+        orderId: polymarket.orderId ?? null,
+        metadata: polymarket.metadata ?? null,
+        confirmation: venueConfirmations.polymarket ?? null,
+      },
+    };
+  }
+
+  private recoveryStatusForResult(
+    liveLockReason: string | null,
+    exactPairFilled: boolean,
+    hasAnyFill: boolean,
+    recoveryEvidencePresent: boolean,
+  ): LiveRecoveryStatus {
+    if (liveLockReason) return "operator_required";
+    if (!this.config.liveAutoResolveVerifiedIncidents) return recoveryEvidencePresent ? "finalizing" : "none";
+    if (exactPairFilled && recoveryEvidencePresent) return "auto_resolved_paired_fill";
+    if (!hasAnyFill && recoveryEvidencePresent) return "auto_resolved_no_exposure";
+    return recoveryEvidencePresent ? "finalizing" : "none";
+  }
+
+  private autoResolution(
+    recoveryStatus: LiveRecoveryStatus,
+    executionGroupId: string,
+    evidence: Record<string, unknown> | null,
+  ): { resolvedAt: string | null; reason: string | null; resolution: ReconciliationResolution | null } {
+    if (recoveryStatus !== "auto_resolved_no_exposure") {
+      return { resolvedAt: null, reason: null, resolution: null };
+    }
+    const resolvedAt = new Date(this.now()).toISOString();
+    return {
+      resolvedAt,
+      reason: "auto recovery: verified both venues have zero fill and no open exposure",
+      resolution: {
+        resolvedBy: "worker",
+        resolutionType: "auto_no_exposure",
+        executionGroupId,
+        evidence,
+        notes: "Verified-only recovery resolved a no-exposure live attempt without a persistent lock.",
+      },
+    };
+  }
+
   private async resultFromVenueOrders(
     executionGroupId: string,
     kalshi: VenueOrderResult,
@@ -911,6 +1096,7 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketFillCount = polymarket.fillCount ?? 0;
     const kalshiHasFill = kalshiFillCount > 0;
     const polymarketHasFill = polymarketFillCount > 0;
+    const hasAnyFill = kalshiHasFill || polymarketHasFill;
     const unexpectedFillCount = (kalshiHasFill && !kalshiFilled) || (polymarketHasFill && !polymarketFilled);
     const fillCountMismatch = kalshiHasFill && polymarketHasFill && Math.abs(kalshiFillCount - polymarketFillCount) > 0.000001;
     const partialFill = kalshiFilled !== polymarketFilled || unexpectedFillCount || fillCountMismatch;
@@ -926,10 +1112,7 @@ export class LiveExecutor implements ArbExecutor {
       && riskHedgeWithinLossCap
       && realizedGuaranteedProfit != null
       && realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars;
-    const realizedEdgeUnsafe = kalshiHasFill && polymarketHasFill && (
-      realizedGuaranteedProfit == null
-      || (!riskHedgeWithinLossCap && realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars)
-    );
+    const realizedEdgeUnsafe = kalshiHasFill && polymarketHasFill && realizedGuaranteedProfit == null;
     const fallbackVenueConfirmations: VenueConfirmations = {
       kalshi: {
         status: kalshi.status,
@@ -945,6 +1128,15 @@ export class LiveExecutor implements ArbExecutor {
     const venueConfirmations = this.attachRestMetadata(metadata.venueConfirmations ?? fallbackVenueConfirmations, kalshi, polymarket);
     const liveLockReason = this.confirmationLockReason(metadata.venueConfirmations)
       ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
+    const recoveryEvidencePresent = this.hasRecoveryEvidence(kalshi, venueConfirmations.kalshi)
+      || this.hasRecoveryEvidence(polymarket, venueConfirmations.polymarket)
+      || metadata.recoveryStatus === "pretrade_retry";
+    const recoveryStatus = metadata.recoveryStatus
+      ?? this.recoveryStatusForResult(liveLockReason, exactPairFilled, hasAnyFill, recoveryEvidencePresent);
+    const recoveryEvidence = metadata.recoveryEvidence
+      ?? (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
+    const finalizationMs = metadata.finalizationMs ?? metadata.executionTimings?.totalMs ?? null;
+    const autoResolution = this.autoResolution(recoveryStatus, executionGroupId, recoveryEvidence);
     if (liveLockReason) this.partialFillLocked = true;
     const venueFailureReason = [kalshi, polymarket]
       .filter((result) => result.error || (result.fillCount ?? 0) < this.config.liveOrderSize)
@@ -965,6 +1157,9 @@ export class LiveExecutor implements ArbExecutor {
       liveLockReason,
       kalshiStatus: kalshi.status,
       polymarketStatus: polymarket.status,
+      recoveryStatus,
+      recoveryAttempts: metadata.recoveryAttempts ?? 0,
+      finalizationMs,
       completedAt: this.now(),
     };
     const result: ExecutionResult = {
@@ -998,6 +1193,13 @@ export class LiveExecutor implements ArbExecutor {
       riskHedge: Boolean(metadata.riskHedge),
       realizedGuaranteedProfit,
       hedgeCapPrice: metadata.hedgeCapPrice ?? null,
+      recoveryStatus,
+      recoveryAttempts: metadata.recoveryAttempts ?? 0,
+      recoveryEvidence,
+      finalizationMs,
+      reconciliationResolvedAt: metadata.reconciliationResolvedAt ?? autoResolution.resolvedAt,
+      reconciliationResolutionReason: metadata.reconciliationResolutionReason ?? autoResolution.reason,
+      reconciliationResolution: metadata.reconciliationResolution ?? autoResolution.resolution,
     };
     if (liveLockReason) {
       await this.liveLocks?.engageLock({
@@ -1016,6 +1218,10 @@ export class LiveExecutor implements ArbExecutor {
           executionStrategy: metadata.executionStrategy ?? null,
           riskHedge: Boolean(metadata.riskHedge),
           hedgeCapPrice: metadata.hedgeCapPrice ?? null,
+          recoveryStatus,
+          recoveryAttempts: metadata.recoveryAttempts ?? 0,
+          recoveryEvidence,
+          finalizationMs,
           quoteSnapshot: metadata.quoteSnapshot ?? null,
           executionTimings: metadata.executionTimings ?? null,
           kalshiRestMetadata: kalshi.metadata ?? null,
@@ -1141,9 +1347,6 @@ export class LiveExecutor implements ArbExecutor {
       return `live safety lock engaged: risk hedge realized edge ${realizedGuaranteedProfit.toFixed(4)} below loss cap ${(-Math.max(0, this.config.liveHedgeMaxLossDollars)).toFixed(4)}`;
     }
     if (riskHedge) return null;
-    if (realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars) {
-      return `live safety lock engaged: realized edge ${realizedGuaranteedProfit.toFixed(4)} below threshold ${this.config.minProfitDollars.toFixed(4)}`;
-    }
     return null;
   }
 }

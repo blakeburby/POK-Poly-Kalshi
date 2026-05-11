@@ -3,6 +3,14 @@ export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 export type ExecutionMode = "paper" | "live";
 export type LiveOrderPlacementMode = "parallel_fok" | "parallel_limit_rest";
+export type LiveRecoveryStatus =
+  | "none"
+  | "pretrade_retry"
+  | "finalizing"
+  | "auto_resolved_no_exposure"
+  | "auto_resolved_paired_fill"
+  | "operator_required";
+export type LiveRiskState = "trading" | "recovering" | "blocked" | "hard_locked";
 
 export interface BookLevel {
   price: number;
@@ -223,6 +231,10 @@ export interface ExecutionResult {
   reconciliationResolvedAt?: string | null;
   reconciliationResolutionReason?: string | null;
   reconciliationResolution?: ReconciliationResolution | null;
+  recoveryStatus?: LiveRecoveryStatus | null;
+  recoveryAttempts?: number | null;
+  recoveryEvidence?: Record<string, unknown> | null;
+  finalizationMs?: number | null;
 }
 
 export interface SignalInsert {
@@ -265,6 +277,10 @@ export interface SignalUpdate {
   reconciliationResolvedAt?: string | null;
   reconciliationResolutionReason?: string | null;
   reconciliationResolution?: ReconciliationResolution | null;
+  recoveryStatus?: LiveRecoveryStatus | null;
+  recoveryAttempts?: number | null;
+  recoveryEvidence?: Record<string, unknown> | null;
+  finalizationMs?: number | null;
 }
 
 export interface DashboardSignal {
@@ -314,6 +330,10 @@ export interface DashboardSignal {
   reconciliationResolvedAt?: string | null;
   reconciliationResolutionReason?: string | null;
   reconciliationResolution?: ReconciliationResolution | null;
+  recoveryStatus?: LiveRecoveryStatus | null;
+  recoveryAttempts?: number | null;
+  recoveryEvidence?: Record<string, unknown> | null;
+  finalizationMs?: number | null;
   risk?: SyntheticStructureRisk;
 }
 
@@ -349,6 +369,9 @@ export interface LiveExecutionLastAttempt {
   liveLockReason?: string | null;
   kalshiStatus: string | null;
   polymarketStatus: string | null;
+  recoveryStatus?: LiveRecoveryStatus | null;
+  recoveryAttempts?: number | null;
+  finalizationMs?: number | null;
   completedAt: number;
 }
 
@@ -389,6 +412,8 @@ export interface LiveExecutionReadiness {
   kalshiOrderGroupEnabled: boolean;
   userStreams: UserStreamReadiness;
   reconciliation: ReconciliationReadiness;
+  riskState: LiveRiskState;
+  riskStateReason: string | null;
   partialFillLocked: boolean;
   circuitBreakerLocked: boolean;
   circuitBreakerReason: string | null;
@@ -588,6 +613,11 @@ export interface DashboardSnapshot {
     liveUserStreamsEnabled: boolean;
     liveUserStreamPretradeGraceMs: number;
     liveUserStreamConfirmTimeoutMs: number;
+    livePretradeRetryAttempts: number;
+    livePretradeRetryDelayMs: number;
+    liveFinalRecoveryTimeoutMs: number;
+    liveFinalRecoveryPollMs: number;
+    liveAutoResolveVerifiedIncidents: boolean;
     liveReconcileBeforeTrade: boolean;
   };
   latency?: DashboardLatencySnapshot;
