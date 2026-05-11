@@ -122,7 +122,8 @@ function isFailureStatus(value: string | null | undefined): boolean {
 }
 
 function resultNeedsConfirmation(result: VenueOrderResult): boolean {
-  return result.error == null && (result.fillCount ?? 0) > 0;
+  const timeoutOrUnknown = result.status === "unknown" || result.error?.toLowerCase().includes("timeout") === true;
+  return timeoutOrUnknown || (result.error == null && (result.fillCount ?? 0) > 0);
 }
 
 function eventMatchesExpected(event: VenueOrderEventInput, pending: Pick<PendingConfirmation, "result" | "leg" | "submittedAtMs">): boolean {

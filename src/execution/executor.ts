@@ -81,6 +81,10 @@ function venueLabel(venue: Venue): string {
   return venue === "kalshi" ? "Kalshi" : "Polymarket";
 }
 
+function isTimeoutOrUnknownResult(result: VenueOrderResult): boolean {
+  return result.status === "unknown" || result.error?.toLowerCase().includes("timeout") === true;
+}
+
 function isUserStreamPreflightReason(reason: string): boolean {
   const normalized = reason.toLowerCase();
   const mentionsUserStream = normalized.includes("user stream") || normalized.includes("user subscription");
@@ -419,9 +423,10 @@ export class LiveExecutor implements ArbExecutor {
         { result: kalshi, leg: prepared.kalshi.leg, submittedAtMs: Date.parse(kalshi.requestedAt) },
         { result: polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(polymarket.requestedAt) },
       ]);
-      return await this.resultFromVenueOrders(executionGroupId, kalshi, polymarket, {
+      const confirmed = this.applyVenueConfirmations(kalshi, polymarket, venueConfirmations);
+      return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
-        executionTimings: this.executionTimings(executeStartedAt, kalshi, polymarket, {
+        executionTimings: this.executionTimings(executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
           preflightStartedAt,
           preflightCompletedAt,
           firstVenue: null,
@@ -544,10 +549,11 @@ export class LiveExecutor implements ArbExecutor {
       { result: firstResult, leg: firstPlan.prepared.leg, submittedAtMs: Date.parse(firstResult.requestedAt) },
       { result: hedgeResult, leg: hedge.leg, submittedAtMs: Date.parse(hedgeResult.requestedAt) },
     ]);
+    const confirmed = this.applyVenueConfirmations(results.kalshi!, results.polymarket!, venueConfirmations);
 
-    return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
+    return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
-      executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+      executionTimings: this.executionTimings(executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
         preflightStartedAt,
         preflightCompletedAt,
         hotGateStartedAt,
@@ -716,18 +722,41 @@ export class LiveExecutor implements ArbExecutor {
     const timeout = new Promise<VenueOrderResult>((resolve) => {
       timeoutHandle = setTimeout(() => {
         abortController.abort();
-        resolve(failedVenueResult(
+        const timedOut = failedVenueResult(
           client.venue,
           context.clientOrderId,
           new Error(`order response timeout after ${timeoutMs}ms`),
           submittedAt,
-        ));
+        );
+        resolve({
+          ...timedOut,
+          status: "unknown",
+          metadata: {
+            ...(timedOut.metadata ?? {}),
+            orderResponseTimeoutMs: timeoutMs,
+            pendingReconciliation: true,
+          },
+        });
       }, timeoutMs);
     });
     const order = client.placeOrder(leg, submittedContext)
       .catch((error) => failedVenueResult(client.venue, context.clientOrderId, error, submittedAt));
-    const result = await Promise.race([order, timeout]);
+    let result = await Promise.race([order, timeout]);
     if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (isTimeoutOrUnknownResult(result) && client.recoverTimedOutOrder) {
+      try {
+        const recovered = await client.recoverTimedOutOrder(leg, { ...submittedContext, signal: undefined }, result);
+        if (recovered) result = recovered;
+      } catch (error) {
+        result = {
+          ...result,
+          metadata: {
+            ...(result.metadata ?? {}),
+            timeoutRecoveryError: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
     return result;
   }
 
@@ -806,6 +835,47 @@ export class LiveExecutor implements ArbExecutor {
       exchangeTimestampMs: confirmation.exchangeTimestampMs,
       receivedAtMs: confirmation.receivedAtMs,
       eventType: confirmation.eventType,
+    };
+  }
+
+  private applyVenueConfirmations(
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    confirmations: VenueConfirmations | null,
+  ): { kalshi: VenueOrderResult; polymarket: VenueOrderResult } {
+    return {
+      kalshi: this.applyVenueConfirmation(kalshi, confirmations?.kalshi),
+      polymarket: this.applyVenueConfirmation(polymarket, confirmations?.polymarket),
+    };
+  }
+
+  private applyVenueConfirmation(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined): VenueOrderResult {
+    if (!confirmation || confirmation.status !== "confirmed") return result;
+    const fillCount = typeof confirmation.fillCount === "number" ? confirmation.fillCount : result.fillCount;
+    if (fillCount == null || fillCount <= 0) return result;
+    const receivedAtMs = typeof confirmation.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
+      ? confirmation.receivedAtMs
+      : null;
+    return {
+      ...result,
+      clientOrderId: typeof confirmation.clientOrderId === "string" && confirmation.clientOrderId
+        ? confirmation.clientOrderId
+        : result.clientOrderId,
+      orderId: typeof confirmation.venueOrderId === "string" && confirmation.venueOrderId
+        ? confirmation.venueOrderId
+        : result.orderId,
+      status: "filled",
+      fillCount,
+      fillPrice: typeof confirmation.fillPrice === "number" ? confirmation.fillPrice : result.fillPrice,
+      fee: typeof confirmation.fee === "number" ? confirmation.fee : result.fee ?? null,
+      exchangeTimestampMs: typeof confirmation.exchangeTimestampMs === "number" ? confirmation.exchangeTimestampMs : result.exchangeTimestampMs ?? null,
+      respondedAt: receivedAtMs == null ? result.respondedAt : new Date(receivedAtMs).toISOString(),
+      error: null,
+      metadata: {
+        ...(result.metadata ?? {}),
+        resolvedFromPrivateStreamConfirmation: true,
+        privateStreamEventType: confirmation.eventType ?? null,
+      },
     };
   }
 
@@ -1008,7 +1078,10 @@ export class LiveExecutor implements ArbExecutor {
     const firstRequestedAt = [kalshiRequestedAt, polymarketRequestedAt]
       .filter((value): value is number => value != null)
       .sort((a, b) => a - b)[0] ?? null;
-    const completedAt = polymarket ? Date.parse(polymarket.respondedAt) : kalshi ? Date.parse(kalshi.respondedAt) : this.now();
+    const completedAt = [kalshi, polymarket]
+      .map((result) => result == null ? null : Date.parse(result.respondedAt))
+      .filter((value): value is number => value != null && Number.isFinite(value))
+      .sort((a, b) => b - a)[0] ?? this.now();
     const preflightMs = metadata.preflightStartedAt != null && metadata.preflightCompletedAt != null
       ? Math.max(0, metadata.preflightCompletedAt - metadata.preflightStartedAt)
       : null;

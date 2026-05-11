@@ -62,6 +62,7 @@ export interface VenueOrderClient {
   readonly venue: Venue;
   preflightOrder?(leg: ArbLeg, context: LiveOrderContext): Promise<string | null>;
   placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult>;
+  recoverTimedOutOrder?(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null>;
   readiness(now?: number): Promise<VenueExecutionReadiness>;
   warm?(options?: { now?: number; tokenIds?: string[]; requiredCollateral?: number }): Promise<void>;
 }
@@ -287,6 +288,13 @@ function kalshiOrderRecord(payload: Record<string, unknown>): Record<string, unk
   return recordOrNull(payload.order) ?? payload;
 }
 
+function kalshiOrderRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const orders = Array.isArray(payload.orders) ? payload.orders : [];
+  return orders
+    .map((order) => recordOrNull(order))
+    .filter((order): order is Record<string, unknown> => order != null);
+}
+
 function kalshiFillCount(record: Record<string, unknown>): number | null {
   return finiteOrNull(record.fill_count ?? record.fill_count_fp);
 }
@@ -461,6 +469,8 @@ export class KalshiOrderClient implements VenueOrderClient {
         : `kalshi limit_rest order canceled without exact fill (${exactFillError(this.venue, fillCount, context.size) ?? "final fill did not match requested size"})`;
     return {
       ...initialResult,
+      clientOrderId: record == null ? initialResult.clientOrderId : String(record.client_order_id ?? initialResult.clientOrderId),
+      orderId: record?.order_id == null ? initialResult.orderId : String(record.order_id),
       status,
       fillPrice: record ? kalshiFillPrice(record, leg) : initialResult.fillPrice,
       fillCount,
@@ -479,6 +489,67 @@ export class KalshiOrderClient implements VenueOrderClient {
         kalshiFinalFetchError: metadata.finalFetchError ?? null,
       },
     };
+  }
+
+  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+    const record = await this.findRecentOrderByClientOrderId(leg.contractId, context.clientOrderId);
+    if (!record) {
+      return {
+        ...timedOutResult,
+        metadata: {
+          ...timedOutResult.metadata,
+          kalshiTimeoutRecoveryAttempted: true,
+          kalshiTimeoutRecoveryStatus: "not_found",
+        },
+      };
+    }
+    return this.resultFromKalshiRecord(leg, context, record, {
+      ...timedOutResult,
+      metadata: {
+        ...timedOutResult.metadata,
+        kalshiTimeoutRecoveryAttempted: true,
+        kalshiTimeoutRecoveryStatus: "found_by_client_order_id",
+      },
+    }, {
+      cancelStatus: "not_needed",
+      finalFillSource: "timeout_recovery_query",
+    });
+  }
+
+  private async findRecentOrderByClientOrderId(ticker: string, clientOrderId: string): Promise<Record<string, unknown> | null> {
+    const statuses: Array<string | null> = [null, "executed", "resting", "canceled"];
+    const seenUrls = new Set<string>();
+    for (const status of statuses) {
+      const url = new URL(this.config.kalshiApiBase);
+      const basePath = url.pathname.replace(/\/$/, "");
+      url.pathname = `${basePath}/portfolio/orders`;
+      url.searchParams.set("ticker", ticker);
+      url.searchParams.set("limit", "100");
+      if (status) url.searchParams.set("status", status);
+      const href = url.toString();
+      if (seenUrls.has(href)) continue;
+      seenUrls.add(href);
+      try {
+        const orders = await this.fetchOrders(url);
+        const match = orders.find((order) => String(order.client_order_id ?? "") === clientOrderId);
+        if (match) return match;
+      } catch {
+        // Try the next status form before giving up on recovery.
+      }
+    }
+    return null;
+  }
+
+  private async fetchOrders(url: URL): Promise<Record<string, unknown>[]> {
+    const signPath = `${url.pathname}${url.search}`;
+    const response = await this.fetchFn(url, {
+      method: "GET",
+      headers: getKalshiHeaders("GET", signPath),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Kalshi orders query failed ${response.status}: ${sanitizeError(text)}`);
+    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    return kalshiOrderRecords(payload);
   }
 
   private async fetchOrder(orderId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {

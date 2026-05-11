@@ -219,6 +219,7 @@ class FakeConfirmationMonitor implements VenueConfirmationMonitor {
   readonly waitCalls: Venue[] = [];
   preflightReason: string | null = null;
   resultStatus: VenueConfirmationResult["status"] = "confirmed";
+  confirmations: Partial<Record<Venue, Partial<VenueConfirmationResult>>> = {};
 
   userStreamReadiness(now = 1_800_000_000_000) {
     const stream = {
@@ -243,10 +244,12 @@ class FakeConfirmationMonitor implements VenueConfirmationMonitor {
 
   async waitForVenueResult(result: VenueOrderResult): Promise<VenueConfirmationResult> {
     this.waitCalls.push(result.venue);
+    const override = this.confirmations[result.venue] ?? {};
+    const status = override.status ?? this.resultStatus;
     return {
       venue: result.venue,
-      status: this.resultStatus,
-      reason: this.resultStatus === "confirmed" ? null : `${result.venue} stream ${this.resultStatus}`,
+      status,
+      reason: status === "confirmed" ? null : `${result.venue} stream ${status}`,
       clientOrderId: result.clientOrderId,
       venueOrderId: result.orderId,
       fillCount: result.fillCount,
@@ -255,6 +258,7 @@ class FakeConfirmationMonitor implements VenueConfirmationMonitor {
       exchangeTimestampMs: result.exchangeTimestampMs ?? null,
       receivedAtMs: 1_800_000_000_100,
       eventType: "test",
+      ...override,
     };
   }
 }
@@ -391,6 +395,64 @@ test("Kalshi order client uses aggressive GTC limit and cancels unfilled remaind
   assert.match(result.error ?? "", /canceled without exact fill/);
   assert.equal(result.metadata?.kalshiCancelStatus, "canceled");
   assert.equal(result.metadata?.kalshiFinalStatus, "canceled");
+});
+
+test("Kalshi order client recovers a timed-out submit by client order ID", async () => {
+  const calls: Array<{ method: string; path: string; search: string }> = [];
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    const parsed = new URL(String(url));
+    calls.push({ method: init?.method ?? "GET", path: parsed.pathname, search: parsed.search });
+    return new Response(JSON.stringify({
+      orders: [
+        {
+          order_id: "kalshi-order",
+          client_order_id: "client-timeout",
+          ticker: "KXBTC15M-LATE",
+          status: "executed",
+          fill_count_fp: "5.00",
+          no_price_dollars: "0.3100",
+          taker_fees_dollars: "0.0000",
+          ts_ms: 1_800_000_000_300,
+        },
+      ],
+    }), { status: 200 });
+  };
+  const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
+  const timedOut: VenueOrderResult = {
+    venue: "kalshi",
+    clientOrderId: "client-timeout",
+    orderId: null,
+    status: "unknown",
+    fillPrice: null,
+    fillCount: null,
+    requestedAt: "2026-04-29T20:00:00.000Z",
+    respondedAt: "2026-04-29T20:00:02.500Z",
+    error: "order response timeout after 2500ms",
+  };
+
+  const result = await withKalshiEnv(() => client.recoverTimedOutOrder!({
+    venue: "kalshi",
+    contractId: "KXBTC15M-LATE",
+    direction: "no",
+    strike: 1500,
+    ask: 0.31,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-timeout",
+    size: 5,
+    maxBuyPrice: 0.31,
+  }, timedOut));
+
+  assert.equal(calls[0]?.method, "GET");
+  assert.equal(calls[0]?.path, "/trade-api/v2/portfolio/orders");
+  assert.match(calls[0]?.search ?? "", /ticker=KXBTC15M-LATE/);
+  assert.equal(result?.status, "filled");
+  assert.equal(result?.error, null);
+  assert.equal(result?.orderId, "kalshi-order");
+  assert.equal(result?.fillCount, 5);
+  assert.equal(result?.fillPrice, 0.31);
+  assert.equal(result?.metadata?.kalshiTimeoutRecoveryStatus, "found_by_client_order_id");
+  assert.equal(result?.metadata?.kalshiFinalFillSource, "timeout_recovery_query");
 });
 
 test("Polymarket order client builds a market FOK buy for the selected token", async () => {
@@ -1590,6 +1652,112 @@ test("live executor locks parallel one-sided fills", async () => {
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, true);
   assert.match(result.liveLockReason ?? "", /venue fill mismatch kalshi=5 polymarket=0/);
+  assert.equal(locks.engageCalls, 1);
+});
+
+test("live executor resolves a Kalshi timeout from private-stream confirmation before locking", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    kalshi: {
+      status: "confirmed",
+      venueOrderId: "kalshi-late-order",
+      fillCount: 5,
+      fillPrice: 0.31,
+      fee: 0,
+      exchangeTimestampMs: now + 3_400,
+      receivedAtMs: now + 3_457,
+    },
+    polymarket: {
+      status: "confirmed",
+      venueOrderId: "poly-order",
+      fillCount: 5,
+      fillPrice: 0.62,
+      fee: 0,
+      exchangeTimestampMs: now + 480,
+      receivedAtMs: now + 483,
+    },
+  };
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveParallelExecutionEnabled: true, liveUserStreamsEnabled: true }),
+    books,
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      respondedAt: new Date(now + 2_500).toISOString(),
+      error: "order response timeout after 2500ms",
+    }),
+    new FakeVenueClient("polymarket", {
+      orderId: "poly-order",
+      status: "filled",
+      fillPrice: 0.62,
+      fillCount: 5,
+      respondedAt: new Date(now + 483).toISOString(),
+    }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.liveLockReason, null);
+  assert.equal(result.kalshiStatus, "filled");
+  assert.equal(result.kalshiError, null);
+  assert.equal(result.kalshiFillId, "kalshi-late-order");
+  assert.equal(result.kalshiFillCount, 5);
+  assert.equal(result.kalshiFillPrice, 0.31);
+  assert.equal(result.polymarketFillCount, 5);
+  assert.equal(result.realizedGuaranteedProfit, 0.07);
+  assert.equal(result.executionTimings?.totalMs, 3_457);
+  assert.deepEqual(monitor.waitCalls.sort(), ["kalshi", "polymarket"]);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("live executor keeps the lock when a timed-out venue is unresolved by stream confirmation", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    kalshi: { status: "timeout", reason: "kalshi stream did not confirm", fillCount: null, fillPrice: null },
+    polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.4 },
+  };
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveParallelExecutionEnabled: true, liveUserStreamsEnabled: true }),
+    books,
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+    }),
+    new FakeVenueClient("polymarket", { status: "filled", fillCount: 5 }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(locks.engageCalls, 1);
 });
 
