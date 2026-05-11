@@ -34,12 +34,16 @@ function getKeyId(): string {
 
 export function signKalshiRequest(method: string, pathWithQuery: string, timestamp = Date.now().toString()): string {
   const key = createPrivateKey(resolveKalshiPrivateKeyPem());
-  const payload = Buffer.from(`${timestamp}${method.toUpperCase()}${pathWithQuery}`);
+  const payload = Buffer.from(`${timestamp}${method.toUpperCase()}${kalshiSignaturePath(pathWithQuery)}`);
   return sign("sha256", payload, {
     key,
     padding: constants.RSA_PKCS1_PSS_PADDING,
     saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
   }).toString("base64");
+}
+
+export function kalshiSignaturePath(pathWithQuery: string): string {
+  return pathWithQuery.split("?")[0] ?? pathWithQuery;
 }
 
 export function getKalshiHeaders(method: string, pathWithQuery: string, timestamp = Date.now().toString()): Record<string, string> {
