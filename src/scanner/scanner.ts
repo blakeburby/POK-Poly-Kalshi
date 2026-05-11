@@ -20,8 +20,9 @@ export interface ScannerOptions {
   executionConcurrency?: number;
   liveTrading?: boolean;
   maxLiveTradesPerWindow?: number;
+  maxUnresolvedExposureDollars?: number;
   liveExposure?: {
-    liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null>;
+    liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
     observeSignal?(signal: DashboardSignal): void;
   };
   liveLocks?: LiveExecutionLockWriter;
@@ -344,7 +345,12 @@ export class CrossVenueArbScanner {
     for (const key of this.liveLegKeys(candidate)) {
       if (this.activeLiveLegs.has(key)) return `live leg already reserved in this scan: ${key}`;
     }
-    return await this.options.liveExposure?.liveExposureBlockReason(candidate, now, maxTrades) ?? null;
+    return await this.options.liveExposure?.liveExposureBlockReason(
+      candidate,
+      now,
+      maxTrades,
+      this.options.maxUnresolvedExposureDollars,
+    ) ?? null;
   }
 
   private reserveLiveCandidate(candidate: ArbCandidate): void {

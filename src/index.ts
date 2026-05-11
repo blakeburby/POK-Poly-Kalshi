@@ -45,7 +45,9 @@ async function main(): Promise<void> {
   const baseLiveLocks = new LiveExecutionLockStore(pool);
   const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs) : null;
   const liveLocks = cachedLiveLocks ?? baseLiveLocks;
-  const liveExposureCache = config.liveHotPathEnabled ? new LiveExposureCache(signals, config.liveHotPathCacheMaxAgeMs) : null;
+  const liveExposureCache = config.liveHotPathEnabled
+    ? new LiveExposureCache(signals, config.liveHotPathCacheMaxAgeMs, config.liveMaxUnresolvedExposureDollars)
+    : null;
   const liveExposure = liveExposureCache ?? signals;
   const orderEvents = new VenueOrderEventHub(new VenueOrderEventStore(pool));
   const priceBeats = new PolymarketPriceBeatStore(pool);
@@ -80,10 +82,11 @@ async function main(): Promise<void> {
       now,
     ),
     reconciliationStore: liveExposure,
+    maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     liveLocks,
     now: Date.now,
   });
-  const liveReadinessProbe = new LiveExecutor(config, books, undefined, undefined, Date.now, liveLocks, orderEvents, confirmationMonitor);
+  const liveReadinessProbe = new LiveExecutor(config, books, undefined, undefined, Date.now, liveLocks, orderEvents, confirmationMonitor, liveExposure);
   const executor = config.liveTrading ? liveReadinessProbe : new DryRunExecutor(DryRunSlippageModel.fromConfig(config), config.minProfitDollars);
   const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
     enabled: config.arbEnabled,
@@ -92,6 +95,7 @@ async function main(): Promise<void> {
     executionConcurrency: config.executionConcurrency,
     liveTrading: config.liveTrading,
     maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
+    maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     liveExposure,
     liveLocks,
     deferLivePersistence: config.liveHotPathEnabled,

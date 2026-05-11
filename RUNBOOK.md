@@ -66,7 +66,9 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_PRETRADE_RETRY_DELAY_MS=100`: delay between bounded pre-submit retries.
 - `LIVE_FINAL_RECOVERY_TIMEOUT_MS=3000`: extra post-submit finalization window for timeout/unknown venue responses before a persistent lock is engaged.
 - `LIVE_FINAL_RECOVERY_POLL_MS=250`: intended poll cadence for venue finalization/recovery checks.
-- `LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS=true`: allow the worker to auto-resolve only authoritative no-exposure or exact paired-fill outcomes; unresolved one-sided exposure still hard-locks.
+- `LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS=true`: allow the worker to auto-resolve authoritative no-exposure or exact paired-fill outcomes; unresolved one-sided exposure follows the partial-fill lock mode below.
+- `LIVE_PARTIAL_FILL_LOCK_MODE=quarantine`: verified small partial fills/fill mismatches are marked as truthful quarantined risk instead of globally hard-locking the worker.
+- `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS=10`: maximum total unresolved quarantined one-sided exposure allowed before the worker falls back to a persistent hard lock.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block live entries when recent audit rows, private-stream confirmations, or persistent locks show unresolved drift.
 - `KALSHI_USER_WS_URL=wss://api.elections.kalshi.com/trade-api/ws/v2`: Kalshi authenticated user stream endpoint.
 - `POLYMARKET_USER_WS_URL=wss://ws-subscriptions-clob.polymarket.com/ws/user`: Polymarket authenticated CLOB user stream endpoint.
@@ -75,9 +77,11 @@ Polymarket execution note: in `parallel_limit_rest` mode, the worker uses a
 marketable GTC limit for exact shares, waits at most
 `LIVE_AGGRESSIVE_LIMIT_REST_MS`, cancels any open remainder, then re-queries
 order/trade/open-order state before accepting the result. In `parallel_fok`
-mode, CLOB FOK/FAK BUY orders are notional-based. In both modes, any non-exact
-fill count is unsafe and engages the persistent live circuit breaker when either
-venue has exposure.
+mode, CLOB FOK/FAK BUY orders are notional-based. In both modes, non-exact fill
+counts are unsafe by default. Verified bounded one-sided exposure may be
+quarantined under `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS`; open remainders,
+unknown exposure, failed venue lookups, failed cancel verification, or exposure
+over the cap still engage the persistent live circuit breaker.
 
 Private-stream safety note: in default live mode the worker uses the parallel
 hot path. A fresh book edge must pass raw executable VWAP, freshness, depth,
@@ -87,11 +91,12 @@ is persisted after submission/confirmation. Passive user-stream disconnects make
 readiness unhealthy and retry briefly before skipping new candidates. Confirmation
 timeout, failed settlement event, fill-count mismatch, dirty reconciliation
 state, open remainder, failed cancel verification, or any unsafe condition after
-an order may have been submitted engages or keeps the persistent live circuit
-breaker. Verified exact paired fills and verified zero-fill/no-open-order
-outcomes do not create a persistent lock. The sequential hedge path remains as
-fallback logic and still uses the configured hedge loss cap if only the first
-venue fills.
+an order may have been submitted enters final recovery before deciding whether to
+hard-lock. Verified exact paired fills and verified zero-fill/no-open-order
+outcomes do not create a persistent lock. Verified bounded partial exposure can
+continue as `TRADING WITH QUARANTINED RISK`; unverified or over-cap exposure
+still hard-locks. The sequential hedge path remains as fallback logic and still
+uses the configured hedge loss cap if only the first venue fills.
 
 ## Enable And Disable
 
@@ -133,9 +138,9 @@ The browser never receives `DASHBOARD_API_TOKEN`. Next.js API routes authenticat
 7. Deploy the Vercel dashboard and log in with `DASHBOARD_PASSWORD`.
 8. Confirm `cross_venue_arb_signals` rows are being written in dry-run mode.
 9. Configure a dedicated Polymarket bot wallet, fund it lightly, approve CLOB trading, and set the Polymarket live env vars above.
-10. Confirm `/dashboard/snapshot` shows `execution.kalshi.ready=true`, `execution.polymarket.ready=true`, `execution.userStreams.ready=true`, `execution.reconciliation.clean=true`, `execution.polymarket.geoblockBlocked=false`, `execution.partialFillLocked=false`, and `execution.circuitBreakerLocked=false`.
+10. Confirm `/dashboard/snapshot` shows `execution.kalshi.ready=true`, `execution.polymarket.ready=true`, `execution.userStreams.ready=true`, `execution.reconciliation.clean=true`, `execution.polymarket.geoblockBlocked=false`, `execution.partialFillLocked=false`, and `execution.circuitBreakerLocked=false`. If `execution.riskState="quarantined"`, trading is allowed only because verified unresolved exposure is under the configured cap.
 11. Set `ARB_EXECUTION_CONCURRENCY=1` for the first canary, then flip `ARB_LIVE_TRADING=true` only after a small dry-run window matches manual venue quotes.
-12. Watch the first live candidate. If any `partial_fill`, mismatched fill count, or unsafe realized edge appears, the worker persists a live circuit breaker in Postgres until operator review and manual DB clearance.
+12. Watch the first live candidate. If any `partial_fill`, mismatched fill count, or unsafe realized edge appears, the worker either quarantines verified under-cap exposure or persists a live circuit breaker in Postgres until operator review and manual DB clearance.
 
 ## VPS Worker Cutover
 
@@ -205,7 +210,7 @@ bash /opt/pok-poly-kalshi/scripts/verify-live-readiness.sh
 - Polymarket readiness includes the worker's own geoblock preflight. If `execution.polymarket.geoblockBlocked` is `true` or `null`, live execution is blocked before any Kalshi order can be placed. Move the worker to a compliant egress region/host and verify `geoblockBlocked=false` before live canary.
 - Polymarket execution preflight forces a fresh collateral check for each candidate using `LIVE_ORDER_SIZE * maxPolymarketPrice + LIVE_COLLATERAL_BUFFER_DOLLARS`; the 30-second dashboard readiness cache is never trusted before submitting Kalshi.
 - Authenticated Kalshi and Polymarket user streams persist append-only order lifecycle events in `venue_order_events`; live execution requires private-stream confirmations before an attempt is considered safe.
-- If a one-sided fill, unresolved timeout/unknown venue state, failed settlement event, unexpected fill count, open remainder, or failed cancel verification is detected, the executor writes the audit detail and persists a live circuit breaker in `live_execution_locks`.
+- If a one-sided fill, unresolved timeout/unknown venue state, failed settlement event, unexpected fill count, open remainder, or failed cancel verification is detected, the executor writes the audit detail. Verified under-cap one-sided exposure is marked as quarantined risk; unverified, open-order, failed-lookup, or over-cap exposure persists a live circuit breaker in `live_execution_locks`.
 - Re-entry is tracked by pair key and hydrated from filled audit rows on startup.
 - The dashboard is read-only in v1: no threshold edits, manual orders, kill switch, or live/dry-run toggles.
 - Rotate any private key pasted into chat or logs before enabling live mode.

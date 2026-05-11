@@ -112,6 +112,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFinalRecoveryTimeoutMs: 3_000,
     liveFinalRecoveryPollMs: 250,
     liveAutoResolveVerifiedIncidents: true,
+    livePartialFillLockMode: "lock",
+    liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
@@ -1791,6 +1793,150 @@ test("live executor keeps the lock when a timed-out venue is unresolved by strea
   assert.equal(result.partialFill, true);
   assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(result.recoveryStatus, "operator_required");
+  assert.equal(locks.engageCalls, 1);
+});
+
+test("live executor quarantines a bounded one-sided fill instead of hard-locking", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    kalshi: { status: "timeout", reason: "kalshi stream did not confirm", fillCount: null, fillPrice: null },
+    polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.84 },
+  };
+  const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 0 };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+    }),
+    books,
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        kalshiTimeoutRecoveryAttempted: true,
+        kalshiTimeoutRecoveryStatus: "not_found",
+      },
+    }),
+    new FakeVenueClient("polymarket", { status: "filled", fillCount: 5, fillPrice: 0.84 }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+    exposureReader,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.equal(result.liveLockReason, null);
+  assert.equal(result.recoveryStatus, "risk_quarantined");
+  assert.equal(result.riskQuarantineExposureDollars, 4.2);
+  assert.match(result.riskQuarantineReason ?? "", /within cap 10.00/);
+  assert.equal(locks.engageCalls, 0);
+  const readiness = await executor.readiness(now);
+  assert.equal(readiness.riskState, "quarantined");
+});
+
+test("live executor hard-locks quarantined fills when exposure cap would be exceeded", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    kalshi: { status: "timeout", reason: "kalshi stream did not confirm", fillCount: null, fillPrice: null },
+    polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.84 },
+  };
+  const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 6 };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+    }),
+    books,
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        kalshiTimeoutRecoveryAttempted: true,
+        kalshiTimeoutRecoveryStatus: "not_found",
+      },
+    }),
+    new FakeVenueClient("polymarket", { status: "filled", fillCount: 5, fillPrice: 0.84 }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+    exposureReader,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(result.riskQuarantinedAt, null);
+  assert.equal(locks.engageCalls, 1);
+});
+
+test("live executor hard-locks partials when an open order cannot be ruled out", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 0 };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+    }),
+    books,
+    new FakeVenueClient("kalshi", { status: "filled", fillCount: 5, fillPrice: 0.4 }),
+    new FakeVenueClient("polymarket", {
+      status: "unknown",
+      fillCount: 0,
+      fillPrice: null,
+      error: "polymarket limit_rest cancellation/final state unverified",
+      metadata: { polymarketOpenOrderCount: 1 },
+    }),
+    () => now,
+    locks,
+    undefined,
+    undefined,
+    exposureReader,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /timeout\/unknown|fill mismatch/);
+  assert.equal(result.riskQuarantinedAt, null);
   assert.equal(locks.engageCalls, 1);
 });
 

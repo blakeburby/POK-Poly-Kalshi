@@ -84,6 +84,10 @@ interface DashboardSignalRow {
   recovery_attempts: string | number | null;
   recovery_evidence: Record<string, unknown> | string | null;
   finalization_ms: string | number | null;
+  risk_quarantined_at: string | Date | null;
+  risk_quarantine_reason: string | null;
+  risk_quarantine_exposure_dollars: string | number | null;
+  risk_quarantine_evidence: Record<string, unknown> | string | null;
 }
 
 interface LiveExposureRow {
@@ -101,6 +105,8 @@ interface LiveExposureRow {
   kalshi_fill_count: string | number | null;
   polymarket_fill_count: string | number | null;
   reconciliation_resolved_at: string | Date | null;
+  risk_quarantined_at?: string | Date | null;
+  risk_quarantine_exposure_dollars?: string | number | null;
 }
 
 interface LiveReconciliationRow {
@@ -113,6 +119,12 @@ interface LiveReconciliationRow {
   polymarket_fill_count: string | number | null;
   venue_confirmations: VenueConfirmations | string | null;
   reconciliation_resolved_at: string | Date | null;
+  risk_quarantined_at: string | Date | null;
+}
+
+interface QuarantineExposureRow {
+  total: string | number | null;
+  count: string | number | null;
 }
 
 const SIGNAL_COLUMNS = `
@@ -129,7 +141,8 @@ const SIGNAL_COLUMNS = `
   quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations,
   execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
   reconciliation_resolved_at, reconciliation_resolution_reason, reconciliation_resolution,
-  recovery_status, recovery_attempts, recovery_evidence, finalization_ms
+  recovery_status, recovery_attempts, recovery_evidence, finalization_ms,
+  risk_quarantined_at, risk_quarantine_reason, risk_quarantine_exposure_dollars, risk_quarantine_evidence
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -163,6 +176,7 @@ function recoveryStatusFrom(value: string | null | undefined): LiveRecoveryStatu
     || value === "finalizing"
     || value === "auto_resolved_no_exposure"
     || value === "auto_resolved_paired_fill"
+    || value === "risk_quarantined"
     || value === "operator_required"
   ) return value;
   return null;
@@ -263,6 +277,10 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     recoveryAttempts: numberFrom(row.recovery_attempts),
     recoveryEvidence: jsonFromRow<Record<string, unknown>>(row.recovery_evidence),
     finalizationMs: numberFrom(row.finalization_ms),
+    riskQuarantinedAt: optionalDateString(row.risk_quarantined_at),
+    riskQuarantineReason: row.risk_quarantine_reason,
+    riskQuarantineExposureDollars: numberFrom(row.risk_quarantine_exposure_dollars),
+    riskQuarantineEvidence: jsonFromRow<Record<string, unknown>>(row.risk_quarantine_evidence),
     risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
@@ -352,6 +370,10 @@ export class SignalStore {
           recovery_attempts = $35,
           recovery_evidence = CASE WHEN $36::TEXT IS NULL THEN NULL ELSE $36::JSONB END,
           finalization_ms = $37,
+          risk_quarantined_at = CASE WHEN $38::TEXT IS NULL THEN NULL ELSE $38::TIMESTAMPTZ END,
+          risk_quarantine_reason = $39,
+          risk_quarantine_exposure_dollars = $40,
+          risk_quarantine_evidence = CASE WHEN $41::TEXT IS NULL THEN NULL ELSE $41::JSONB END,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -393,6 +415,10 @@ export class SignalStore {
       update.recoveryAttempts ?? null,
       update.recoveryEvidence == null ? null : JSON.stringify(update.recoveryEvidence),
       update.finalizationMs ?? null,
+      update.riskQuarantinedAt ?? null,
+      update.riskQuarantineReason ?? null,
+      update.riskQuarantineExposureDollars ?? null,
+      update.riskQuarantineEvidence == null ? null : JSON.stringify(update.riskQuarantineEvidence),
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
@@ -409,15 +435,54 @@ export class SignalStore {
       .filter((row) => Number.isFinite(row.filledAtMs));
   }
 
-  async liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
+  async unresolvedRiskQuarantineExposureDollars(): Promise<number> {
+    const status = await this.liveRiskQuarantineStatus();
+    return status.total;
+  }
+
+  async liveRiskQuarantineStatus(): Promise<{ total: number; count: number }> {
+    const result = await this.db.query<QuarantineExposureRow>(`
+      SELECT COALESCE(SUM(risk_quarantine_exposure_dollars), 0) AS total,
+             COUNT(*) AS count
+      FROM cross_venue_arb_signals
+      WHERE execution_mode = 'live'
+        AND reconciliation_resolved_at IS NULL
+        AND risk_quarantined_at IS NOT NULL
+    `);
+    return {
+      total: numberFrom(result.rows[0]?.total ?? null) ?? 0,
+      count: numberFrom(result.rows[0]?.count ?? null) ?? 0,
+    };
+  }
+
+  async liveQuarantineBlockReason(maxUnresolvedExposureDollars?: number): Promise<string | null> {
+    if (maxUnresolvedExposureDollars == null || !Number.isFinite(maxUnresolvedExposureDollars)) return null;
+    const status = await this.liveRiskQuarantineStatus();
+    if (status.total > maxUnresolvedExposureDollars + 1e-9) {
+      return `live unresolved quarantined exposure ${status.total.toFixed(2)} exceeds cap ${maxUnresolvedExposureDollars.toFixed(2)} across ${status.count} signals`;
+    }
+    return null;
+  }
+
+  async liveExposureBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    maxTradesPerWindow: number,
+    maxUnresolvedExposureDollars?: number,
+  ): Promise<string | null> {
+    const quarantineReason = await this.liveQuarantineBlockReason(maxUnresolvedExposureDollars);
+    if (quarantineReason) return quarantineReason;
+
     const result = await this.db.query<LiveExposureRow>(`
       SELECT id, pair_key, expiry_ms, kalshi_contract_id, polymarket_contract_id,
              lower_venue, lower_contract_id, lower_direction,
              higher_venue, higher_contract_id, higher_direction,
-             kalshi_fill_count, polymarket_fill_count, reconciliation_resolved_at
+             kalshi_fill_count, polymarket_fill_count, reconciliation_resolved_at,
+             risk_quarantined_at, risk_quarantine_exposure_dollars
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND reconciliation_resolved_at IS NULL
+        AND risk_quarantined_at IS NULL
         AND expiry_ms = $1
         AND expiry_ms > $2
         AND (
@@ -484,13 +549,30 @@ export class SignalStore {
     return result.rows.map(signalFromRow);
   }
 
-  async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
+  async liveReconciliationBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    maxUnresolvedExposureDollars?: number,
+  ): Promise<string | null> {
+    return this.liveReconciliationBlockReasonWithCap(candidate, now, maxUnresolvedExposureDollars);
+  }
+
+  async liveReconciliationBlockReasonWithCap(
+    candidate: ArbCandidate,
+    now: number,
+    maxUnresolvedExposureDollars?: number,
+  ): Promise<string | null> {
+    const quarantineReason = await this.liveQuarantineBlockReason(maxUnresolvedExposureDollars);
+    if (quarantineReason) return quarantineReason;
+
     const result = await this.db.query<LiveReconciliationRow>(`
       SELECT id, action, partial_fill, kalshi_status, polymarket_status,
-             kalshi_fill_count, polymarket_fill_count, venue_confirmations, reconciliation_resolved_at
+             kalshi_fill_count, polymarket_fill_count, venue_confirmations, reconciliation_resolved_at,
+             risk_quarantined_at
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND reconciliation_resolved_at IS NULL
+        AND risk_quarantined_at IS NULL
         AND expiry_ms = $1
         AND expiry_ms > $2
         AND (

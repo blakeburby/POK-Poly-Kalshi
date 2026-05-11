@@ -226,6 +226,21 @@ interface ExecutionMetadata {
   reconciliationResolvedAt?: string | null;
   reconciliationResolutionReason?: string | null;
   reconciliationResolution?: ReconciliationResolution | null;
+  riskQuarantinedAt?: string | null;
+  riskQuarantineReason?: string | null;
+  riskQuarantineExposureDollars?: number | null;
+  riskQuarantineEvidence?: Record<string, unknown> | null;
+}
+
+export interface RiskQuarantineExposureReader {
+  unresolvedRiskQuarantineExposureDollars(): Promise<number>;
+}
+
+interface RiskQuarantineDecision {
+  quarantinedAt: string;
+  reason: string;
+  exposureDollars: number;
+  evidence: Record<string, unknown>;
 }
 
 interface SequentialFirstVenueDecision {
@@ -267,6 +282,8 @@ export function dryRunExecutionReadiness(config: AppConfig, now = Date.now()): L
     hotPathEnabled: config.liveHotPathEnabled,
     hotPathCacheMaxAgeMs: config.liveHotPathCacheMaxAgeMs,
     polymarketPresignEnabled: config.livePolymarketPresignEnabled,
+    partialFillLockMode: config.livePartialFillLockMode,
+    maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     orderTimeoutMs: config.liveOrderTimeoutMs,
     kalshiOrderGroupEnabled: config.liveKalshiOrderGroupEnabled && Boolean(config.liveKalshiOrderGroupId),
     userStreams: buildUserStreamReadiness(false, config.liveUserStreamConfirmTimeoutMs, undefined, undefined, now),
@@ -296,6 +313,7 @@ export class LiveExecutor implements ArbExecutor {
     private readonly liveLocks?: LiveExecutionLockWriter,
     private readonly orderEvents?: VenueOrderEventWriter,
     private readonly confirmationMonitor?: VenueConfirmationMonitor,
+    private readonly quarantineExposureReader?: RiskQuarantineExposureReader,
   ) {}
 
   async warm(options: { tokenIds?: string[]; now?: number } = {}): Promise<void> {
@@ -327,7 +345,7 @@ export class LiveExecutor implements ArbExecutor {
         null,
         this.config.liveUserStreamsEnabled ? "live reconciliation monitor is not configured" : null,
       );
-    const riskState = this.liveRiskState(activeLock?.reason ?? null, reconciliation.reason, userStreams.reason);
+    const riskState = this.liveRiskState(activeLock?.reason ?? null, reconciliation, userStreams.reason);
     return {
       mode: "live",
       liveTrading: this.config.liveTrading,
@@ -349,6 +367,8 @@ export class LiveExecutor implements ArbExecutor {
       hotPathEnabled: this.config.liveHotPathEnabled,
       hotPathCacheMaxAgeMs: this.config.liveHotPathCacheMaxAgeMs,
       polymarketPresignEnabled: this.config.livePolymarketPresignEnabled,
+      partialFillLockMode: this.config.livePartialFillLockMode,
+      maxUnresolvedExposureDollars: this.config.liveMaxUnresolvedExposureDollars,
       orderTimeoutMs: this.config.liveOrderTimeoutMs,
       kalshiOrderGroupEnabled: this.config.liveKalshiOrderGroupEnabled && Boolean(this.config.liveKalshiOrderGroupId),
       userStreams,
@@ -660,16 +680,23 @@ export class LiveExecutor implements ArbExecutor {
 
   private liveRiskState(
     circuitBreakerReason: string | null,
-    reconciliationReason: string | null,
+    reconciliation: { reason: string | null; quarantinedExposureDollars?: number | null; quarantinedSignalCount?: number | null },
     userStreamReason: string | null,
   ): { state: LiveRiskState; reason: string | null } {
     if (circuitBreakerReason) return { state: "hard_locked", reason: circuitBreakerReason };
     if (this.partialFillLocked) return { state: "hard_locked", reason: "in-memory partial-fill latch is set" };
-    if (reconciliationReason) return { state: "blocked", reason: reconciliationReason };
+    if (reconciliation.reason) return { state: "blocked", reason: reconciliation.reason };
     if (userStreamReason) return { state: "blocked", reason: userStreamReason };
     const status = this.lastAttempt?.recoveryStatus ?? null;
     if (status === "finalizing" || status === "pretrade_retry") {
       return { state: "recovering", reason: `last attempt recovery status: ${recoveryStatusLabel(status)}` };
+    }
+    const quarantinedExposure = reconciliation.quarantinedExposureDollars ?? this.lastAttempt?.riskQuarantineExposureDollars ?? 0;
+    if (quarantinedExposure > 0) {
+      return {
+        state: "quarantined",
+        reason: `trading with quarantined unresolved exposure ${quarantinedExposure.toFixed(2)} across ${reconciliation.quarantinedSignalCount ?? 1} signal(s)`,
+      };
     }
     return { state: "trading", reason: null };
   }
@@ -1126,13 +1153,15 @@ export class LiveExecutor implements ArbExecutor {
       },
     };
     const venueConfirmations = this.attachRestMetadata(metadata.venueConfirmations ?? fallbackVenueConfirmations, kalshi, polymarket);
-    const liveLockReason = this.confirmationLockReason(metadata.venueConfirmations)
+    const initialLiveLockReason = this.confirmationLockReason(metadata.venueConfirmations)
       ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
+    const riskQuarantine = await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
+    const liveLockReason = riskQuarantine ? null : initialLiveLockReason;
     const recoveryEvidencePresent = this.hasRecoveryEvidence(kalshi, venueConfirmations.kalshi)
       || this.hasRecoveryEvidence(polymarket, venueConfirmations.polymarket)
       || metadata.recoveryStatus === "pretrade_retry";
     const recoveryStatus = metadata.recoveryStatus
-      ?? this.recoveryStatusForResult(liveLockReason, exactPairFilled, hasAnyFill, recoveryEvidencePresent);
+      ?? (riskQuarantine ? "risk_quarantined" : this.recoveryStatusForResult(liveLockReason, exactPairFilled, hasAnyFill, recoveryEvidencePresent));
     const recoveryEvidence = metadata.recoveryEvidence
       ?? (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
     const finalizationMs = metadata.finalizationMs ?? metadata.executionTimings?.totalMs ?? null;
@@ -1145,7 +1174,9 @@ export class LiveExecutor implements ArbExecutor {
     const hedgeFailureReason = completedRiskHedgeBelowThreshold
       ? `risk hedge completed below normal profit threshold: realized edge ${realizedGuaranteedProfit?.toFixed(4)} below threshold ${this.config.minProfitDollars.toFixed(4)}`
       : null;
-    const failureReason = liveLockReason ?? hedgeFailureReason ?? venueFailureReason;
+    const failureReason = riskQuarantine
+      ? `risk quarantined: ${riskQuarantine.reason}`
+      : liveLockReason ?? hedgeFailureReason ?? venueFailureReason;
     const action: ExecutionResult["action"] = exactPairFilled && !realizedEdgeUnsafe && !completedRiskHedgeBelowThreshold && !liveLockReason
       ? "filled"
       : "failed";
@@ -1160,6 +1191,8 @@ export class LiveExecutor implements ArbExecutor {
       recoveryStatus,
       recoveryAttempts: metadata.recoveryAttempts ?? 0,
       finalizationMs,
+      riskQuarantinedAt: riskQuarantine?.quarantinedAt ?? null,
+      riskQuarantineExposureDollars: riskQuarantine?.exposureDollars ?? null,
       completedAt: this.now(),
     };
     const result: ExecutionResult = {
@@ -1197,6 +1230,10 @@ export class LiveExecutor implements ArbExecutor {
       recoveryAttempts: metadata.recoveryAttempts ?? 0,
       recoveryEvidence,
       finalizationMs,
+      riskQuarantinedAt: metadata.riskQuarantinedAt ?? riskQuarantine?.quarantinedAt ?? null,
+      riskQuarantineReason: metadata.riskQuarantineReason ?? riskQuarantine?.reason ?? null,
+      riskQuarantineExposureDollars: metadata.riskQuarantineExposureDollars ?? riskQuarantine?.exposureDollars ?? null,
+      riskQuarantineEvidence: metadata.riskQuarantineEvidence ?? riskQuarantine?.evidence ?? null,
       reconciliationResolvedAt: metadata.reconciliationResolvedAt ?? autoResolution.resolvedAt,
       reconciliationResolutionReason: metadata.reconciliationResolutionReason ?? autoResolution.reason,
       reconciliationResolution: metadata.reconciliationResolution ?? autoResolution.resolution,
@@ -1230,6 +1267,98 @@ export class LiveExecutor implements ArbExecutor {
       });
     }
     return result;
+  }
+
+  private async riskQuarantineDecision(
+    lockReason: string | null,
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    venueConfirmations: VenueConfirmations | null | undefined,
+  ): Promise<RiskQuarantineDecision | null> {
+    if (!lockReason || this.config.livePartialFillLockMode !== "quarantine") return null;
+    if (!this.isRiskQuarantinableLock(lockReason)) return null;
+
+    const openRisk = this.unverifiedOpenOrderRisk(kalshi) ?? this.unverifiedOpenOrderRisk(polymarket);
+    if (openRisk) return null;
+
+    const exposureDollars = this.unresolvedExposureDollars(kalshi, polymarket);
+    if (exposureDollars == null) return null;
+
+    const existingExposure = await this.quarantineExposureReader?.unresolvedRiskQuarantineExposureDollars().catch(() => Number.POSITIVE_INFINITY) ?? 0;
+    const totalExposure = existingExposure + exposureDollars;
+    if (totalExposure > this.config.liveMaxUnresolvedExposureDollars + 1e-9) return null;
+
+    return {
+      quarantinedAt: new Date(this.now()).toISOString(),
+      reason: `${lockReason}; unresolved exposure ${exposureDollars.toFixed(2)} within cap ${this.config.liveMaxUnresolvedExposureDollars.toFixed(2)}`,
+      exposureDollars,
+      evidence: {
+        originalLockReason: lockReason,
+        existingQuarantinedExposureDollars: roundPrice(existingExposure),
+        totalQuarantinedExposureDollars: roundPrice(totalExposure),
+        maxUnresolvedExposureDollars: this.config.liveMaxUnresolvedExposureDollars,
+        kalshi: this.riskQuarantineVenueEvidence(kalshi, venueConfirmations?.kalshi),
+        polymarket: this.riskQuarantineVenueEvidence(polymarket, venueConfirmations?.polymarket),
+      },
+    };
+  }
+
+  private isRiskQuarantinableLock(reason: string): boolean {
+    const normalized = reason.toLowerCase();
+    return normalized.includes("private stream confirmation")
+      || normalized.includes("fill mismatch")
+      || normalized.includes("unexpected fill count")
+      || normalized.includes("timeout/unknown");
+  }
+
+  private unresolvedExposureDollars(kalshi: VenueOrderResult, polymarket: VenueOrderResult): number | null {
+    const kalshiCount = kalshi.fillCount ?? 0;
+    const polymarketCount = polymarket.fillCount ?? 0;
+    if (kalshiCount < 0 || polymarketCount < 0) return null;
+    if (Math.abs(kalshiCount - polymarketCount) <= 0.000001) return 0;
+    if (kalshiCount > polymarketCount) {
+      if (kalshi.fillPrice == null) return null;
+      return roundPrice((kalshiCount - polymarketCount) * kalshi.fillPrice);
+    }
+    if (polymarket.fillPrice == null) return null;
+    return roundPrice((polymarketCount - kalshiCount) * polymarket.fillPrice);
+  }
+
+  private unverifiedOpenOrderRisk(result: VenueOrderResult): string | null {
+    const status = result.status.toLowerCase();
+    if (["live", "open", "resting", "delayed"].includes(status)) return `${result.venue} order may still be open (${result.status})`;
+    const metadata = result.metadata ?? {};
+    const cancelStatus = String(metadata.kalshiCancelStatus ?? metadata.polymarketCancelStatus ?? "");
+    const openOrderCount = Number(metadata.polymarketOpenOrderCount ?? 0);
+    const openOrdersError = metadata.polymarketOpenOrdersError;
+    const finalFetchError = metadata.kalshiFinalFetchError ?? metadata.polymarketFinalFetchError;
+    const timeoutRecoveryStatus = String(metadata.kalshiTimeoutRecoveryStatus ?? "");
+    const verifiedNoKalshiOrder = result.venue === "kalshi"
+      && result.status === "unknown"
+      && (result.fillCount ?? 0) === 0
+      && timeoutRecoveryStatus === "not_found";
+    if (verifiedNoKalshiOrder) return null;
+    if (openOrderCount > 0) return `${result.venue} has ${openOrderCount} open order(s)`;
+    if (typeof openOrdersError === "string" && openOrdersError) return `${result.venue} open-order query failed: ${openOrdersError}`;
+    if (typeof finalFetchError === "string" && finalFetchError && result.status === "unknown") return `${result.venue} final order query failed: ${finalFetchError}`;
+    if (["cancel_failed", "cancel_unavailable", "skipped_no_order_id"].includes(cancelStatus) && result.status === "unknown") {
+      return `${result.venue} cancel state is unverified (${cancelStatus})`;
+    }
+    if (result.status === "unknown" && (result.fillCount ?? 0) <= 0) return `${result.venue} exposure is unknown`;
+    return null;
+  }
+
+  private riskQuarantineVenueEvidence(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined): Record<string, unknown> {
+    return {
+      status: result.status,
+      orderId: result.orderId,
+      clientOrderId: result.clientOrderId,
+      fillCount: result.fillCount ?? null,
+      fillPrice: result.fillPrice ?? null,
+      error: result.error,
+      metadata: result.metadata ?? null,
+      confirmation: confirmation ?? null,
+    };
   }
 
   private realizedFeePerSpread(kalshi: VenueOrderResult, polymarket: VenueOrderResult): number {

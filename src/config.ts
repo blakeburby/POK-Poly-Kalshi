@@ -1,4 +1,4 @@
-import type { LiveOrderPlacementMode } from "./types";
+import type { LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
 
 export interface AppConfig {
   port: number;
@@ -64,6 +64,8 @@ export interface AppConfig {
   liveFinalRecoveryTimeoutMs: number;
   liveFinalRecoveryPollMs: number;
   liveAutoResolveVerifiedIncidents: boolean;
+  livePartialFillLockMode: LivePartialFillLockMode;
+  liveMaxUnresolvedExposureDollars: number;
   liveReconcileBeforeTrade: boolean;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
@@ -107,6 +109,12 @@ function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMo
   const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "parallel_limit_rest").toLowerCase();
   if (value === "parallel_fok" || value === "parallel_limit_rest") return value;
   throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok or parallel_limit_rest");
+}
+
+function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLockMode {
+  const value = envString(env, "LIVE_PARTIAL_FILL_LOCK_MODE", "quarantine").toLowerCase();
+  if (value === "lock" || value === "quarantine") return value;
+  throw new Error("LIVE_PARTIAL_FILL_LOCK_MODE must be lock or quarantine");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -179,6 +187,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveFinalRecoveryTimeoutMs: envNumber(env, "LIVE_FINAL_RECOVERY_TIMEOUT_MS", 3_000),
     liveFinalRecoveryPollMs: envNumber(env, "LIVE_FINAL_RECOVERY_POLL_MS", 250),
     liveAutoResolveVerifiedIncidents: envBoolean(env, "LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS", true),
+    livePartialFillLockMode: envLivePartialFillLockMode(env),
+    liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
     kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
     polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),

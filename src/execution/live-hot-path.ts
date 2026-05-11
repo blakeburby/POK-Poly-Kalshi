@@ -3,6 +3,7 @@ import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../db/live
 
 export interface LiveExposureSignalReader {
   listLiveExposureSignals(now: number, limit?: number): Promise<DashboardSignal[]>;
+  unresolvedRiskQuarantineExposureDollars?(): Promise<number>;
 }
 
 function confirmedByUserStream(confirmations: VenueConfirmations | null | undefined, venue: Venue): boolean {
@@ -23,6 +24,23 @@ function hasLiveExposure(signal: DashboardSignal): boolean {
       || ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "")
       || ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "")
     );
+}
+
+function riskQuarantined(signal: DashboardSignal): boolean {
+  return signal.riskQuarantinedAt != null;
+}
+
+function riskQuarantineExposure(signal: DashboardSignal): number {
+  const exposure = signal.riskQuarantineExposureDollars ?? 0;
+  return Number.isFinite(exposure) && exposure > 0 ? exposure : 0;
+}
+
+function quarantineStatus(signals: DashboardSignal[]): { total: number; count: number } {
+  const quarantined = signals.filter((signal) => hasLiveExposure(signal) && riskQuarantined(signal));
+  return {
+    total: quarantined.reduce((sum, signal) => sum + riskQuarantineExposure(signal), 0),
+    count: quarantined.length,
+  };
 }
 
 function liveLegKeys(candidate: ArbCandidate): string[] {
@@ -118,6 +136,7 @@ export class LiveExposureCache {
   constructor(
     private readonly reader: LiveExposureSignalReader,
     private readonly maxAgeMs: number,
+    private readonly maxUnresolvedExposureDollars: number,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -150,10 +169,28 @@ export class LiveExposureCache {
     };
   }
 
+  async unresolvedRiskQuarantineExposureDollars(): Promise<number> {
+    return quarantineStatus(this.signals).total;
+  }
+
+  async liveRiskQuarantineStatus(): Promise<{ total: number; count: number }> {
+    return quarantineStatus(this.signals);
+  }
+
+  private quarantineBlockReason(): string | null {
+    const status = quarantineStatus(this.signals);
+    if (Number.isFinite(this.maxUnresolvedExposureDollars) && status.total > this.maxUnresolvedExposureDollars + 1e-9) {
+      return `live unresolved quarantined exposure ${status.total.toFixed(2)} exceeds cap ${this.maxUnresolvedExposureDollars.toFixed(2)} across ${status.count} signals`;
+    }
+    return null;
+  }
+
   async liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
     const staleReason = this.status().reason;
     if (staleReason) return staleReason;
-    const exposed = this.signals.filter((signal) => signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
+    const quarantineReason = this.quarantineBlockReason();
+    if (quarantineReason) return quarantineReason;
+    const exposed = this.signals.filter((signal) => !riskQuarantined(signal) && signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
     if (exposed.length >= maxTrades) {
       return `live max trades per window reached for expiry ${candidate.expiryMs}: ${exposed.length}/${maxTrades}`;
@@ -172,7 +209,9 @@ export class LiveExposureCache {
   async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
     const staleReason = this.status().reason;
     if (staleReason) return `live reconciliation blocked: ${staleReason}`;
-    const exposed = this.signals.filter((signal) => signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
+    const quarantineReason = this.quarantineBlockReason();
+    if (quarantineReason) return quarantineReason;
+    const exposed = this.signals.filter((signal) => !riskQuarantined(signal) && signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
     for (const signal of exposed) {
       if (signal.reconciliationResolvedAt != null) continue;
       const kalshiFillCount = signal.kalshiFillCount ?? 0;

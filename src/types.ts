@@ -3,14 +3,16 @@ export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 export type ExecutionMode = "paper" | "live";
 export type LiveOrderPlacementMode = "parallel_fok" | "parallel_limit_rest";
+export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
   | "none"
   | "pretrade_retry"
   | "finalizing"
   | "auto_resolved_no_exposure"
   | "auto_resolved_paired_fill"
+  | "risk_quarantined"
   | "operator_required";
-export type LiveRiskState = "trading" | "recovering" | "blocked" | "hard_locked";
+export type LiveRiskState = "trading" | "recovering" | "blocked" | "hard_locked" | "quarantined";
 
 export interface BookLevel {
   price: number;
@@ -195,6 +197,9 @@ export interface ReconciliationReadiness {
   reason: string | null;
   checkedAt: number | null;
   lastReconciliationAt: number | null;
+  quarantinedExposureDollars?: number | null;
+  quarantinedSignalCount?: number | null;
+  quarantineCapDollars?: number | null;
 }
 
 export interface ExecutionResult {
@@ -235,6 +240,10 @@ export interface ExecutionResult {
   recoveryAttempts?: number | null;
   recoveryEvidence?: Record<string, unknown> | null;
   finalizationMs?: number | null;
+  riskQuarantinedAt?: string | null;
+  riskQuarantineReason?: string | null;
+  riskQuarantineExposureDollars?: number | null;
+  riskQuarantineEvidence?: Record<string, unknown> | null;
 }
 
 export interface SignalInsert {
@@ -281,6 +290,10 @@ export interface SignalUpdate {
   recoveryAttempts?: number | null;
   recoveryEvidence?: Record<string, unknown> | null;
   finalizationMs?: number | null;
+  riskQuarantinedAt?: string | null;
+  riskQuarantineReason?: string | null;
+  riskQuarantineExposureDollars?: number | null;
+  riskQuarantineEvidence?: Record<string, unknown> | null;
 }
 
 export interface DashboardSignal {
@@ -334,6 +347,10 @@ export interface DashboardSignal {
   recoveryAttempts?: number | null;
   recoveryEvidence?: Record<string, unknown> | null;
   finalizationMs?: number | null;
+  riskQuarantinedAt?: string | null;
+  riskQuarantineReason?: string | null;
+  riskQuarantineExposureDollars?: number | null;
+  riskQuarantineEvidence?: Record<string, unknown> | null;
   risk?: SyntheticStructureRisk;
 }
 
@@ -372,6 +389,8 @@ export interface LiveExecutionLastAttempt {
   recoveryStatus?: LiveRecoveryStatus | null;
   recoveryAttempts?: number | null;
   finalizationMs?: number | null;
+  riskQuarantinedAt?: string | null;
+  riskQuarantineExposureDollars?: number | null;
   completedAt: number;
 }
 
@@ -408,6 +427,8 @@ export interface LiveExecutionReadiness {
   hotPathEnabled?: boolean;
   hotPathCacheMaxAgeMs?: number;
   polymarketPresignEnabled?: boolean;
+  partialFillLockMode?: LivePartialFillLockMode;
+  maxUnresolvedExposureDollars?: number;
   orderTimeoutMs: number;
   kalshiOrderGroupEnabled: boolean;
   userStreams: UserStreamReadiness;
@@ -618,6 +639,8 @@ export interface DashboardSnapshot {
     liveFinalRecoveryTimeoutMs: number;
     liveFinalRecoveryPollMs: number;
     liveAutoResolveVerifiedIncidents: boolean;
+    livePartialFillLockMode: LivePartialFillLockMode;
+    liveMaxUnresolvedExposureDollars: number;
     liveReconcileBeforeTrade: boolean;
   };
   latency?: DashboardLatencySnapshot;

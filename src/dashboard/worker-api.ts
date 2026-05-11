@@ -160,6 +160,8 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       liveFinalRecoveryTimeoutMs: runtime.config.liveFinalRecoveryTimeoutMs,
       liveFinalRecoveryPollMs: runtime.config.liveFinalRecoveryPollMs,
       liveAutoResolveVerifiedIncidents: runtime.config.liveAutoResolveVerifiedIncidents,
+      livePartialFillLockMode: runtime.config.livePartialFillLockMode,
+      liveMaxUnresolvedExposureDollars: runtime.config.liveMaxUnresolvedExposureDollars,
       liveReconcileBeforeTrade: runtime.config.liveReconcileBeforeTrade,
     },
     latency: runtime.getLatencySnapshot?.(now, snapshotBuildMs),

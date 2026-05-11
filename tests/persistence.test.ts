@@ -72,6 +72,10 @@ class FakeDb implements Queryable {
           recovery_attempts: values?.[34] ?? null,
           recovery_evidence: values?.[35] ?? null,
           finalization_ms: values?.[36] ?? null,
+          risk_quarantined_at: values?.[37] ?? null,
+          risk_quarantine_reason: values?.[38] ?? null,
+          risk_quarantine_exposure_dollars: values?.[39] ?? null,
+          risk_quarantine_evidence: values?.[40] ?? null,
         } as T],
       };
     }
@@ -215,6 +219,10 @@ test("signal persistence inserts threshold-crossing candidate before execution u
     recoveryAttempts: 1,
     recoveryEvidence: { source: "test" },
     finalizationMs: 3400,
+    riskQuarantinedAt: "2026-04-29T20:00:02.000Z",
+    riskQuarantineReason: "test quarantine",
+    riskQuarantineExposureDollars: 4.2,
+    riskQuarantineEvidence: { cap: 10 },
   });
   assert.match(db.calls[2].sql, /UPDATE cross_venue_arb_signals/);
   assert.equal(db.calls[2].values?.[0], 42);
@@ -224,6 +232,9 @@ test("signal persistence inserts threshold-crossing candidate before execution u
   assert.equal(db.calls[2].values?.[33], "auto_resolved_paired_fill");
   assert.equal(db.calls[2].values?.[34], 1);
   assert.equal(db.calls[2].values?.[36], 3400);
+  assert.equal(db.calls[2].values?.[37], "2026-04-29T20:00:02.000Z");
+  assert.equal(db.calls[2].values?.[38], "test quarantine");
+  assert.equal(db.calls[2].values?.[39], 4.2);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -284,6 +295,15 @@ test("recovery metadata migration adds verified recovery audit columns", () => {
   assert.match(sql, /ADD COLUMN IF NOT EXISTS finalization_ms INTEGER/);
 });
 
+test("risk quarantine migration adds partial-fill quarantine audit columns", () => {
+  const sql = readFileSync("src/db/migrations/013_add_live_risk_quarantine.sql", "utf8");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS risk_quarantined_at TIMESTAMPTZ/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS risk_quarantine_reason TEXT/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS risk_quarantine_exposure_dollars NUMERIC/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS risk_quarantine_evidence JSONB/);
+  assert.match(sql, /idx_cross_venue_arb_signals_risk_quarantine_active/);
+});
+
 test("signal persistence blocks live candidates with same-window exposure", async () => {
   const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
   const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
@@ -341,6 +361,25 @@ test("live reconciliation blocks unresolved partial fills but ignores operator-r
     },
   };
   assert.equal(await new SignalStore(resolvedDb).liveReconciliationBlockReason(candidate, 1_799_999_999_000), null);
+});
+
+test("live reconciliation ignores quarantined partials under cap but blocks over cap", async () => {
+  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
+  const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+
+  const db: Queryable = {
+    async query(sql) {
+      if (/SUM\(risk_quarantine_exposure_dollars\)/.test(sql)) return { rows: [{ total: 4.2, count: 1 }] };
+      return { rows: [] };
+    },
+  };
+  const store = new SignalStore(db);
+  assert.equal(await store.liveReconciliationBlockReason(candidate, 1_799_999_999_000, 10), null);
+  assert.match(await store.liveReconciliationBlockReason(candidate, 1_799_999_999_000, 3) ?? "", /quarantined exposure 4.20 exceeds cap 3.00/);
+  assert.equal(await store.liveExposureBlockReason(candidate, 1_799_999_999_000, 1, 10), null);
+  assert.match(await store.liveExposureBlockReason(candidate, 1_799_999_999_000, 1, 3) ?? "", /quarantined exposure 4.20 exceeds cap 3.00/);
 });
 
 test("live reconciliation keeps unknown venue statuses blocking until resolved", async () => {

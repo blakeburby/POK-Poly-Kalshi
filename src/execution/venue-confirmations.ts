@@ -15,7 +15,8 @@ export interface VenueOrderEventSource {
 }
 
 export interface LiveSignalReconciliationStore {
-  liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null>;
+  liveReconciliationBlockReason(candidate: ArbCandidate, now: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
+  liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
 }
 
 export interface VenueConfirmationResult {
@@ -197,6 +198,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       eventSource: VenueOrderEventSource;
       streamReadiness: (now: number) => UserStreamReadiness;
       reconciliationStore?: LiveSignalReconciliationStore;
+      maxUnresolvedExposureDollars?: number;
       liveLocks?: LiveExecutionLockWriter;
       now?: () => number;
     },
@@ -221,8 +223,18 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       this.lastReconciliation = defaultReconciliationReadiness(false, now, null);
       return null;
     }
-    const reason = await this.options.reconciliationStore?.liveReconciliationBlockReason(candidate, now) ?? null;
-    this.lastReconciliation = defaultReconciliationReadiness(true, now, reason);
+    const reason = await this.options.reconciliationStore?.liveReconciliationBlockReason(
+      candidate,
+      now,
+      this.options.maxUnresolvedExposureDollars,
+    ) ?? null;
+    const quarantine = await this.options.reconciliationStore?.liveRiskQuarantineStatus?.() ?? null;
+    this.lastReconciliation = {
+      ...defaultReconciliationReadiness(true, now, reason),
+      quarantinedExposureDollars: quarantine?.total ?? null,
+      quarantinedSignalCount: quarantine?.count ?? null,
+      quarantineCapDollars: this.options.maxUnresolvedExposureDollars ?? null,
+    };
     return reason;
   }
 

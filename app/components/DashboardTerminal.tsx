@@ -2720,10 +2720,11 @@ function SignalTape({
                     <div><span className="signal-label">Gate</span><strong>{formatCents(signal.threshold)}</strong></div>
                     <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
                     <div><span className="signal-label">Strategy</span><strong>{signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</strong></div>
-                    <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</strong></div>
-                    <div><span className="signal-label">Reconciliation</span><strong className={isResolvedPartialSignal(signal) ? "warn" : signal.partialFill ? "loss" : "profit"}>{isResolvedPartialSignal(signal) ? "RESOLVED" : signal.partialFill ? "PARTIAL" : "NORMAL"}</strong></div>
-                    <div><span className="signal-label">Recovery</span><strong>{signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</strong></div>
-                  </div>
+	                    <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</strong></div>
+	                    <div><span className="signal-label">Reconciliation</span><strong className={isResolvedPartialSignal(signal) ? "warn" : signal.partialFill ? "loss" : "profit"}>{isResolvedPartialSignal(signal) ? "RESOLVED" : signal.partialFill ? "PARTIAL" : "NORMAL"}</strong></div>
+	                    <div><span className="signal-label">Recovery</span><strong>{signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</strong></div>
+	                    <div><span className="signal-label">Risk Quarantine</span><strong className={signal.riskQuarantinedAt ? "warn" : "profit"}>{signal.riskQuarantinedAt ? formatDollars(signal.riskQuarantineExposureDollars ?? 0) : "NONE"}</strong></div>
+	                  </div>
 
                   {signal.risk ? (
                     <>
@@ -2743,12 +2744,17 @@ function SignalTape({
                     <SignalVenueRow signal={signal} venue="polymarket" />
                   </div>
 
-                  {signal.reconciliationResolvedAt ? (
-                    <div className="signal-reconciliation">
-                      {reconciliationResolutionLabel(signal)}: {signal.reconciliationResolutionReason ?? "verified and resolved this live incident"} at {formatTimestamp(signal.reconciliationResolvedAt)}
-                    </div>
-                  ) : null}
-                  {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
+	                  {signal.reconciliationResolvedAt ? (
+	                    <div className="signal-reconciliation">
+	                      {reconciliationResolutionLabel(signal)}: {signal.reconciliationResolutionReason ?? "verified and resolved this live incident"} at {formatTimestamp(signal.reconciliationResolvedAt)}
+	                    </div>
+	                  ) : null}
+	                  {signal.riskQuarantinedAt ? (
+	                    <div className="signal-reconciliation">
+	                      QUARANTINED RISK: {signal.riskQuarantineReason ?? "unresolved one-sided exposure accepted under cap"} at {formatTimestamp(signal.riskQuarantinedAt)}
+	                    </div>
+	                  ) : null}
+	                  {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
                 </div>
 
                 <aside className="signal-inline-payoff" aria-label={`Inline payoff graph for Signal #${signal.id}`}>
@@ -3082,10 +3088,12 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
     ? "HARD LOCKED"
     : riskState === "recovering"
       ? "RECOVERING"
-      : riskState === "blocked"
-        ? "BLOCKED"
-        : "TRADING";
-  const riskStatePill = riskState === "trading" ? "live" : riskState === "recovering" ? "warn" : "stale";
+      : riskState === "quarantined"
+        ? "TRADING WITH QUARANTINED RISK"
+        : riskState === "blocked"
+          ? "BLOCKED"
+          : "TRADING";
+  const riskStatePill = riskState === "trading" ? "live" : riskState === "recovering" || riskState === "quarantined" ? "warn" : "stale";
   return (
     <section className="panel live-safety-compact" aria-label="Live execution safety state">
       <div>
