@@ -65,7 +65,7 @@ test("coalesced scan scheduler runs one immediate follow-up with the newest upda
   assert.deepEqual(scheduler.status(), { running: false, pending: false });
 });
 
-test("scanner processes candidate executions through a bounded queue without duplicate pair overfire", async () => {
+test("scanner processes live candidate executions through a bounded queue without leg overfire", async () => {
   const books = new BookStore();
   const now = 1_800_000_000_000;
   books.setPolymarketContracts([
@@ -114,6 +114,7 @@ test("scanner processes candidate executions through a bounded queue without dup
     minProfitDollars: 0.05,
     staleBookMs: 10_000,
     executionConcurrency: 2,
+    maxLiveTradesPerWindow: 4,
     latency: {
       recordScanStarted: () => undefined,
       recordScanDuration: () => undefined,
@@ -129,10 +130,10 @@ test("scanner processes candidate executions through a bounded queue without dup
 
   const first = await scanner.scan(now);
   const second = await scanner.scan(now + 1);
-  assert.equal(first.length, 4);
-  assert.equal(second.length, 4);
-  assert.equal(duplicateSkips, 4);
-  await waitFor(() => executed === 4);
+  assert.equal(first.length, 2);
+  assert.equal(second.length, 0);
+  assert.equal(duplicateSkips, 0);
+  await waitFor(() => executed === 2);
   assert.equal(maxActive, 2);
   const insertedPairs = order.filter((entry) => entry.startsWith("insert:")).map((entry) => entry.replace("insert:", ""));
   const executedPairs = order.filter((entry) => entry.startsWith("execute:")).map((entry) => entry.replace("execute:", ""));
@@ -186,7 +187,6 @@ test("live hot-path scanner submits before live signal persistence", async () =>
       minProfitDollars: 0.05,
       staleBookMs: 10_000,
       executionConcurrency: 1,
-      liveTrading: true,
       deferLivePersistence: true,
       liveExposure: {
         async liveExposureBlockReason() {
@@ -246,7 +246,6 @@ test("live hot-path scanner suppresses automatic lock writes when disabled", asy
       minProfitDollars: 0.05,
       staleBookMs: 10_000,
       executionConcurrency: 1,
-      liveTrading: true,
       deferLivePersistence: true,
       liveAutoHardlocksEnabled: false,
       liveLocks: {
@@ -317,7 +316,6 @@ test("live scanner limits canary execution to one candidate per expiry window", 
       minProfitDollars: 0.05,
       staleBookMs: 10_000,
       executionConcurrency: 2,
-      liveTrading: true,
       maxLiveTradesPerWindow: 1,
       liveExposure: {
         async liveExposureBlockReason() {

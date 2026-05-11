@@ -52,7 +52,7 @@ systemctl enable pok-worker.service
 
 echo "Install complete."
 echo "Next steps:"
-echo "1. Edit $ENV_DIR/worker.env and fill secrets. Keep ARB_LIVE_TRADING=false."
+echo "1. Edit $ENV_DIR/worker.env and fill live venue secrets. Set ARB_ENABLED=false if you want monitoring without new entries."
 echo "2. Run: cd $APP_DIR && sudo -u pok bash scripts/vps-preflight.sh"
 echo "3. Start: systemctl start pok-worker"
 echo "4. Verify: DASHBOARD_API_TOKEN=<token> WORKER_API_BASE=http://127.0.0.1:8080 bash $APP_DIR/scripts/verify-live-readiness.sh"

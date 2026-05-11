@@ -18,7 +18,6 @@ export interface ScannerOptions {
   minProfitDollars: number;
   staleBookMs: number;
   executionConcurrency?: number;
-  liveTrading?: boolean;
   maxLiveTradesPerWindow?: number;
   maxUnresolvedExposureDollars?: number;
   liveAutoHardlocksEnabled?: boolean;
@@ -95,7 +94,7 @@ export class CrossVenueArbScanner {
     try {
       const polymarket = this.books.getPolymarketContracts(this.options.staleBookMs, now);
       const kalshi = this.books.getKalshiContracts(this.options.staleBookMs, now);
-      if (this.options.liveTrading && this.options.liveAutoHardlocksEnabled !== false) {
+      if (this.options.liveAutoHardlocksEnabled !== false) {
         const activeLock = await this.options.liveLocks?.getActiveLock();
         if (activeLock) {
           this.lastCandidateCount = 0;
@@ -165,7 +164,7 @@ export class CrossVenueArbScanner {
       return;
     }
     this.activePairs.add(candidate.pairKey);
-    if (this.options.liveTrading) this.reserveLiveCandidate(candidate);
+    this.reserveLiveCandidate(candidate);
     this.options.latency?.recordBookUpdateToDecision?.(Math.max(0, Date.now() - now));
     this.executionQueue.push({ candidate, now });
     this.recordQueueState();
@@ -182,7 +181,7 @@ export class CrossVenueArbScanner {
       void this.handleCandidate(queued.candidate, queued.now).finally(() => {
         this.activeExecutions -= 1;
         this.activePairs.delete(queued.candidate.pairKey);
-        if (this.options.liveTrading) this.releaseLiveCandidate(queued.candidate);
+        this.releaseLiveCandidate(queued.candidate);
         this.recordQueueState();
         this.drainExecutionQueue();
       });
@@ -194,7 +193,7 @@ export class CrossVenueArbScanner {
   }
 
   private async handleCandidate(candidate: ArbCandidate, now: number): Promise<void> {
-    if (this.options.liveTrading && this.options.deferLivePersistence) {
+    if (this.options.deferLivePersistence) {
       await this.handleDeferredLiveCandidate(candidate, now);
       return;
     }
@@ -202,7 +201,6 @@ export class CrossVenueArbScanner {
     const insertStartedAt = Date.now();
     const signalId = await this.signals.insertSignal({
       candidate,
-      executionMode: this.options.liveTrading ? "live" : "paper",
       action: "skipped",
       failureReason: "pending_execution",
     });
@@ -269,7 +267,6 @@ export class CrossVenueArbScanner {
       const insertStartedAt = Date.now();
       const signalId = await this.signals.insertSignal({
         candidate,
-        executionMode: "live",
         action: result.action,
         failureReason: result.failureReason,
       });
@@ -310,7 +307,6 @@ export class CrossVenueArbScanner {
       try {
         const signalId = await this.signals.insertSignal({
           candidate,
-          executionMode: "live",
           action: "failed",
           failureReason,
         });
@@ -337,7 +333,6 @@ export class CrossVenueArbScanner {
   }
 
   private async liveCandidateBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
-    if (!this.options.liveTrading) return null;
     const maxTrades = Math.max(0, Math.floor(this.options.maxLiveTradesPerWindow ?? 1));
     const reservedForExpiry = this.activeLiveExpiries.get(candidate.expiryMs) ?? 0;
     if (reservedForExpiry >= maxTrades) {

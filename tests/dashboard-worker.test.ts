@@ -13,7 +13,6 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     port: 8080,
     databaseUrl: "",
     arbEnabled: true,
-    liveTrading: false,
     minProfitDollars: 0.05,
     reentryIntervalMs: 15_000,
     staleBookMs: 10_000,
@@ -44,7 +43,6 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketGeoblockUrl: "https://polymarket.com/api/geoblock",
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
-    liveMaxSlippageCents: 1,
     liveTakerPriceCushionCents: 2,
     liveMinExpiryMs: 30_000,
     liveMaxTradesPerWindow: 1,
@@ -80,11 +78,6 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveReconcileBeforeTrade: false,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
-    dryRunSlippageEnabled: true,
-    dryRunKalshiSlippageCents: 1,
-    dryRunPolymarketSlippageCents: 1,
-    dryRunMaxSlippageCents: 3,
-    dryRunSlippageJitterCents: 1,
     dashboardApiToken: "secret-token",
     ...input,
   };
@@ -95,7 +88,6 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
     id: 7,
     createdAt: "2026-04-29T20:00:00.000Z",
     updatedAt: "2026-04-29T20:00:01.000Z",
-    executionMode: "paper",
     pairKey: "pair",
     expiryMs: 1_800_000_000_000,
     kalshiContractId: "kalshi",
@@ -132,9 +124,8 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
     config: config(),
     books,
     signals: {
-      listRecentSignals: async (_limit, executionMode) => [signal({ id: executionMode === "live" ? 8 : 7, executionMode: executionMode ?? "paper" })],
-      listFilledSignalsSince: async (_since, _limit, executionMode) => [signal({
-        executionMode: executionMode ?? "paper",
+      listRecentSignals: async () => [signal()],
+      listFilledSignalsSince: async () => [signal({
         updatedAt: new Date(now - 1_000).toISOString(),
         kalshiFillPrice: 0.51,
         polymarketFillPrice: 0.41,
@@ -156,11 +147,10 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
     }),
     getExecutionReadiness: () => ({
       mode: "live",
-      liveTrading: false,
+      liveTrading: true,
       protectedOnly: true,
       orderSize: 1,
       orderType: "FOK",
-      maxSlippageCents: 1,
       takerPriceCushionCents: 2,
       minExpiryMs: 30_000,
       maxTradesPerWindow: 1,
@@ -208,12 +198,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.syntheticStructures?.[1].risk?.classification, "probabilistic_bet");
   assert.equal(snapshot.diagnostics.polymarket.readyContracts, 1);
   assert.equal(snapshot.recentSignals[0].action, "filled");
-  assert.equal(snapshot.recentSignals[0].executionMode, "paper");
-  assert.equal(snapshot.paper.recentSignals[0].executionMode, "paper");
-  assert.equal(snapshot.live.recentSignals[0].executionMode, "live");
   assert.equal(snapshot.analytics?.hourly.filledTrades, 1);
-  assert.equal(snapshot.paper.analytics?.hourly.filledTrades, 1);
-  assert.equal(snapshot.live.analytics?.hourly.filledTrades, 1);
   assert.equal(snapshot.analytics?.hourly.netPnl, 0.08);
   assert.equal(snapshot.analytics?.daily.window, "daily");
   assert.equal(snapshot.analytics?.weekly.window, "weekly");
@@ -253,16 +238,16 @@ test("dashboard snapshot cache avoids querying heavy DB-backed sections on every
 
   await createDashboardSnapshot(runtime, now, cache);
   await createDashboardSnapshot(runtime, now + 250, cache);
-  assert.equal(recentCalls, 2);
-  assert.equal(analyticsCalls, 2);
+  assert.equal(recentCalls, 1);
+  assert.equal(analyticsCalls, 1);
 
   await createDashboardSnapshot(runtime, now + 1_001, cache);
-  assert.equal(recentCalls, 4);
-  assert.equal(analyticsCalls, 2);
+  assert.equal(recentCalls, 2);
+  assert.equal(analyticsCalls, 1);
 
   await createDashboardSnapshot(runtime, now + 5_001, cache);
-  assert.equal(recentCalls, 6);
-  assert.equal(analyticsCalls, 4);
+  assert.equal(recentCalls, 3);
+  assert.equal(analyticsCalls, 2);
 });
 
 test("dashboard snapshot uses hot analytics provider without polling filled signals", async () => {
@@ -299,7 +284,7 @@ test("dashboard snapshot uses hot analytics provider without polling filled sign
   await createDashboardSnapshot(runtime, now);
   await createDashboardSnapshot(runtime, now + 250);
   assert.equal(analyticsCalls, 0);
-  assert.equal(hotAnalyticsCalls, 4);
+  assert.equal(hotAnalyticsCalls, 2);
 });
 
 test("dashboard stream events are valid SSE snapshot frames", () => {

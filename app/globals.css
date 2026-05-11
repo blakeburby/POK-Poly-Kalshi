@@ -3836,19 +3836,12 @@ tbody tr:hover {
   box-shadow: var(--shadow-lift), 0 0 0 3px rgba(255, 95, 101, 0.12);
 }
 
-.selector-paper-card {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 28%),
-    radial-gradient(circle at 14% 0%, rgba(70, 214, 125, 0.12), transparent 26rem),
-    var(--surface);
-}
-
 .selector-card-kicker,
 .selector-metric-row span,
 .confirmation-grid span,
 .ops-metric-grid span,
 .audit-summary-grid span,
-.paper-summary-card span {
+.performance-summary-card span {
   color: #91a0b5;
   font-family: var(--font-mono);
   font-size: 10px;
@@ -3912,21 +3905,10 @@ tbody tr:hover {
   box-shadow: 0 0 22px rgba(255, 95, 101, 0.14);
 }
 
-.dashboard-mode-paper {
-  border-color: rgba(70, 214, 125, 0.5);
-  color: var(--green);
-  box-shadow: 0 0 22px rgba(70, 214, 125, 0.1);
-}
-
 .dashboard-mode-combined {
   border-color: rgba(76, 201, 240, 0.5);
   color: var(--cyan);
   box-shadow: 0 0 22px rgba(76, 201, 240, 0.12);
-}
-
-.dashboard-mode-live.worker-paper {
-  border-color: rgba(255, 189, 82, 0.52);
-  color: var(--amber);
 }
 
 .dashboard-focus-controls {
@@ -3997,7 +3979,7 @@ tbody tr:hover {
 .confirmation-grid,
 .ops-metric-grid,
 .audit-summary-grid,
-.paper-summary-grid {
+.performance-summary-grid {
   display: grid;
   gap: 10px;
 }
@@ -4009,7 +3991,7 @@ tbody tr:hover {
 .confirmation-grid > div,
 .ops-metric-grid > div,
 .audit-summary-grid > div,
-.paper-summary-card {
+.performance-summary-card {
   border: 1px solid var(--card-border);
   border-radius: var(--radius-card);
   background:
@@ -4024,7 +4006,7 @@ tbody tr:hover {
 .confirmation-grid strong,
 .ops-metric-grid strong,
 .audit-summary-grid strong,
-.paper-summary-card strong {
+.performance-summary-card strong {
   font-family: var(--font-mono);
   font-size: clamp(18px, 1.5vw, 28px);
   letter-spacing: -0.04em;
@@ -4138,7 +4120,7 @@ tbody tr:hover {
   white-space: nowrap;
 }
 
-.paper-dashboard-stack {
+.performance-dashboard-stack {
   display: grid;
   gap: 14px;
 }
@@ -4158,12 +4140,6 @@ tbody tr:hover {
     linear-gradient(120deg, rgba(76, 201, 240, 0.08), transparent 54%),
     rgba(3, 7, 12, 0.5);
   padding: var(--panel-pad);
-}
-
-.combined-paper-section .combined-dashboard-heading {
-  background:
-    linear-gradient(120deg, rgba(70, 214, 125, 0.08), transparent 54%),
-    rgba(3, 7, 12, 0.5);
 }
 
 .combined-dashboard-heading h2 {
@@ -4319,30 +4295,11 @@ tbody tr:hover {
   padding-top: 12px;
 }
 
-.paper-live-warning {
-  border: 1px solid rgba(255, 189, 82, 0.34);
-  border-radius: var(--radius-card);
-  background:
-    linear-gradient(90deg, rgba(255, 189, 82, 0.12), transparent 62%),
-    rgba(3, 7, 12, 0.52);
-  color: #f3c16c;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: space-between;
-  padding: 14px 16px;
-}
-
-.paper-live-warning strong,
-.paper-live-warning span {
-  font-family: var(--font-mono);
-}
-
-.paper-summary-grid {
+.performance-summary-grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
-.paper-summary-card small {
+.performance-summary-card small {
   color: #8fa0b2;
   font-family: var(--font-mono);
   line-height: 1.4;
@@ -4356,7 +4313,7 @@ tbody tr:hover {
   .live-safety-banner,
   .live-ops-grid,
   .live-audit-grid,
-  .paper-summary-grid {
+  .performance-summary-grid {
     grid-template-columns: 1fr;
   }
 

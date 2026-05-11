@@ -21,23 +21,10 @@ export interface ArbExecutor {
   execute(candidate: ArbCandidate): Promise<ExecutionResult>;
 }
 
-export interface DryRunSlippageOptions {
-  enabled: boolean;
-  kalshiSlippageCents: number;
-  polymarketSlippageCents: number;
-  maxSlippageCents: number;
-  jitterCents: number;
-}
-
 function legForVenue(candidate: ArbCandidate, venue: "kalshi" | "polymarket"): ArbLeg | null {
   if (candidate.lower.venue === venue) return candidate.lower;
   if (candidate.higher.venue === venue) return candidate.higher;
   return null;
-}
-
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
 }
 
 function roundPrice(value: number): number {
@@ -129,54 +116,6 @@ function protectedGuardFailure(candidate: ArbCandidate, minProfitDollars: number
   return blockReason ? failed(`protected-spread-only guard: ${blockReason}`) : null;
 }
 
-export class DryRunSlippageModel {
-  constructor(
-    private readonly options: DryRunSlippageOptions,
-    private readonly random: () => number = Math.random,
-  ) {}
-
-  static fromConfig(config: AppConfig, random?: () => number): DryRunSlippageModel {
-    return new DryRunSlippageModel({
-      enabled: config.dryRunSlippageEnabled,
-      kalshiSlippageCents: config.dryRunKalshiSlippageCents,
-      polymarketSlippageCents: config.dryRunPolymarketSlippageCents,
-      maxSlippageCents: config.dryRunMaxSlippageCents,
-      jitterCents: config.dryRunSlippageJitterCents,
-    }, random);
-  }
-
-  fillPrice(leg: ArbLeg | null): number | null {
-    if (!leg) return null;
-    if (!this.options.enabled) return roundPrice(leg.ask);
-
-    const baseCents = leg.venue === "kalshi" ? this.options.kalshiSlippageCents : this.options.polymarketSlippageCents;
-    const jitterCents = Math.max(0, this.options.jitterCents) * clampUnit(this.random());
-    const maxCents = Math.max(0, this.options.maxSlippageCents);
-    const slippageCents = Math.min(maxCents, Math.max(0, baseCents) + jitterCents);
-    return roundPrice(Math.min(1, leg.ask + slippageCents / 100));
-  }
-}
-
-export class DryRunExecutor implements ArbExecutor {
-  constructor(
-    private readonly slippage = DryRunSlippageModel.fromConfig(loadConfig()),
-    private readonly minProfitDollars = loadConfig().minProfitDollars,
-  ) {}
-
-  async execute(candidate: ArbCandidate): Promise<ExecutionResult> {
-    const guardFailure = protectedGuardFailure(candidate, this.minProfitDollars);
-    if (guardFailure) return guardFailure;
-    return {
-      action: "filled",
-      failureReason: null,
-      kalshiFillId: `dry-run-kalshi-${Date.now()}`,
-      polymarketFillId: `dry-run-polymarket-${Date.now()}`,
-      kalshiFillPrice: this.slippage.fillPrice(legForVenue(candidate, "kalshi")),
-      polymarketFillPrice: this.slippage.fillPrice(legForVenue(candidate, "polymarket")),
-    };
-  }
-}
-
 export interface LiveExecutionBookReader {
   snapshot(): { kalshi: BinaryContract[]; polymarket: BinaryContract[] };
 }
@@ -261,48 +200,6 @@ function emptyVenueReadiness(reason: string, now: number): VenueExecutionReadine
   };
 }
 
-export function dryRunExecutionReadiness(config: AppConfig, now = Date.now()): LiveExecutionReadiness {
-  return {
-    mode: "dry_run",
-    liveTrading: false,
-    protectedOnly: true,
-    orderSize: config.liveOrderSize,
-    orderType: config.polymarketOrderType,
-    maxSlippageCents: config.liveMaxSlippageCents,
-    takerPriceCushionCents: config.liveTakerPriceCushionCents,
-    minExpiryMs: config.liveMinExpiryMs,
-    maxTradesPerWindow: config.liveMaxTradesPerWindow,
-    collateralBufferDollars: config.liveCollateralBufferDollars,
-    quoteMaxAgeMs: config.liveQuoteMaxAgeMs,
-    quoteSyncMaxSkewMs: config.liveQuoteSyncMaxSkewMs,
-    minBookDepthShares: config.liveMinBookDepthShares,
-    hedgeMaxLossDollars: config.liveHedgeMaxLossDollars,
-    hedgeFeeBufferDollars: config.liveHedgeFeeBufferDollars,
-    orderPlacementMode: config.liveOrderPlacementMode,
-    aggressiveLimitRestMs: config.liveAggressiveLimitRestMs,
-    parallelExecutionEnabled: config.liveParallelExecutionEnabled,
-    hotPathEnabled: config.liveHotPathEnabled,
-    hotPathCacheMaxAgeMs: config.liveHotPathCacheMaxAgeMs,
-    polymarketPresignEnabled: config.livePolymarketPresignEnabled,
-    partialFillLockMode: config.livePartialFillLockMode,
-    autoHardlocksEnabled: config.liveAutoHardlocksEnabled,
-    maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
-    orderTimeoutMs: config.liveOrderTimeoutMs,
-    kalshiOrderGroupEnabled: config.liveKalshiOrderGroupEnabled && Boolean(config.liveKalshiOrderGroupId),
-    userStreams: buildUserStreamReadiness(false, config.liveUserStreamConfirmTimeoutMs, undefined, undefined, now),
-    reconciliation: defaultReconciliationReadiness(false, null, null),
-    riskState: "trading",
-    riskStateReason: null,
-    partialFillLocked: false,
-    circuitBreakerLocked: false,
-    circuitBreakerReason: null,
-    circuitBreaker: null,
-    kalshi: emptyVenueReadiness("dry-run mode", now),
-    polymarket: emptyVenueReadiness("dry-run mode", now),
-    lastAttempt: null,
-  };
-}
-
 export class LiveExecutor implements ArbExecutor {
   private partialFillLocked = false;
   private lastAttempt: LiveExecutionLastAttempt | null = null;
@@ -369,11 +266,10 @@ export class LiveExecutor implements ArbExecutor {
     );
     return {
       mode: "live",
-      liveTrading: this.config.liveTrading,
+      liveTrading: true,
       protectedOnly: true,
       orderSize: this.config.liveOrderSize,
       orderType: this.config.polymarketOrderType,
-      maxSlippageCents: this.config.liveMaxSlippageCents,
       takerPriceCushionCents: this.config.liveTakerPriceCushionCents,
       minExpiryMs: this.config.liveMinExpiryMs,
       maxTradesPerWindow: this.config.liveMaxTradesPerWindow,

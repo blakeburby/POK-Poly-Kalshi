@@ -9,7 +9,6 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
     id: 1,
     createdAt: "2026-04-29T20:00:00.000Z",
     updatedAt: "2026-04-29T20:00:00.000Z",
-    executionMode: "paper",
     pairKey: "pair",
     expiryMs: Date.UTC(2026, 3, 29, 20, 15),
     kalshiContractId: "kalshi",

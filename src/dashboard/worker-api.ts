@@ -6,11 +6,11 @@ import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
-import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, ExecutionMode, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
+import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 
 interface SignalReader {
-  listRecentSignals(limit?: number, executionMode?: ExecutionMode): Promise<DashboardSignal[]>;
-  listFilledSignalsSince?(sinceMs: number, limit?: number, executionMode?: ExecutionMode): Promise<DashboardSignal[]>;
+  listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
+  listFilledSignalsSince?(sinceMs: number, limit?: number): Promise<DashboardSignal[]>;
 }
 
 export interface DashboardDiscoveryState {
@@ -22,7 +22,7 @@ export interface DashboardRuntime {
   config: AppConfig;
   books: BookStore;
   signals: SignalReader;
-  getAnalytics?: (now: number, executionMode?: ExecutionMode) => DashboardAnalytics | Promise<DashboardAnalytics>;
+  getAnalytics?: (now: number) => DashboardAnalytics | Promise<DashboardAnalytics>;
   getScannerStatus: () => ScannerStatus;
   getDiscoveryState: () => DashboardDiscoveryState;
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
@@ -32,14 +32,14 @@ export interface DashboardRuntime {
 }
 
 export interface DashboardSnapshotCache {
-  recentSignals?: Partial<Record<ExecutionMode, {
+  recentSignals?: {
     refreshedAt: number;
     value: DashboardSignal[];
-  }>>;
-  analytics?: Partial<Record<ExecutionMode, {
+  };
+  analytics?: {
     refreshedAt: number;
     value: DashboardAnalytics;
-  }>>;
+  };
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -61,26 +61,25 @@ export function dashboardRequestAuthorized(headers: IncomingMessage["headers"], 
   return scheme?.toLowerCase() === "bearer" && typeof value === "string" && safeEqual(value, token);
 }
 
-async function cachedRecentSignals(runtime: DashboardRuntime, now: number, executionMode: ExecutionMode, cache?: DashboardSnapshotCache): Promise<DashboardSignal[]> {
-  const cached = cache?.recentSignals?.[executionMode];
+async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardSignal[]> {
+  const cached = cache?.recentSignals;
   if (cached && now - cached.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
     return cached.value;
   }
-  const value = await runtime.signals.listRecentSignals(100, executionMode);
+  const value = await runtime.signals.listRecentSignals(100);
   if (cache) {
-    cache.recentSignals ??= {};
-    cache.recentSignals[executionMode] = { refreshedAt: now, value };
+    cache.recentSignals = { refreshedAt: now, value };
   }
   return value;
 }
 
-async function cachedAnalytics(runtime: DashboardRuntime, now: number, executionMode: ExecutionMode, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
-  if (runtime.getAnalytics) return runtime.getAnalytics(now, executionMode);
-  const cached = cache?.analytics?.[executionMode];
+async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
+  if (runtime.getAnalytics) return runtime.getAnalytics(now);
+  const cached = cache?.analytics;
   if (cached && now - cached.refreshedAt < runtime.config.dashboardAnalyticsRefreshMs) {
     return cached.value;
   }
-  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000, executionMode) ?? Promise.resolve([]));
+  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]));
   const value = buildDashboardAnalytics(analyticsSignals, now, {
     mode: "fallback_db",
     lastUpdatedAt: analyticsSignals
@@ -93,8 +92,7 @@ async function cachedAnalytics(runtime: DashboardRuntime, now: number, execution
     stale: false,
   });
   if (cache) {
-    cache.analytics ??= {};
-    cache.analytics[executionMode] = { refreshedAt: now, value };
+    cache.analytics = { refreshedAt: now, value };
   }
   return value;
 }
@@ -102,11 +100,9 @@ async function cachedAnalytics(runtime: DashboardRuntime, now: number, execution
 export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
   const snapshotStartedAt = Date.now();
   const books = runtime.books.snapshot();
-  const [paperSignals, liveSignals, paperAnalytics, liveAnalytics] = await Promise.all([
-    cachedRecentSignals(runtime, now, "paper", cache),
-    cachedRecentSignals(runtime, now, "live", cache),
-    cachedAnalytics(runtime, now, "paper", cache),
-    cachedAnalytics(runtime, now, "live", cache),
+  const [recentSignals, analytics] = await Promise.all([
+    cachedRecentSignals(runtime, now, cache),
+    cachedAnalytics(runtime, now, cache),
   ]);
   const execution = await runtime.getExecutionReadiness?.(now);
   const paired = enumerateCandidates(
@@ -131,7 +127,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     generatedAt: now,
     health: {
       ok: true,
-      liveTrading: runtime.config.liveTrading,
+      liveTrading: true,
       arbEnabled: runtime.config.arbEnabled,
       minProfitDollars: runtime.config.minProfitDollars,
       reentryIntervalMs: runtime.config.reentryIntervalMs,
@@ -175,16 +171,8 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     },
     liveCandidates,
     syntheticStructures,
-    live: {
-      recentSignals: liveSignals,
-      analytics: liveAnalytics,
-    },
-    paper: {
-      recentSignals: paperSignals,
-      analytics: paperAnalytics,
-    },
-    recentSignals: paperSignals,
-    analytics: paperAnalytics,
+    recentSignals,
+    analytics,
     execution,
     logs: runtime.getLogs(150),
   };

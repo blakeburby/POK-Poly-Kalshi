@@ -18,7 +18,6 @@ import type {
   AnalyticsWindow,
   ArbCandidate,
   BinaryContract,
-  DashboardDataSlice,
   DashboardAnalyticsWindow,
   DashboardLogEntry,
   DashboardSignal,
@@ -45,7 +44,6 @@ type TradeDetailSource = "opportunity" | "signal";
 type TradeDetailDirection = ArbCandidate["lower"]["direction"];
 type TradeDetailRegionKey = "below_lower" | "between_strikes" | "above_higher";
 type DashboardViewMode = "risk" | "raw" | "execution";
-export type DashboardKind = "live" | "paper";
 type LiveOperationalState = "clean" | "quarantined" | "autoHardlocksDisabled" | "blocked" | "degraded" | "standby";
 
 interface TradeDetailLeg {
@@ -204,14 +202,6 @@ function StatusPill({ label, state }: { label: string; state: "live" | "stale" |
   return <span className={`status-pill status-${state}`}>{label}</span>;
 }
 
-function DashboardModeBadge({ kind, liveTrading }: { kind: DashboardKind | null; liveTrading: boolean }) {
-  const label = kind == null
-    ? liveTrading ? "BOTH / LIVE ARMED" : "BOTH DASHBOARDS"
-    : kind === "live" ? liveTrading ? "LIVE ARMED" : "LIVE STANDBY" : "PAPER SIM";
-  const modeClass = kind ?? "combined";
-  return <span className={`dashboard-mode-badge dashboard-mode-${modeClass} ${liveTrading ? "worker-live" : "worker-paper"}`}>{label}</span>;
-}
-
 function formatReadiness(ready: boolean | undefined, reason: string | null | undefined): string {
   if (ready) return "READY";
   return reason ? reason : "NOT READY";
@@ -261,7 +251,7 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
   if (!liveArmed) {
     return {
       state: "standby",
-      headline: "PAPER/STANDBY",
+      headline: "LIVE STANDBY",
       summary: snapshot.health.liveTrading ? "Live flag is on but strategy execution is disabled." : "Live trading is not armed.",
       pillState: "off",
       canTrade: false,
@@ -392,28 +382,6 @@ function signalLatencyMs(signal: DashboardSignal): number | null {
 
 function filledSignals(signals: DashboardSignal[]): DashboardSignal[] {
   return signals.filter((signal) => signal.action === "filled");
-}
-
-function dataSliceForDashboard(snapshot: DashboardSnapshot, dashboardKind: DashboardKind): DashboardDataSlice {
-  if (dashboardKind === "live") {
-    return snapshot.live ?? {
-      recentSignals: snapshot.recentSignals.filter((signal) => signal.executionMode === "live"),
-      analytics: undefined,
-    };
-  }
-  return snapshot.paper ?? {
-    recentSignals: snapshot.recentSignals,
-    analytics: snapshot.analytics,
-  };
-}
-
-function snapshotForDashboardKind(snapshot: DashboardSnapshot, dashboardKind: DashboardKind): DashboardSnapshot {
-  const slice = dataSliceForDashboard(snapshot, dashboardKind);
-  return {
-    ...snapshot,
-    recentSignals: slice.recentSignals,
-    analytics: slice.analytics,
-  };
 }
 
 function averageSignalLatency(signals: DashboardSignal[]): number | null {
@@ -881,15 +849,8 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
 function findTradeDetailByKey(snapshot: DashboardSnapshot, key: string): TradeDetailModel | null {
   const candidate = snapshot.liveCandidates.find((item) => tradeKeyFor("opportunity", item) === key);
   if (candidate) return buildTradeDetailModel("opportunity", candidate);
-  const signalPools = [
-    snapshot.live?.recentSignals ?? [],
-    snapshot.paper?.recentSignals ?? [],
-    snapshot.recentSignals,
-  ];
-  for (const signals of signalPools) {
-    const signal = signals.find((item) => tradeKeyFor("signal", item) === key);
-    if (signal) return buildTradeDetailModel("signal", signal);
-  }
+  const signal = snapshot.recentSignals.find((item) => tradeKeyFor("signal", item) === key);
+  if (signal) return buildTradeDetailModel("signal", signal);
   return null;
 }
 
@@ -1429,47 +1390,14 @@ export function RiskMeter({ insights }: { insights: DashboardInsightModel }) {
   );
 }
 
-function DashboardFocusControls({
-  activeDashboard,
-  onSelectDashboard,
-}: {
-  activeDashboard: DashboardKind | null;
-  onSelectDashboard: (kind: DashboardKind | null) => void;
-}) {
-  const controls: Array<{ kind: DashboardKind | null; label: string }> = [
-    { kind: null, label: "Show Both" },
-    { kind: "live", label: "View Live Only" },
-    { kind: "paper", label: "View Paper Only" },
-  ];
-  return (
-    <div className="dashboard-focus-controls" aria-label="Dashboard focus controls">
-      {controls.map((control) => (
-        <button
-          aria-pressed={activeDashboard === control.kind}
-          className={`selector-return-button ${activeDashboard === control.kind ? "active" : ""}`}
-          key={control.label}
-          onClick={() => onSelectDashboard(control.kind)}
-          type="button"
-        >
-          {control.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function GlobalStateBar({
   dashboardName,
-  dashboardKind,
-  onDashboardRouteChange,
   snapshot,
   streamState,
   viewMode,
   onViewModeChange,
 }: {
   dashboardName: string;
-  dashboardKind: DashboardKind | null;
-  onDashboardRouteChange?: (kind: DashboardKind | null) => void;
   snapshot: DashboardSnapshot;
   streamState: StreamState;
   viewMode: DashboardViewMode;
@@ -1486,9 +1414,8 @@ function GlobalStateBar({
         <h1>{dashboardName}</h1>
         <span>Kalshi + Polymarket BTC 15m</span>
         <div className="dashboard-mode-row">
-          <DashboardModeBadge kind={dashboardKind} liveTrading={snapshot.health.liveTrading} />
-          {dashboardKind === "paper" && snapshot.health.liveTrading ? <StatusPill label="WORKER LIVE" state="warn" /> : null}
-          {onDashboardRouteChange ? <DashboardFocusControls activeDashboard={dashboardKind} onSelectDashboard={onDashboardRouteChange} /> : null}
+          <StatusPill label="LIVE-ONLY DASHBOARD" state="live" />
+          <StatusPill label="READ-ONLY OPERATOR VIEW" state="warn" />
         </div>
       </div>
 
@@ -1510,7 +1437,7 @@ function GlobalStateBar({
         <div className="status-rail">
           <StatusPill label={streamState === "live" ? "SSE LIVE" : "SSE DEGRADED"} state={streamState === "live" ? "live" : "warn"} />
           <StatusPill label={snapshot.health.arbEnabled ? "STRATEGY ON" : "STRATEGY OFF"} state={snapshot.health.arbEnabled ? "live" : "off"} />
-          <StatusPill label={snapshot.health.liveTrading ? "LIVE EXECUTION ENABLED" : "PAPER / DRY-RUN ENGINE"} state={snapshot.health.liveTrading ? "warn" : "live"} />
+          <StatusPill label="LIVE EXECUTION ENGINE" state={snapshot.health.liveTrading ? "warn" : "off"} />
           {execution?.partialFillLocked ? <StatusPill label="PARTIAL LOCK" state="stale" /> : null}
           {snapshot.health.liveTrading && execution ? <StatusPill label={execution.polymarket.ready && execution.kalshi.ready ? "VENUES READY" : "VENUE CHECK"} state={execution.polymarket.ready && execution.kalshi.ready ? "live" : "warn"} /> : null}
           <StatusPill label={insights.staleBooks > 0 ? `${insights.staleBooks} STALE BOOKS` : "BOOKS FRESH"} state={insights.staleBooks > 0 ? "stale" : "live"} />
@@ -1578,7 +1505,7 @@ function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: Dashboar
         <div className="risk-question-grid">
           <div><span>Is there edge?</span><strong>{formatSignedCents(insights.estimatedEdge)}</strong><small>Best guaranteed edge in live blotter</small></div>
           <div><span>Where is risk?</span><strong>{focusTrade?.lossWindowWidth && focusTrade.lossWindowWidth > 0 ? "Dead-zone" : "Execution"}</strong><small>{focusTrade ? `${focusTrade.structureLabel}` : "No selected trade"}</small></div>
-          <div><span>What should I do?</span><strong>{focusTrade?.classification === "True Arb" ? "Monitor / dry-run fill" : "Observe only"}</strong><small>UI is read-only; no controls exposed</small></div>
+          <div><span>What should I do?</span><strong>{focusTrade?.classification === "True Arb" ? "Monitor live fill" : "Observe only"}</strong><small>UI is read-only; no controls exposed</small></div>
         </div>
 
         <div className="risk-factor-grid">
@@ -1624,11 +1551,10 @@ function RiskIntelligencePanel({ snapshot, selectedTrade }: { snapshot: Dashboar
   );
 }
 
-function AnalyticsPanel({ snapshot, dashboardKind = "paper" }: { snapshot: DashboardSnapshot; dashboardKind?: DashboardKind }) {
+function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
   const [selected, setSelected] = useState<AnalyticsWindow>("hourly");
   const analytics = snapshot.analytics;
   const current = analytics?.[selected];
-  const liveView = dashboardKind === "live";
 
   if (!analytics || !current) {
     return (
@@ -1636,12 +1562,12 @@ function AnalyticsPanel({ snapshot, dashboardKind = "paper" }: { snapshot: Dashb
         <div className="panel-header">
           <div>
             <p className="panel-kicker">performance analytics</p>
-            <h2>{liveView ? "Executed Fill-Audit PnL" : "Estimated Guaranteed PnL"}</h2>
+            <h2>Executed Fill-Audit PnL</h2>
           </div>
           <StatusPill label="WAITING" state="warn" />
         </div>
         <div className="analytics-empty">
-          The worker has not published {liveView ? "live" : "paper"} analytics yet.
+          The worker has not published live analytics yet.
         </div>
       </section>
     );
@@ -1657,9 +1583,9 @@ function AnalyticsPanel({ snapshot, dashboardKind = "paper" }: { snapshot: Dashb
       <div className="panel-header analytics-header">
         <div>
           <p className="panel-kicker">performance analytics</p>
-          <h2>{liveView ? "Executed Fill-Audit PnL" : "Estimated Guaranteed PnL"}</h2>
+          <h2>Executed Fill-Audit PnL</h2>
           <p className="analytics-subtitle">
-            {liveView ? "Live exchange-fill audit records only; conservative $1.00 payoff floor, not settlement-final PnL." : "Dry-run simulated fills; conservative $1.00 payoff floor, not settlement-final PnL."}
+            Live exchange-fill audit records only; conservative $1.00 payoff floor, not settlement-final PnL.
           </p>
         </div>
         <div className="analytics-header-actions">
@@ -1744,7 +1670,7 @@ function AnalyticsPanel({ snapshot, dashboardKind = "paper" }: { snapshot: Dashb
             <DistributionBars
               ariaLabel="Slippage histogram"
               buckets={current.slippageDistribution ?? []}
-              subtitle="Dry-run/live fill slippage vs observed asks"
+              subtitle="Live fill slippage vs observed asks"
               title="Slippage Histogram"
             />
             <LatencySparkline analytics={current} />
@@ -2730,7 +2656,7 @@ export function TradeDetailDrawer({
           <TradeDetailSectionHeader
             eyebrow="execution legs"
             title="Venue Legs"
-            note="Venue, side, strike, observed ask, dry-run/live fill, and contract identifiers."
+            note="Venue, side, strike, observed ask, live fill, and contract identifiers."
           />
           <div className="trade-detail-leg-stack">
             <TradeDetailLegCard leg={trade.legA} />
@@ -2832,14 +2758,12 @@ function SignalTape({
   now,
   selectedTradeKey,
   onSelectTrade,
-  dashboardKind = "paper",
   sectionId = "signals",
 }: {
   signals: DashboardSignal[];
   now: number;
   selectedTradeKey: string | null;
   onSelectTrade: (trade: TradeDetailModel) => void;
-  dashboardKind?: DashboardKind;
   sectionId?: string;
 }) {
   return (
@@ -2847,7 +2771,7 @@ function SignalTape({
       <div className="panel-header">
         <div>
           <p className="panel-kicker">audit log</p>
-          <h2>{dashboardKind === "live" ? "Live Signal Tape" : "Paper Signal Tape"}</h2>
+          <h2>Live Signal Tape</h2>
         </div>
         <StatusPill label={`${signals.length} SIGNALS`} state={signals.length > 0 ? "live" : "empty"} />
       </div>
@@ -2972,79 +2896,6 @@ function EventTape({ logs }: { logs: DashboardLogEntry[] }) {
   );
 }
 
-export function DashboardSelector({
-  dashboardName,
-  snapshot,
-  streamState,
-  onSelect,
-}: {
-  dashboardName: string;
-  snapshot: DashboardSnapshot | null;
-  streamState: StreamState;
-  onSelect: (kind: DashboardKind) => void;
-}) {
-  const liveArmed = snapshot?.health.liveTrading ?? false;
-  const venuesReady = Boolean(snapshot?.execution?.kalshi.ready && snapshot?.execution?.polymarket.ready);
-  const insights = snapshot ? buildDashboardInsights(snapshot) : null;
-  const liveFilled = snapshot ? filledSignals(dataSliceForDashboard(snapshot, "live").recentSignals).length : 0;
-  const paperFilled = snapshot ? filledSignals(dataSliceForDashboard(snapshot, "paper").recentSignals).length : 0;
-
-  return (
-    <main className="terminal-shell institutional-shell polished-shell dashboard-selector-shell">
-      <section className="panel selector-hero">
-        <div>
-          <p className="panel-kicker">operator route</p>
-          <h1>{dashboardName}</h1>
-          <p>Password accepted. Pick the command surface before any live telemetry is interpreted as an instruction.</p>
-        </div>
-        <div className="status-rail">
-          <StatusPill label={streamState === "live" ? "SSE LIVE" : streamState === "degraded" ? "SSE DEGRADED" : "SSE CONNECTING"} state={streamState === "live" ? "live" : "warn"} />
-          <StatusPill label={liveArmed ? "WORKER LIVE" : "WORKER PAPER"} state={liveArmed ? "warn" : "live"} />
-          <StatusPill label={venuesReady ? "VENUES READY" : "VENUE CHECK"} state={venuesReady ? "live" : "warn"} />
-        </div>
-      </section>
-
-      <section className="dashboard-selector-grid" aria-label="Dashboard selector">
-        <button className="dashboard-selector-card selector-live-card" onClick={() => onSelect("live")} type="button">
-          <DashboardModeBadge kind="live" liveTrading={liveArmed} />
-          <span className="selector-card-kicker">real execution audit</span>
-          <strong>Live Trading Dashboard</strong>
-          <p>Real trades only: exchange-fill-backed audit data, live PnL estimates, venue readiness, stream confirmations, and circuit-breaker state.</p>
-          <div className="selector-metric-row">
-            <span>Venues</span>
-            <strong>{venuesReady ? "READY" : "CHECK"}</strong>
-          </div>
-          <div className="selector-metric-row">
-            <span>Live Fills</span>
-            <strong>{liveFilled}</strong>
-          </div>
-          {liveArmed ? (
-            <small className="selector-warning">Worker is live in the background. This screen is read-only and does not arm/disarm trading.</small>
-          ) : (
-            <small>Live execution is currently off; this view still shows historical real live attempts only.</small>
-          )}
-        </button>
-
-        <button className="dashboard-selector-card selector-paper-card" onClick={() => onSelect("paper")} type="button">
-          <DashboardModeBadge kind="paper" liveTrading={liveArmed} />
-          <span className="selector-card-kicker">simulation and analytics</span>
-          <strong>Current Paper Trading Dashboard</strong>
-          <p>Current simulated/dry-run strategy history: simulated fills, estimated guaranteed PnL, win rate, latency, opportunities, and analytics.</p>
-          <div className="selector-metric-row">
-            <span>Filled Tape</span>
-            <strong>{paperFilled}</strong>
-          </div>
-          <div className="selector-metric-row">
-            <span>Best Edge</span>
-            <strong>{formatSignedCents(insights?.estimatedEdge ?? null)}</strong>
-          </div>
-          {liveArmed ? <small className="selector-warning">Worker is live in the background. Paper view is analytics-only and cannot disarm it.</small> : <small>Safe for reviewing simulated strategy quality and latency.</small>}
-        </button>
-      </section>
-    </main>
-  );
-}
-
 function LiveSafetyBanner({ snapshot }: { snapshot: DashboardSnapshot }) {
   const execution = snapshot.execution;
   const kalshiReady = execution?.kalshi.ready ?? false;
@@ -3058,7 +2909,7 @@ function LiveSafetyBanner({ snapshot }: { snapshot: DashboardSnapshot }) {
     ? circuitLocked
       ? "LIVE EXECUTION IS ARMED BUT CIRCUIT-LOCKED. Do not re-enable until the unsafe attempt is reconciled and the lock is manually cleared."
       : "LIVE EXECUTION IS ARMED. The dashboard is read-only, but the VPS worker can place FOK canary orders from its environment settings."
-    : "Live command surface selected, but backend live trading is OFF. This is safe for readiness review only.";
+    : "Live command surface selected, but backend execution is not armed. This is safe for readiness review only.";
 
   return (
     <section className={`panel live-safety-banner ${snapshot.health.liveTrading ? "armed" : "standby"}`} aria-label="Live trading warning">
@@ -3094,7 +2945,7 @@ function ExecutionControlsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <h2>Execution Controls / Status</h2>
           <p className="panel-subtitle">Read-only mirror of the worker config. No browser button can arm or disarm trading.</p>
         </div>
-        <StatusPill label={snapshot.health.liveTrading ? "LIVE SOURCE" : "PAPER SOURCE"} state={snapshot.health.liveTrading ? "warn" : "live"} />
+        <StatusPill label={snapshot.health.liveTrading ? "LIVE SOURCE" : "LIVE SOURCE OFF"} state={snapshot.health.liveTrading ? "warn" : "off"} />
       </div>
       <div className="ops-metric-grid">
         <div><span>Live Trading</span><strong className={snapshot.health.liveTrading ? "loss" : "profit"}>{snapshot.health.liveTrading ? "TRUE" : "FALSE"}</strong></div>
@@ -3102,7 +2953,7 @@ function ExecutionControlsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Order Type</span><strong>{execution?.orderType ?? "--"}</strong></div>
         <div><span>Placement</span><strong>{execution?.orderPlacementMode ? execution.orderPlacementMode.replace(/_/g, " ").toUpperCase() : "--"}</strong></div>
         <div><span>Limit Rest</span><strong>{execution?.aggressiveLimitRestMs == null ? "--" : `${execution.aggressiveLimitRestMs}ms`}</strong></div>
-        <div><span>Taker Cushion</span><strong>{execution ? formatCents(((execution.takerPriceCushionCents ?? execution.maxSlippageCents) ?? 0) / 100) : "--"}</strong></div>
+        <div><span>Taker Cushion</span><strong>{execution ? formatCents((execution.takerPriceCushionCents ?? 0) / 100) : "--"}</strong></div>
         <div><span>Protected Only</span><strong>{execution?.protectedOnly ? "YES" : "NO"}</strong></div>
         <div><span>Min Expiry</span><strong>{execution ? formatCompactTime(execution.minExpiryMs) : "--"}</strong></div>
         <div><span>Max/Window</span><strong>{execution?.maxTradesPerWindow ?? snapshot.health.liveMaxTradesPerWindow}</strong></div>
@@ -3355,54 +3206,46 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
   );
 }
 
-function PerformanceDashboardSections({ snapshot, dashboardKind }: { snapshot: DashboardSnapshot; dashboardKind: DashboardKind }) {
-  const slice = dataSliceForDashboard(snapshot, dashboardKind);
-  const current = slice.analytics?.hourly;
-  const filled = filledSignals(slice.recentSignals);
+function PerformanceDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const current = snapshot.analytics?.hourly;
+  const filled = filledSignals(snapshot.recentSignals);
   const avgLatency = averageSignalLatency(filled);
   const estimatedGuaranteed = filled.reduce((total, signal) => total + signal.guaranteedProfit, 0);
-  const failedAttempts = slice.recentSignals.filter((signal) => signal.action === "failed").length;
-  const liveView = dashboardKind === "live";
+  const failedAttempts = snapshot.recentSignals.filter((signal) => signal.action === "failed").length;
   return (
-    <section className={`${liveView ? "live" : "paper"}-dashboard-stack paper-dashboard-stack`} aria-label={liveView ? "Live dashboard analytics" : "Paper dashboard analytics"}>
-      {liveView ? <LiveOperationalPanel snapshot={snapshot} /> : null}
-      {liveView ? <LiveSafetyBadgeRow snapshot={snapshot} /> : null}
-      {!liveView && snapshot.health.liveTrading ? (
-        <div className="paper-live-warning">
-          <strong>Paper view selected while worker is LIVE.</strong>
-          <span>This screen is analytics-only. It does not pause, disarm, or modify the VPS worker.</span>
-        </div>
-      ) : null}
-      <section className="paper-summary-grid">
-        <div className="paper-summary-card">
-          <span>{liveView ? "Real Live Fills" : "Simulated Fills"}</span>
+    <section className="live-dashboard-stack performance-dashboard-stack" aria-label="Live dashboard analytics">
+      <LiveOperationalPanel snapshot={snapshot} />
+      <LiveSafetyBadgeRow snapshot={snapshot} />
+      <section className="performance-summary-grid">
+        <div className="performance-summary-card">
+          <span>Real Live Fills</span>
           <strong>{filled.length}</strong>
-          <small>{failedAttempts} failed/skipped attempts in visible {liveView ? "live" : "paper"} tape</small>
+          <small>{failedAttempts} failed/skipped attempts in visible live tape</small>
         </div>
-        <div className="paper-summary-card">
-          <span>{liveView ? "Executed Fill-Audit PnL" : "Estimated Guaranteed PnL"}</span>
+        <div className="performance-summary-card">
+          <span>Executed Fill-Audit PnL</span>
           <strong className={estimatedGuaranteed >= 0 ? "profit" : "loss"}>{formatSignedCents(estimatedGuaranteed)}</strong>
-          <small>{liveView ? "Real live records only; not settlement-final PnL" : "From recent simulated guaranteed edges"}</small>
+          <small>Real live records only; not settlement-final PnL</small>
         </div>
-        <div className="paper-summary-card">
+        <div className="performance-summary-card">
           <span>Win Rate</span>
           <strong>{current ? formatPercent(current.winRate) : "--"}</strong>
-          <small>{current?.filledTrades ?? 0} historical {liveView ? "live" : "paper"} filled trades</small>
+          <small>{current?.filledTrades ?? 0} historical live filled trades</small>
         </div>
-        <div className="paper-summary-card">
-          <span>{liveView ? "Order / Stream Latency" : "Latency"}</span>
+        <div className="performance-summary-card">
+          <span>Order / Stream Latency</span>
           <strong>{formatCompactTime(current?.avgFillLatencyMs ?? avgLatency)}</strong>
           <small>Average fill/audit turnaround</small>
         </div>
-        <div className="paper-summary-card">
+        <div className="performance-summary-card">
           <span>Opportunities</span>
           <strong>{current?.opportunityCount ?? snapshot.liveCandidates.length}</strong>
           <small>{snapshot.liveCandidates.length} live opportunities now</small>
         </div>
-        <div className="paper-summary-card">
-          <span>{liveView ? "Historical Live Analytics" : "Historical Analytics"}</span>
+        <div className="performance-summary-card">
+          <span>Historical Live Analytics</span>
           <strong>{current ? formatSignedCents(current.netPnl) : "--"}</strong>
-          <small>Hourly net {liveView ? "executed fill-audit" : "estimated guaranteed"} PnL</small>
+          <small>Hourly net executed fill-audit PnL</small>
         </div>
       </section>
     </section>
@@ -3410,47 +3253,24 @@ function PerformanceDashboardSections({ snapshot, dashboardKind }: { snapshot: D
 }
 
 function LiveDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
-  return <PerformanceDashboardSections dashboardKind="live" snapshot={snapshot} />;
-}
-
-function PaperDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
-  return <PerformanceDashboardSections dashboardKind="paper" snapshot={snapshot} />;
-}
-
-function CombinedDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
   return (
-    <section className="combined-dashboard-stack" aria-label="Combined live and paper dashboards">
-      <article className="combined-dashboard-section combined-live-section">
-        <section className="panel combined-dashboard-heading">
-          <p className="panel-kicker">exchange-fill-backed audit</p>
-          <h2>Live Trading Dashboard</h2>
-          <p>Real trades only. This section is fed exclusively from the authoritative live execution slice.</p>
-        </section>
-        <LiveDashboardSections snapshot={snapshot} />
-      </article>
-
-      <article className="combined-dashboard-section combined-paper-section">
-        <section className="panel combined-dashboard-heading">
-          <p className="panel-kicker">simulated strategy history</p>
-          <h2>Current Paper Trading Dashboard</h2>
-          <p>Dry-run fills and simulated performance only. This section is fed exclusively from the paper slice.</p>
-        </section>
-        <PaperDashboardSections snapshot={snapshot} />
-      </article>
+    <section className="live-only-dashboard-stack" aria-label="Live trading dashboard">
+      <section className="panel combined-dashboard-heading live-only-dashboard-heading">
+        <p className="panel-kicker">exchange-fill-backed audit</p>
+        <h2>Live Trading Dashboard</h2>
+        <p>Real Kalshi and Polymarket trades only. This dashboard is fed from live execution records, venue fills, private-stream confirmations, and live risk state.</p>
+      </section>
+      <PerformanceDashboardSections snapshot={snapshot} />
     </section>
   );
 }
 
 export function DashboardTerminalView({
   dashboardName,
-  dashboardKind = null,
-  onDashboardRouteChange,
   snapshot,
   streamState,
 }: {
   dashboardName: string;
-  dashboardKind?: DashboardKind | null;
-  onDashboardRouteChange?: (kind: DashboardKind | null) => void;
   snapshot: DashboardSnapshot | null;
   streamState: StreamState;
 }) {
@@ -3482,19 +3302,10 @@ export function DashboardTerminalView({
     );
   }
 
-  const combinedView = dashboardKind == null;
-  const focusedDashboardKind: DashboardKind = dashboardKind ?? "live";
-  const liveSnapshot = snapshotForDashboardKind(snapshot, "live");
-  const paperSnapshot = snapshotForDashboardKind(snapshot, "paper");
-  const selectedSnapshot = combinedView ? liveSnapshot : snapshotForDashboardKind(snapshot, focusedDashboardKind);
-  const shellDashboardClass = combinedView ? "dashboard-combined" : `dashboard-${focusedDashboardKind}`;
-
   return (
-    <main className={`terminal-shell institutional-shell polished-shell ${shellDashboardClass} view-mode-${viewMode}`}>
+    <main className={`terminal-shell institutional-shell polished-shell dashboard-live view-mode-${viewMode}`}>
       <GlobalStateBar
-        dashboardKind={dashboardKind}
         dashboardName={dashboardName}
-        onDashboardRouteChange={onDashboardRouteChange}
         onViewModeChange={setViewMode}
         snapshot={snapshot}
         streamState={streamState}
@@ -3506,22 +3317,17 @@ export function DashboardTerminalView({
         <div className="metric"><span>Guaranteed Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
         <div className="metric"><span>Re-entry Cadence</span><strong>{Math.round(snapshot.health.reentryIntervalMs / 1000)}s</strong></div>
         <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? formatCompactTime(Math.max(0, snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt)) : "--"}</strong></div>
-        <div className="metric"><span>Selected Dashboard</span><strong>{combinedView ? "BOTH" : focusedDashboardKind === "live" ? "LIVE" : "PAPER"}</strong></div>
+        <div className="metric"><span>Dashboard</span><strong>LIVE ONLY</strong></div>
         <div className="metric"><span>Selected Mode</span><strong>{viewMode.toUpperCase()}</strong></div>
         <div className="metric"><span>Venue Readiness</span><strong>{snapshot.execution ? `${snapshot.execution.kalshi.ready ? "K" : "K!"}/${snapshot.execution.polymarket.ready ? "P" : "P!"}` : "--"}</strong></div>
         <div className="metric"><span>Partial Fill Lock</span><strong>{snapshot.execution?.partialFillLocked ? "LOCKED" : "CLEAR"}</strong></div>
       </section>
 
-      {combinedView ? <CombinedDashboardSections snapshot={snapshot} /> : focusedDashboardKind === "live" ? <LiveDashboardSections snapshot={snapshot} /> : <PaperDashboardSections snapshot={snapshot} />}
+      <LiveDashboardSections snapshot={snapshot} />
 
-      <section className={`institutional-command-grid ${combinedView ? "combined-command-grid" : ""}`}>
-        {combinedView ? (
-          <>
-            <AnalyticsPanel dashboardKind="live" snapshot={liveSnapshot} />
-            <AnalyticsPanel dashboardKind="paper" snapshot={paperSnapshot} />
-          </>
-        ) : <AnalyticsPanel dashboardKind={focusedDashboardKind} snapshot={selectedSnapshot} />}
-        <RiskIntelligencePanel selectedTrade={selectedTrade} snapshot={selectedSnapshot} />
+      <section className="institutional-command-grid">
+        <AnalyticsPanel snapshot={snapshot} />
+        <RiskIntelligencePanel selectedTrade={selectedTrade} snapshot={snapshot} />
       </section>
 
       <OpportunityBlotter onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} snapshot={snapshot} />
@@ -3543,37 +3349,21 @@ export function DashboardTerminalView({
 
       <PolymarketDiagnosticsPanel snapshot={snapshot} />
 
-      <section className={`activity-grid ${combinedView ? "combined-activity-grid" : ""}`} aria-label="Signal and runtime activity">
-        {combinedView ? (
-          <>
-            <SignalTape dashboardKind="live" onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={liveSnapshot.recentSignals} now={snapshot.generatedAt} />
-            <SignalTape dashboardKind="paper" onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={paperSnapshot.recentSignals} now={snapshot.generatedAt} sectionId="signals-paper" />
-          </>
-        ) : <SignalTape dashboardKind={focusedDashboardKind} onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={selectedSnapshot.recentSignals} now={snapshot.generatedAt} />}
+      <section className="activity-grid" aria-label="Signal and runtime activity">
+        <SignalTape onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={snapshot.recentSignals} now={snapshot.generatedAt} />
         <EventTape logs={snapshot.logs} />
       </section>
     </main>
   );
 }
 
-function writeDashboardRoute(kind: DashboardKind | null) {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  if (kind) url.searchParams.set("dashboard", kind);
-  else url.searchParams.delete("dashboard");
-  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
 export default function DashboardTerminal({
   dashboardName,
-  initialDashboard = null,
 }: {
   dashboardName: string;
-  initialDashboard?: DashboardKind | null;
 }) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [streamState, setStreamState] = useState<StreamState>("connecting");
-  const [selectedDashboard, setSelectedDashboard] = useState<DashboardKind | null>(initialDashboard);
 
   useEffect(() => {
     let cancelled = false;
@@ -3604,16 +3394,9 @@ export default function DashboardTerminal({
     };
   }, []);
 
-  const selectDashboard = (kind: DashboardKind | null) => {
-    setSelectedDashboard(kind);
-    writeDashboardRoute(kind);
-  };
-
   return (
     <DashboardTerminalView
-      dashboardKind={selectedDashboard}
       dashboardName={dashboardName}
-      onDashboardRouteChange={selectDashboard}
       snapshot={snapshot}
       streamState={streamState}
     />

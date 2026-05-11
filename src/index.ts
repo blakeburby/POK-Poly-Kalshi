@@ -12,7 +12,7 @@ import { SignalStore } from "./db/signals";
 import { VenueOrderEventHub, VenueOrderEventStore } from "./db/venue-order-events";
 import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
-import { DryRunExecutor, DryRunSlippageModel, LiveExecutor } from "./execution/executor";
+import { LiveExecutor } from "./execution/executor";
 import { installLowLatencyHttpTransport, preconnectLiveHttpEndpoints } from "./execution/http-transport";
 import { CachedLiveExecutionLockStore, LiveExposureCache } from "./execution/live-hot-path";
 import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator } from "./execution/venue-confirmations";
@@ -54,16 +54,11 @@ async function main(): Promise<void> {
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
   reentry.hydrate(await signals.loadRecentFilledAttempts());
-  const paperAnalytics = new AnalyticsStore();
   const liveAnalytics = new AnalyticsStore();
   async function reconcileAnalytics(): Promise<void> {
     const now = Date.now();
     const sinceMs = oldestAnalyticsSinceMs(now);
-    const [paperSignals, liveSignals] = await Promise.all([
-      signals.listFilledSignalsSince(sinceMs, 10_000, "paper"),
-      signals.listFilledSignalsSince(sinceMs, 10_000, "live"),
-    ]);
-    paperAnalytics.reconcileFilledSignals(paperSignals, now);
+    const liveSignals = await signals.listFilledSignalsSince(sinceMs, 10_000);
     liveAnalytics.reconcileFilledSignals(liveSignals, now);
   }
   await reconcileAnalytics();
@@ -89,13 +84,11 @@ async function main(): Promise<void> {
     now: Date.now,
   });
   const liveReadinessProbe = new LiveExecutor(config, books, undefined, undefined, Date.now, liveLocks, orderEvents, confirmationMonitor, liveExposure);
-  const executor = config.liveTrading ? liveReadinessProbe : new DryRunExecutor(DryRunSlippageModel.fromConfig(config), config.minProfitDollars);
-  const scanner = new CrossVenueArbScanner(books, signals, executor, reentry, {
+  const scanner = new CrossVenueArbScanner(books, signals, liveReadinessProbe, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,
     staleBookMs: config.staleBookMs,
     executionConcurrency: config.executionConcurrency,
-    liveTrading: config.liveTrading,
     maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
@@ -103,7 +96,7 @@ async function main(): Promise<void> {
     liveLocks,
     deferLivePersistence: config.liveHotPathEnabled,
     latency,
-    analytics: config.liveTrading ? liveAnalytics : paperAnalytics,
+    analytics: liveAnalytics,
   });
   const scanScheduler = new CoalescedScanScheduler(scanner, latency);
 
@@ -239,21 +232,13 @@ async function main(): Promise<void> {
         config,
         books,
         signals,
-        getAnalytics: (now, executionMode = "paper") => (executionMode === "live" ? liveAnalytics : paperAnalytics).snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
+        getAnalytics: (now) => liveAnalytics.snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
         getScannerStatus: () => scanner.status(),
         getDiscoveryState: () => ({ lastDiscoveryAt, lastDiscoveryError }),
         getPolymarketDiagnostics: livePolymarketDiagnostics,
         getLatencySnapshot: (now, snapshotBuildMs) => latency.snapshot(books.snapshot(), now, config, snapshotBuildMs),
         getExecutionReadiness: async (now) => {
-          const readiness = await liveReadinessProbe.readiness(now);
-          if (config.liveTrading) return readiness;
-          return {
-            ...readiness,
-            mode: "dry_run" as const,
-            liveTrading: false,
-            partialFillLocked: false,
-            lastAttempt: null,
-          };
+          return liveReadinessProbe.readiness(now);
         },
         getLogs: getRecentLogs,
       });
@@ -262,7 +247,7 @@ async function main(): Promise<void> {
       if (request.url === "/health") {
         sendJson(response, 200, {
           ok: true,
-          liveTrading: config.liveTrading,
+          liveTrading: true,
           arbEnabled: config.arbEnabled,
           liveOrderPlacementMode: config.liveOrderPlacementMode,
           liveTakerPriceCushionCents: config.liveTakerPriceCushionCents,
@@ -292,7 +277,7 @@ async function main(): Promise<void> {
   });
 
   server.listen(config.port, () => {
-    logEvent({ category: "BOOT", message: "worker listening", context: { port: config.port, liveTrading: config.liveTrading } });
+    logEvent({ category: "BOOT", message: "worker listening", context: { port: config.port, liveTrading: true } });
   });
 
   const shutdown = async (): Promise<void> => {

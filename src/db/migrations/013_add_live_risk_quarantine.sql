@@ -6,6 +6,5 @@ ALTER TABLE cross_venue_arb_signals
 
 CREATE INDEX IF NOT EXISTS idx_cross_venue_arb_signals_risk_quarantine_active
   ON cross_venue_arb_signals (risk_quarantined_at DESC)
-  WHERE execution_mode = 'live'
-    AND risk_quarantined_at IS NOT NULL
+  WHERE risk_quarantined_at IS NOT NULL
     AND reconciliation_resolved_at IS NULL;

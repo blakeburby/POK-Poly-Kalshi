@@ -2,7 +2,6 @@ import type {
   ArbCandidate,
   ArbLeg,
   DashboardSignal,
-  ExecutionMode,
   ExecutionTimings,
   LegDirection,
   QuoteSnapshot,
@@ -29,7 +28,6 @@ interface DashboardSignalRow {
   id: string | number;
   created_at: string | Date;
   updated_at: string | Date;
-  execution_mode: string | null;
   pair_key: string;
   expiry_ms: string | number;
   kalshi_contract_id: string;
@@ -132,7 +130,7 @@ const SIGNAL_COLUMNS = `
   kalshi_contract_id, polymarket_contract_id,
   lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
   higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
-  premium, guaranteed_profit, overlap_profit, threshold, execution_mode, action, failure_reason,
+  premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
   kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price,
   execution_group_id, kalshi_client_order_id, polymarket_client_order_id,
   kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
@@ -163,10 +161,6 @@ function optionalDateString(value: string | Date | null): string | null {
 function booleanFrom(value: boolean | string | null): boolean {
   if (typeof value === "boolean") return value;
   return value === "true" || value === "t" || value === "1";
-}
-
-function executionModeFrom(value: string | null | undefined): ExecutionMode {
-  return value === "live" ? "live" : "paper";
 }
 
 function recoveryStatusFrom(value: string | null | undefined): LiveRecoveryStatus | null {
@@ -222,7 +216,6 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     id: Number(row.id),
     createdAt: dateString(row.created_at),
     updatedAt: dateString(row.updated_at),
-    executionMode: executionModeFrom(row.execution_mode),
     pairKey: row.pair_key,
     expiryMs: Number(row.expiry_ms),
     kalshiContractId: row.kalshi_contract_id,
@@ -295,12 +288,12 @@ export class SignalStore {
         pair_key, expiry_ms, kalshi_contract_id, polymarket_contract_id,
         lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
         higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
-        premium, guaranteed_profit, overlap_profit, threshold, execution_mode, action, failure_reason
+        premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason
       ) VALUES (
         $1, $2, $3, $4,
         $5, $6, $7, $8, $9,
         $10, $11, $12, $13, $14,
-        $15, $16, $17, $18, $19, $20, $21
+        $15, $16, $17, $18, $19, $20
       )
       RETURNING id
     `, [
@@ -322,7 +315,6 @@ export class SignalStore {
       candidate.guaranteedProfit,
       candidate.overlapProfit,
       candidate.threshold,
-      input.executionMode ?? "paper",
       input.action,
       input.failureReason ?? null,
     ]);
@@ -445,8 +437,7 @@ export class SignalStore {
       SELECT COALESCE(SUM(risk_quarantine_exposure_dollars), 0) AS total,
              COUNT(*) AS count
       FROM cross_venue_arb_signals
-      WHERE execution_mode = 'live'
-        AND reconciliation_resolved_at IS NULL
+      WHERE reconciliation_resolved_at IS NULL
         AND risk_quarantined_at IS NOT NULL
     `);
     return {
@@ -531,8 +522,7 @@ export class SignalStore {
     const result = await this.db.query<DashboardSignalRow>(`
       SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
-      WHERE execution_mode = 'live'
-        AND execution_group_id IS NOT NULL
+      WHERE execution_group_id IS NOT NULL
         AND reconciliation_resolved_at IS NULL
         AND expiry_ms > $1
         AND (
@@ -607,30 +597,24 @@ export class SignalStore {
     return null;
   }
 
-  async listRecentSignals(limit = 100, executionMode?: ExecutionMode): Promise<DashboardSignal[]> {
+  async listRecentSignals(limit = 100): Promise<DashboardSignal[]> {
     const values: unknown[] = [limit];
-    const modeFilter = executionMode ? "WHERE execution_mode = $2" : "";
-    if (executionMode) values.push(executionMode);
     const result = await this.db.query<DashboardSignalRow>(`
       SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
-      ${modeFilter}
       ORDER BY created_at DESC
       LIMIT $1
     `, values);
     return result.rows.map(signalFromRow);
   }
 
-  async listFilledSignalsSince(sinceMs: number, limit = 10_000, executionMode?: ExecutionMode): Promise<DashboardSignal[]> {
+  async listFilledSignalsSince(sinceMs: number, limit = 10_000): Promise<DashboardSignal[]> {
     const values: unknown[] = [sinceMs, limit];
-    const modeFilter = executionMode ? "AND execution_mode = $3" : "";
-    if (executionMode) values.push(executionMode);
     const result = await this.db.query<DashboardSignalRow>(`
       SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
         AND updated_at >= to_timestamp($1 / 1000.0)
-        ${modeFilter}
       ORDER BY updated_at ASC
       LIMIT $2
     `, values);

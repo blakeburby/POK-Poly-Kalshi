@@ -17,7 +17,6 @@ class FakeDb implements Queryable {
           id: values?.[0] ?? 42,
           created_at: "2026-04-29T20:00:00.000Z",
           updated_at: "2026-04-29T20:00:01.000Z",
-          execution_mode: "live",
           pair_key: "pair",
           expiry_ms: 1_800_000_000_000,
           kalshi_contract_id: "kalshi",
@@ -106,7 +105,6 @@ class FakeDb implements Queryable {
           id: 7,
           created_at: "2026-04-29T20:00:00.000Z",
           updated_at: "2026-04-29T20:00:01.000Z",
-          execution_mode: "live",
           pair_key: "pair",
           expiry_ms: 1_800_000_000_000,
           kalshi_contract_id: "kalshi",
@@ -190,11 +188,8 @@ test("signal persistence inserts threshold-crossing candidate before execution u
   assert.equal(signalId, 42);
   assert.match(db.calls[0].sql, /INSERT INTO cross_venue_arb_signals/);
   assert.equal(db.calls[0].values?.[0], candidate.pairKey);
-  assert.equal(db.calls[0].values?.[18], "paper");
-  assert.equal(db.calls[0].values?.[19], "skipped");
-
-  await store.insertSignal({ candidate, executionMode: "live", action: "skipped", failureReason: "pending_execution" });
-  assert.equal(db.calls[1].values?.[18], "live");
+  assert.equal(db.calls[0].values?.[18], "skipped");
+  assert.equal(db.calls[0].values?.[19], "pending_execution");
 
   await store.updateSignal(signalId, {
     action: "filled",
@@ -224,17 +219,17 @@ test("signal persistence inserts threshold-crossing candidate before execution u
     riskQuarantineExposureDollars: 4.2,
     riskQuarantineEvidence: { cap: 10 },
   });
-  assert.match(db.calls[2].sql, /UPDATE cross_venue_arb_signals/);
-  assert.equal(db.calls[2].values?.[0], 42);
-  assert.equal(db.calls[2].values?.[1], "filled");
-  assert.equal(db.calls[2].values?.[7], "group");
-  assert.equal(db.calls[2].values?.[20], false);
-  assert.equal(db.calls[2].values?.[33], "auto_resolved_paired_fill");
-  assert.equal(db.calls[2].values?.[34], 1);
-  assert.equal(db.calls[2].values?.[36], 3400);
-  assert.equal(db.calls[2].values?.[37], "2026-04-29T20:00:02.000Z");
-  assert.equal(db.calls[2].values?.[38], "test quarantine");
-  assert.equal(db.calls[2].values?.[39], 4.2);
+  assert.match(db.calls[1].sql, /UPDATE cross_venue_arb_signals/);
+  assert.equal(db.calls[1].values?.[0], 42);
+  assert.equal(db.calls[1].values?.[1], "filled");
+  assert.equal(db.calls[1].values?.[7], "group");
+  assert.equal(db.calls[1].values?.[20], false);
+  assert.equal(db.calls[1].values?.[33], "auto_resolved_paired_fill");
+  assert.equal(db.calls[1].values?.[34], 1);
+  assert.equal(db.calls[1].values?.[36], 3400);
+  assert.equal(db.calls[1].values?.[37], "2026-04-29T20:00:02.000Z");
+  assert.equal(db.calls[1].values?.[38], "test quarantine");
+  assert.equal(db.calls[1].values?.[39], 4.2);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -250,33 +245,31 @@ test("signal persistence exposes filled signals for analytics windows", async ()
   assert.equal(signals.length, 1);
   assert.equal(signals[0].action, "filled");
   assert.equal(signals[0].kalshiFillPrice, 0.51);
-  assert.equal(signals[0].executionMode, "live");
   assert.equal(signals[0].executionGroupId, "group");
   assert.equal(signals[0].partialFill, false);
   assert.equal(db.calls[0].values?.[0], 1_800_000_000_000);
   assert.equal(db.calls[0].values?.[1], 50);
 });
 
-test("signal persistence filters recent and filled signals by execution mode", async () => {
+test("signal persistence readers query live records without mode filters", async () => {
   const db = new FakeDb();
   const store = new SignalStore(db);
 
-  await store.listRecentSignals(25, "live");
-  assert.match(db.calls[0].sql, /WHERE execution_mode = \$2/);
-  assert.deepEqual(db.calls[0].values, [25, "live"]);
+  await store.listRecentSignals(25);
+  assert.doesNotMatch(db.calls[0].sql, /execution_mode/);
+  assert.deepEqual(db.calls[0].values, [25]);
 
-  await store.listFilledSignalsSince(1_800_000_000_000, 50, "paper");
-  assert.match(db.calls[1].sql, /AND execution_mode = \$3/);
-  assert.deepEqual(db.calls[1].values, [1_800_000_000_000, 50, "paper"]);
+  await store.listFilledSignalsSince(1_800_000_000_000, 50);
+  assert.doesNotMatch(db.calls[1].sql, /execution_mode/);
+  assert.deepEqual(db.calls[1].values, [1_800_000_000_000, 50]);
 });
 
-test("execution mode migration backfills live rows from real execution metadata", () => {
-  const sql = readFileSync("src/db/migrations/007_add_signal_execution_mode.sql", "utf8");
-  assert.match(sql, /ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'paper'/);
-  assert.match(sql, /SET execution_mode = 'live'/);
-  assert.match(sql, /execution_group_id IS NOT NULL/);
-  assert.match(sql, /venue_confirmations IS NOT NULL/);
-  assert.match(sql, /CHECK \(execution_mode IN \('paper', 'live'\)\)/);
+test("live-only cleanup migration removes legacy non-live rows and drops the mode column", () => {
+  const sql = readFileSync("src/db/migrations/014_live_only_cleanup.sql", "utf8");
+  assert.match(sql, /DELETE FROM cross_venue_arb_signals/);
+  assert.match(sql, /DROP COLUMN IF EXISTS execution_mode/);
+  assert.match(sql, /idx_cross_venue_arb_signals_live_unresolved_reconciliation/);
+  assert.match(sql, /idx_cross_venue_arb_signals_risk_quarantine_active/);
 });
 
 test("reconciliation resolution migration adds operator-resolved incident markers", () => {

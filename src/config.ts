@@ -4,7 +4,6 @@ export interface AppConfig {
   port: number;
   databaseUrl: string;
   arbEnabled: boolean;
-  liveTrading: boolean;
   minProfitDollars: number;
   reentryIntervalMs: number;
   staleBookMs: number;
@@ -35,7 +34,6 @@ export interface AppConfig {
   polymarketGeoblockUrl: string;
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
-  liveMaxSlippageCents: number;
   liveTakerPriceCushionCents: number;
   liveMinExpiryMs: number;
   liveMaxTradesPerWindow: number;
@@ -71,11 +69,6 @@ export interface AppConfig {
   liveReconcileBeforeTrade: boolean;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
-  dryRunSlippageEnabled: boolean;
-  dryRunKalshiSlippageCents: number;
-  dryRunPolymarketSlippageCents: number;
-  dryRunMaxSlippageCents: number;
-  dryRunSlippageJitterCents: number;
   dashboardApiToken: string;
 }
 
@@ -121,12 +114,10 @@ function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLock
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 1);
-  const liveMaxSlippageCents = envNumber(env, "LIVE_MAX_SLIPPAGE_CENTS", 1);
   return {
     port: envNumber(env, "PORT", 8080),
     databaseUrl: envString(env, "DATABASE_URL"),
     arbEnabled: envBoolean(env, "ARB_ENABLED", true),
-    liveTrading: envBoolean(env, "ARB_LIVE_TRADING", false),
     minProfitDollars: envNumber(env, "ARB_MIN_PROFIT_DOLLARS", 0.05),
     reentryIntervalMs: envNumber(env, "ARB_REENTRY_INTERVAL_MS", 15_000),
     staleBookMs: envNumber(env, "STALE_BOOK_MS", 10_000),
@@ -161,7 +152,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FOK").toUpperCase() === "FAK" ? "FAK" : "FOK",
     liveOrderSize,
-    liveMaxSlippageCents,
     liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
     liveMinExpiryMs: envNumber(env, "LIVE_MIN_EXPIRY_MS", 30_000),
     liveMaxTradesPerWindow: envNumber(env, "LIVE_MAX_TRADES_PER_WINDOW", 1),
@@ -197,11 +187,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
     kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
     polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),
-    dryRunSlippageEnabled: envBoolean(env, "DRY_RUN_SLIPPAGE_ENABLED", true),
-    dryRunKalshiSlippageCents: envNumber(env, "DRY_RUN_KALSHI_SLIPPAGE_CENTS", 1),
-    dryRunPolymarketSlippageCents: envNumber(env, "DRY_RUN_POLYMARKET_SLIPPAGE_CENTS", 1),
-    dryRunMaxSlippageCents: envNumber(env, "DRY_RUN_MAX_SLIPPAGE_CENTS", 3),
-    dryRunSlippageJitterCents: envNumber(env, "DRY_RUN_SLIPPAGE_JITTER_CENTS", 1),
     dashboardApiToken: envString(env, "DASHBOARD_API_TOKEN"),
   };
 }

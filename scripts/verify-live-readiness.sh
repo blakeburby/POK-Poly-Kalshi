@@ -34,7 +34,7 @@ const books = snapshot.books ?? {};
 const checks = [
   ["health.ok", health.ok === true],
   ["health.arbEnabled", health.arbEnabled === true],
-  ["health.liveTrading=false", health.liveTrading === false],
+  ["health.liveTrading=true", health.liveTrading === true],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
   ["execution.kalshi.ready=true", kalshi.ready === true],
@@ -96,5 +96,5 @@ if (failed.length > 0) {
   process.exit(30);
 }
 
-console.log("Live-trading dry-run readiness is green. Do not flip ARB_LIVE_TRADING=true until you intentionally start the canary.");
+console.log("Live-only readiness is green. Use ARB_ENABLED=false if you want monitoring without new entries.");
 NODE
