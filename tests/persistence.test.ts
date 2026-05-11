@@ -251,12 +251,14 @@ test("signal persistence exposes filled signals for analytics windows", async ()
   assert.equal(db.calls[0].values?.[1], 50);
 });
 
-test("signal persistence readers query live records without mode filters", async () => {
+test("signal persistence readers query live execution records without mode filters", async () => {
   const db = new FakeDb();
   const store = new SignalStore(db);
 
   await store.listRecentSignals(25);
   assert.doesNotMatch(db.calls[0].sql, /execution_mode/);
+  assert.match(db.calls[0].sql, /execution_group_id IS NOT NULL/);
+  assert.match(db.calls[0].sql, /kalshi_fill_id IS NOT NULL/);
   assert.deepEqual(db.calls[0].values, [25]);
 
   await store.listFilledSignalsSince(1_800_000_000_000, 50);
