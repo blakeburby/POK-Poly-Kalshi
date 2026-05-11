@@ -214,6 +214,64 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
   };
 }
 
+function liveExecution(input: Partial<NonNullable<DashboardSnapshot["execution"]>> = {}): NonNullable<DashboardSnapshot["execution"]> {
+  const now = 1_800_000_010_000;
+  return {
+    mode: "live",
+    liveTrading: true,
+    protectedOnly: true,
+    orderSize: 5,
+    orderType: "GTC",
+    maxSlippageCents: 1,
+    minExpiryMs: 120_000,
+    maxTradesPerWindow: 1,
+    collateralBufferDollars: 0.25,
+    quoteMaxAgeMs: 750,
+    quoteSyncMaxSkewMs: 250,
+    minBookDepthShares: 5,
+    orderPlacementMode: "parallel_limit_rest",
+    aggressiveLimitRestMs: 500,
+    parallelExecutionEnabled: true,
+    hotPathEnabled: true,
+    hotPathCacheMaxAgeMs: 1_000,
+    polymarketPresignEnabled: false,
+    partialFillLockMode: "quarantine",
+    maxUnresolvedExposureDollars: 10,
+    orderTimeoutMs: 2_500,
+    kalshiOrderGroupEnabled: true,
+    userStreams: {
+      enabled: true,
+      ready: true,
+      reason: null,
+      confirmTimeoutMs: 2_500,
+      kalshi: { enabled: true, connected: true, subscribed: true, reason: null, lastConnectedAt: now - 1_000, lastEventAt: now - 500, lastError: null },
+      polymarket: { enabled: true, connected: true, subscribed: true, reason: null, lastConnectedAt: now - 1_000, lastEventAt: now - 500, lastError: null },
+      lastUserStreamEventAt: now - 500,
+      confirmationLagMs: 120,
+    },
+    reconciliation: {
+      enabled: true,
+      clean: true,
+      reason: null,
+      checkedAt: now - 250,
+      lastReconciliationAt: now - 250,
+      quarantinedExposureDollars: 0,
+      quarantinedSignalCount: 0,
+      quarantineCapDollars: 10,
+    },
+    riskState: "trading",
+    riskStateReason: null,
+    partialFillLocked: false,
+    circuitBreakerLocked: false,
+    circuitBreakerReason: null,
+    circuitBreaker: null,
+    kalshi: { configured: true, ready: true, reason: null, balance: 100, allowance: null, lastCheckedAt: now - 250 },
+    polymarket: { configured: true, ready: true, reason: null, balance: 100, allowance: null, lastCheckedAt: now - 250, requiredCollateral: 5 },
+    lastAttempt: null,
+    ...input,
+  };
+}
+
 test("dashboard password helper rejects unauthenticated access inputs", () => {
   process.env.DASHBOARD_PASSWORD = "operator";
   assert.equal(verifyDashboardPassword("operator"), true);
@@ -273,6 +331,103 @@ test("default dashboard view renders live and current paper sections together", 
   assert.match(paperTapeMarkup, /dry-run-poly-paper/);
   assert.doesNotMatch(paperTapeMarkup, /real-kalshi-order/);
   assert.doesNotMatch(paperTapeMarkup, /real-poly-order/);
+});
+
+test("live dashboard strict-clean panel shows fully clean live state", () => {
+  const markup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        health: { ...snapshot().health, liveTrading: true, arbEnabled: true },
+        execution: liveExecution(),
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /Strict-clean live operational status/);
+  assert.match(markup, /LIVE AND CLEAN/);
+  assert.match(markup, /aria-label="Can take real trades: Yes"/);
+  assert.match(markup, /aria-label="Clean: Yes"/);
+  assert.match(markup, /Quarantined Exposure/);
+  assert.match(markup, /\$0.00 \/ \$10.00/);
+});
+
+test("live dashboard strict-clean panel shows tradable quarantine as not clean", () => {
+  const execution = liveExecution();
+  const markup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        health: { ...snapshot().health, liveTrading: true, arbEnabled: true },
+        execution: {
+          ...execution,
+          riskState: "quarantined",
+          riskStateReason: "trading with quarantined unresolved exposure 4.20 across 1 signal(s)",
+          reconciliation: {
+            ...execution.reconciliation,
+            quarantinedExposureDollars: 4.2,
+            quarantinedSignalCount: 1,
+            quarantineCapDollars: 10,
+          },
+        },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /LIVE WITH QUARANTINED RISK/);
+  assert.match(markup, /aria-label="Can take real trades: Yes"/);
+  assert.match(markup, /aria-label="Clean: No"/);
+  assert.match(markup, /\$4.20 \/ \$10.00/);
+  assert.match(markup, /Latest risk reason: trading with quarantined unresolved exposure 4.20 across 1 signal\(s\)/);
+});
+
+test("live dashboard strict-clean panel blocks hard locks and degraded readiness", () => {
+  const hardLocked = liveExecution({
+    riskState: "hard_locked",
+    circuitBreakerLocked: true,
+    circuitBreakerReason: "manual hard lock for unresolved exposure",
+  });
+  const hardLockMarkup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        health: { ...snapshot().health, liveTrading: true, arbEnabled: true },
+        execution: hardLocked,
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(hardLockMarkup, /BLOCKED/);
+  assert.match(hardLockMarkup, /aria-label="Can take real trades: No"/);
+  assert.match(hardLockMarkup, /Active Locks/);
+  assert.match(hardLockMarkup, /Circuit breaker/);
+
+  const degraded = liveExecution();
+  const degradedMarkup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        health: { ...snapshot().health, liveTrading: true, arbEnabled: true },
+        execution: {
+          ...degraded,
+          kalshi: { ...degraded.kalshi, ready: false, reason: "Kalshi balance check is stale" },
+        },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(degradedMarkup, /DEGRADED/);
+  assert.match(degradedMarkup, /aria-label="Can take real trades: No"/);
+  assert.match(degradedMarkup, /aria-label="Clean: No"/);
+  assert.match(degradedMarkup, /Live is armed, but one or more readiness checks are not currently passing/);
 });
 
 test("opportunity blotter sorts by guaranteed profit and stale helper flags old books", () => {

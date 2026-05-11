@@ -46,6 +46,7 @@ type TradeDetailDirection = ArbCandidate["lower"]["direction"];
 type TradeDetailRegionKey = "below_lower" | "between_strikes" | "above_higher";
 type DashboardViewMode = "risk" | "raw" | "execution";
 export type DashboardKind = "live" | "paper";
+type LiveOperationalState = "clean" | "quarantined" | "blocked" | "degraded" | "standby";
 
 interface TradeDetailLeg {
   label: "A" | "B";
@@ -97,6 +98,24 @@ export interface TradeDetailModel {
   structureLabel: "Protected Spread" | "Flipped / Dead-Zone" | "Synthetic Binary Spread";
   classification: "True Arb" | "Probabilistic Bet" | "Dead-Zone Risk";
   regions: TradeDetailRegion[];
+}
+
+interface LiveOperationalStatus {
+  state: LiveOperationalState;
+  headline: string;
+  summary: string;
+  pillState: "live" | "stale" | "empty" | "warn" | "off";
+  canTrade: boolean;
+  isClean: boolean;
+  liveArmed: boolean;
+  hardLocked: boolean;
+  venuesReady: boolean;
+  streamsReady: boolean;
+  reconciliationClean: boolean;
+  quarantineExposure: number;
+  quarantineCap: number | null;
+  activeLockLabel: string;
+  reason: string | null;
 }
 
 export interface TradeRiskIntelligence {
@@ -203,6 +222,137 @@ function formatExecutionState(value: string | null | undefined): string {
 
 function shortReason(value: string): string {
   return value.length > 82 ? `${value.slice(0, 79)}...` : value;
+}
+
+function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalStatus {
+  const execution = snapshot.execution;
+  const liveArmed = Boolean(snapshot.health.liveTrading && snapshot.health.arbEnabled);
+  const kalshiReady = execution?.kalshi.ready ?? false;
+  const polymarketReady = execution?.polymarket.ready ?? false;
+  const venuesReady = kalshiReady && polymarketReady;
+  const streamsReady = execution?.userStreams?.ready ?? false;
+  const reconciliationClean = execution?.reconciliation?.clean ?? false;
+  const hardLocked = Boolean(execution?.circuitBreakerLocked || execution?.partialFillLocked || execution?.riskState === "hard_locked");
+  const quarantineExposure = Math.max(
+    execution?.reconciliation?.quarantinedExposureDollars ?? 0,
+    execution?.lastAttempt?.riskQuarantineExposureDollars ?? 0,
+  );
+  const quarantineCap = execution?.reconciliation?.quarantineCapDollars
+    ?? execution?.maxUnresolvedExposureDollars
+    ?? snapshot.health.liveMaxUnresolvedExposureDollars
+    ?? null;
+  const canTrade = liveArmed && venuesReady && streamsReady && reconciliationClean && !hardLocked;
+  const isClean = canTrade && quarantineExposure <= 0;
+  const activeLockLabel = execution?.circuitBreakerLocked
+    ? "Circuit breaker"
+    : execution?.partialFillLocked
+      ? "Partial-fill lock"
+      : execution?.riskState === "hard_locked"
+        ? "Hard lock"
+        : "None";
+  const reason = execution?.circuitBreakerReason
+    ?? execution?.riskStateReason
+    ?? execution?.reconciliation?.reason
+    ?? execution?.userStreams?.reason
+    ?? null;
+
+  if (!liveArmed) {
+    return {
+      state: "standby",
+      headline: "PAPER/STANDBY",
+      summary: snapshot.health.liveTrading ? "Live flag is on but strategy execution is disabled." : "Live trading is not armed.",
+      pillState: "off",
+      canTrade: false,
+      isClean: false,
+      liveArmed,
+      hardLocked,
+      venuesReady,
+      streamsReady,
+      reconciliationClean,
+      quarantineExposure,
+      quarantineCap,
+      activeLockLabel,
+      reason,
+    };
+  }
+
+  if (hardLocked || execution?.riskState === "blocked") {
+    return {
+      state: "blocked",
+      headline: "BLOCKED",
+      summary: "A live safety gate is blocking new real trades.",
+      pillState: "stale",
+      canTrade: false,
+      isClean: false,
+      liveArmed,
+      hardLocked,
+      venuesReady,
+      streamsReady,
+      reconciliationClean,
+      quarantineExposure,
+      quarantineCap,
+      activeLockLabel,
+      reason,
+    };
+  }
+
+  if (!venuesReady || !streamsReady || !reconciliationClean || !execution || execution.riskState === "recovering") {
+    return {
+      state: "degraded",
+      headline: "DEGRADED",
+      summary: "Live is armed, but one or more readiness checks are not currently passing.",
+      pillState: "warn",
+      canTrade: false,
+      isClean: false,
+      liveArmed,
+      hardLocked,
+      venuesReady,
+      streamsReady,
+      reconciliationClean,
+      quarantineExposure,
+      quarantineCap,
+      activeLockLabel,
+      reason,
+    };
+  }
+
+  if (quarantineExposure > 0 || execution.riskState === "quarantined") {
+    return {
+      state: "quarantined",
+      headline: "LIVE WITH QUARANTINED RISK",
+      summary: "The worker may continue trading under the cap, but strict-clean status is false until quarantined exposure is zero.",
+      pillState: "warn",
+      canTrade,
+      isClean: false,
+      liveArmed,
+      hardLocked,
+      venuesReady,
+      streamsReady,
+      reconciliationClean,
+      quarantineExposure,
+      quarantineCap,
+      activeLockLabel,
+      reason,
+    };
+  }
+
+  return {
+    state: "clean",
+    headline: "LIVE AND CLEAN",
+    summary: "Live trading is armed, all readiness gates are passing, and no quarantined exposure is present.",
+    pillState: "live",
+    canTrade,
+    isClean,
+    liveArmed,
+    hardLocked,
+    venuesReady,
+    streamsReady,
+    reconciliationClean,
+    quarantineExposure,
+    quarantineCap,
+    activeLockLabel,
+    reason,
+  };
 }
 
 function signalLatencyMs(signal: DashboardSignal): number | null {
@@ -3075,6 +3225,61 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
   );
 }
 
+function LiveOperationalPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const status = getLiveOperationalStatus(snapshot);
+  const quarantineText = status.quarantineCap == null
+    ? formatDollars(status.quarantineExposure)
+    : `${formatDollars(status.quarantineExposure)} / ${formatDollars(status.quarantineCap)}`;
+
+  return (
+    <section className={`panel live-operational-panel live-operational-${status.state}`} aria-label="Strict-clean live operational status">
+      <div className="live-operational-hero">
+        <div>
+          <p className="panel-kicker">strict-clean live status</p>
+          <h2>{status.headline}</h2>
+          <p>{status.summary}</p>
+        </div>
+        <StatusPill label={status.headline} state={status.pillState} />
+      </div>
+      <div className="live-operational-grid">
+        <div aria-label={`Can take real trades: ${status.canTrade ? "Yes" : "No"}`}>
+          <span>Can take real trades</span>
+          <strong className={status.canTrade ? "profit" : "loss"}>{status.canTrade ? "Yes" : "No"}</strong>
+        </div>
+        <div aria-label={`Clean: ${status.isClean ? "Yes" : "No"}`}>
+          <span>Clean</span>
+          <strong className={status.isClean ? "profit" : "warn"}>{status.isClean ? "Yes" : "No"}</strong>
+        </div>
+        <div>
+          <span>Active Locks</span>
+          <strong className={status.activeLockLabel === "None" ? "profit" : "loss"}>{status.activeLockLabel}</strong>
+        </div>
+        <div>
+          <span>Quarantined Exposure</span>
+          <strong className={status.quarantineExposure > 0 ? "warn" : "profit"}>{quarantineText}</strong>
+        </div>
+        <div>
+          <span>Venues</span>
+          <strong className={status.venuesReady ? "profit" : "loss"}>{status.venuesReady ? "Ready" : "Check"}</strong>
+        </div>
+        <div>
+          <span>User Streams</span>
+          <strong className={status.streamsReady ? "profit" : "loss"}>{status.streamsReady ? "Ready" : "Check"}</strong>
+        </div>
+        <div>
+          <span>Reconciliation</span>
+          <strong className={status.reconciliationClean ? "profit" : "loss"}>{status.reconciliationClean ? "Clean" : "Drift"}</strong>
+        </div>
+        <div>
+          <span>Live Flags</span>
+          <strong className={status.liveArmed ? "warn" : "loss"}>{status.liveArmed ? "Armed" : "Standby"}</strong>
+        </div>
+      </div>
+      {status.reason ? <p className="live-operational-reason">Latest risk reason: {status.reason}</p> : null}
+    </section>
+  );
+}
+
 function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
   const execution = snapshot.execution;
   const kalshiReady = execution?.kalshi.ready ?? false;
@@ -3126,6 +3331,7 @@ function PerformanceDashboardSections({ snapshot, dashboardKind }: { snapshot: D
   const liveView = dashboardKind === "live";
   return (
     <section className={`${liveView ? "live" : "paper"}-dashboard-stack paper-dashboard-stack`} aria-label={liveView ? "Live dashboard analytics" : "Paper dashboard analytics"}>
+      {liveView ? <LiveOperationalPanel snapshot={snapshot} /> : null}
       {liveView ? <LiveSafetyBadgeRow snapshot={snapshot} /> : null}
       {!liveView && snapshot.health.liveTrading ? (
         <div className="paper-live-warning">
