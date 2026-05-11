@@ -42,7 +42,9 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `POLYMARKET_CHAIN_ID=137`: Polygon mainnet.
 - `POLYMARKET_CLOB_HOST=https://clob.polymarket.com`: official Polymarket CLOB host.
 - `POLYMARKET_GEOBLOCK_URL=https://polymarket.com/api/geoblock`: official worker-egress geoblock preflight. Unknown or blocked status makes Polymarket not ready.
-- `POLYMARKET_ORDER_TYPE=FOK`: Polymarket live buys use immediate market FOK with a worst-price limit. BUY amount is USDC spend, and exact share count is still validated after the REST/private-stream responses.
+- `LIVE_ORDER_PLACEMENT_MODE=parallel_limit_rest`: default live entry mode. Both venues submit aggressive marketable limit orders concurrently, allow a short rest window, then cancel and verify any unfilled remainder. Set `parallel_fok` to roll back to immediate all-or-nothing FOK behavior.
+- `LIVE_AGGRESSIVE_LIMIT_REST_MS=500`: maximum time an aggressive limit entry order may rest before cancellation/final validation.
+- `POLYMARKET_ORDER_TYPE=FOK`: used only when `LIVE_ORDER_PLACEMENT_MODE=parallel_fok`; Polymarket immediate market buys use FOK/FAK with a worst-price limit. BUY amount is USDC spend, and exact share count is still validated after the REST/private-stream responses.
 - `LIVE_ORDER_SIZE=5`: first practical Polymarket BTC 15m live canary size because current CLOB markets commonly reject smaller orders with `min_order_size=5`.
 - `LIVE_MAX_SLIPPAGE_CENTS=1`: live preflight and limit-price buffer per buy leg.
 - `LIVE_MIN_EXPIRY_MS=120000`: production recommendation to skip entries too close to settlement.
@@ -64,11 +66,13 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `KALSHI_USER_WS_URL=wss://api.elections.kalshi.com/trade-api/ws/v2`: Kalshi authenticated user stream endpoint.
 - `POLYMARKET_USER_WS_URL=wss://ws-subscriptions-clob.polymarket.com/ws/user`: Polymarket authenticated CLOB user stream endpoint.
 
-Polymarket execution note: CLOB FOK/FAK BUY orders are notional-based, so the
-worker uses an exact-size marketable limit order and immediately cancels any
-unfilled remainder. If Polymarket reports a fill count different from
-`LIVE_ORDER_SIZE`, the worker marks the attempt failed and engages the
-persistent live circuit breaker.
+Polymarket execution note: in `parallel_limit_rest` mode, the worker uses a
+marketable GTC limit for exact shares, waits at most
+`LIVE_AGGRESSIVE_LIMIT_REST_MS`, cancels any open remainder, then re-queries
+order/trade/open-order state before accepting the result. In `parallel_fok`
+mode, CLOB FOK/FAK BUY orders are notional-based. In both modes, any non-exact
+fill count is unsafe and engages the persistent live circuit breaker when either
+venue has exposure.
 
 Private-stream safety note: in default live mode the worker uses the parallel
 hot path. A fresh book edge must pass raw executable VWAP, freshness, depth,

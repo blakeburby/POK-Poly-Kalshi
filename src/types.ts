@@ -2,6 +2,7 @@ export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 export type ExecutionMode = "paper" | "live";
+export type LiveOrderPlacementMode = "parallel_fok" | "parallel_limit_rest";
 
 export interface BookLevel {
   price: number;
@@ -147,7 +148,7 @@ export interface VenueConfirmations {
   polymarket?: Record<string, unknown> | null;
 }
 
-export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok";
+export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_limit_rest";
 
 export interface UserStreamVenueState {
   enabled: boolean;
@@ -359,6 +360,8 @@ export interface LiveExecutionReadiness {
   minBookDepthShares: number;
   hedgeMaxLossDollars?: number;
   hedgeFeeBufferDollars?: number;
+  orderPlacementMode?: LiveOrderPlacementMode;
+  aggressiveLimitRestMs?: number;
   parallelExecutionEnabled?: boolean;
   hotPathEnabled?: boolean;
   hotPathCacheMaxAgeMs?: number;
@@ -554,6 +557,8 @@ export interface DashboardSnapshot {
     liveOrderTimeoutMs: number;
     liveHedgeMaxLossDollars: number;
     liveHedgeFeeBufferDollars: number;
+    liveOrderPlacementMode?: LiveOrderPlacementMode;
+    liveAggressiveLimitRestMs?: number;
     liveParallelExecutionEnabled: boolean;
     liveHotPathEnabled: boolean;
     liveHotPathCacheMaxAgeMs: number;

@@ -224,6 +224,8 @@ export function dryRunExecutionReadiness(config: AppConfig, now = Date.now()): L
     minBookDepthShares: config.liveMinBookDepthShares,
     hedgeMaxLossDollars: config.liveHedgeMaxLossDollars,
     hedgeFeeBufferDollars: config.liveHedgeFeeBufferDollars,
+    orderPlacementMode: config.liveOrderPlacementMode,
+    aggressiveLimitRestMs: config.liveAggressiveLimitRestMs,
     parallelExecutionEnabled: config.liveParallelExecutionEnabled,
     hotPathEnabled: config.liveHotPathEnabled,
     hotPathCacheMaxAgeMs: config.liveHotPathCacheMaxAgeMs,
@@ -301,6 +303,8 @@ export class LiveExecutor implements ArbExecutor {
       minBookDepthShares: this.config.liveMinBookDepthShares,
       hedgeMaxLossDollars: this.config.liveHedgeMaxLossDollars,
       hedgeFeeBufferDollars: this.config.liveHedgeFeeBufferDollars,
+      orderPlacementMode: this.config.liveOrderPlacementMode,
+      aggressiveLimitRestMs: this.config.liveAggressiveLimitRestMs,
       parallelExecutionEnabled: this.config.liveParallelExecutionEnabled,
       hotPathEnabled: this.config.liveHotPathEnabled,
       hotPathCacheMaxAgeMs: this.config.liveHotPathCacheMaxAgeMs,
@@ -339,12 +343,16 @@ export class LiveExecutor implements ArbExecutor {
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
+    const placementMode = this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
+    const limitRestMs = placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
     let kalshiContext: LiveOrderContext = {
       executionGroupId,
       clientOrderId: kalshiClientOrderId,
       size: this.config.liveOrderSize,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
       orderGroupId: this.config.liveKalshiOrderGroupEnabled ? this.config.liveKalshiOrderGroupId || undefined : undefined,
+      placementMode,
+      limitRestMs,
     };
     let polymarketContext: LiveOrderContext = {
       executionGroupId,
@@ -352,6 +360,8 @@ export class LiveExecutor implements ArbExecutor {
       size: this.config.liveOrderSize,
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
       requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      placementMode,
+      limitRestMs,
     };
     const preflightStartedAt = this.now();
     const preflightFailure = await this.preflightVenueOrders([
@@ -397,6 +407,10 @@ export class LiveExecutor implements ArbExecutor {
     const hotGateCompletedAt = this.now();
 
     if (this.config.liveParallelExecutionEnabled) {
+      const executionStrategy = placementMode === "parallel_limit_rest" ? "parallel_limit_rest" : "parallel_fok";
+      const firstVenueReason = placementMode === "parallel_limit_rest"
+        ? `parallel aggressive limit orders submitted concurrently with ${limitRestMs ?? 0}ms rest`
+        : "parallel FOK orders submitted concurrently";
       const [kalshi, polymarket] = await Promise.all([
         this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, kalshiContext),
         this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext),
@@ -411,13 +425,13 @@ export class LiveExecutor implements ArbExecutor {
           preflightStartedAt,
           preflightCompletedAt,
           firstVenue: null,
-          firstVenueReason: "parallel FOK orders submitted concurrently",
+          firstVenueReason,
           firstVenueVwap: null,
           hotGateStartedAt,
           hotGateCompletedAt,
         }),
         venueConfirmations,
-        executionStrategy: "parallel_fok",
+        executionStrategy,
         riskHedge: false,
       });
     }

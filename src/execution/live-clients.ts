@@ -17,7 +17,7 @@ import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
 import { getKalshiHeaders } from "../kalshi/auth";
-import type { ArbLeg, Venue, VenueExecutionReadiness } from "../types";
+import type { ArbLeg, LiveOrderPlacementMode, Venue, VenueExecutionReadiness } from "../types";
 
 export interface LiveOrderContext {
   executionGroupId: string;
@@ -29,6 +29,8 @@ export interface LiveOrderContext {
   orderGroupId?: string;
   signal?: AbortSignal;
   preflight?: LiveOrderPreflight;
+  placementMode?: LiveOrderPlacementMode;
+  limitRestMs?: number;
 }
 
 export interface LiveOrderPreflight {
@@ -72,6 +74,9 @@ export interface PolymarketClobLike {
   createMarketOrder?(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType.FOK | OrderType.FAK; metadata?: string }, options: { tickSize: TickSize; negRisk?: boolean }): Promise<SignedOrder>;
   postOrder(order: SignedOrder, orderType?: OrderType, postOnly?: boolean, deferExec?: boolean): Promise<unknown>;
   cancelOrder?(payload: { orderID: string }): Promise<unknown>;
+  getOrder?(orderID: string): Promise<unknown>;
+  getOpenOrders?(params?: { id?: string; market?: string; asset_id?: string }, onlyFirstPage?: boolean): Promise<unknown[]>;
+  getTrades?(params?: { market?: string; asset_id?: string }, onlyFirstPage?: boolean): Promise<unknown[]>;
   getBalanceAllowance(params?: { asset_type: AssetType; token_id?: string }): Promise<BalanceAllowanceResponse>;
   updateBalanceAllowance(params?: { asset_type: AssetType; token_id?: string }): Promise<void>;
 }
@@ -107,6 +112,10 @@ function finiteOrNull(value: unknown): number | null {
   if (value == null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === "object" ? value as Record<string, unknown> : null;
 }
 
 function normalizedCollateralAmount(value: number | null): number | null {
@@ -266,12 +275,35 @@ export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): 
     side: isYes ? "bid" : "ask",
     count: fixedCount(context.size),
     price: fixedDollars(yesBookPrice),
-    time_in_force: "fill_or_kill",
+    time_in_force: isLimitRestMode(context) ? "good_till_canceled" : "fill_or_kill",
     self_trade_prevention_type: "taker_at_cross",
     cancel_order_on_pause: true,
   };
   if (context.orderGroupId) body.order_group_id = context.orderGroupId;
   return body;
+}
+
+function kalshiOrderRecord(payload: Record<string, unknown>): Record<string, unknown> {
+  return recordOrNull(payload.order) ?? payload;
+}
+
+function kalshiFillCount(record: Record<string, unknown>): number | null {
+  return finiteOrNull(record.fill_count ?? record.fill_count_fp);
+}
+
+function kalshiFillPrice(record: Record<string, unknown>, leg: ArbLeg): number | null {
+  const averageFillPrice = finiteOrNull(record.average_fill_price);
+  if (averageFillPrice != null) return leg.direction === "yes" ? averageFillPrice : roundPrice(1 - averageFillPrice);
+  const yesPrice = finiteOrNull(record.yes_price_dollars);
+  const noPrice = finiteOrNull(record.no_price_dollars);
+  if (leg.direction === "yes") return yesPrice;
+  return noPrice ?? (yesPrice == null ? null : roundPrice(1 - yesPrice));
+}
+
+function kalshiOrderStatus(record: Record<string, unknown>, fillCount: number | null, requestedSize: number): string {
+  const status = String(record.status ?? "").trim();
+  if (isExactFillCount(fillCount, requestedSize)) return "filled";
+  return status || "unfilled";
 }
 
 export class KalshiOrderClient implements VenueOrderClient {
@@ -304,25 +336,185 @@ export class KalshiOrderClient implements VenueOrderClient {
     const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
     if (!response.ok) throw new Error(`Kalshi order failed ${response.status}: ${sanitizeError(text)}`);
 
-    const yesFillPrice = finiteOrNull(payload.average_fill_price);
-    const fillPrice = yesFillPrice == null ? null : leg.direction === "yes" ? yesFillPrice : roundPrice(1 - yesFillPrice);
-    const fillCount = finiteOrNull(payload.fill_count);
-    const fee = finiteOrNull(payload.average_fee_paid);
-    const exchangeTimestampMs = finiteOrNull(payload.ts_ms);
-    return {
+    const record = kalshiOrderRecord(payload);
+    const fillCount = kalshiFillCount(record);
+    const fee = finiteOrNull(record.average_fee_paid ?? record.taker_fees_dollars);
+    const exchangeTimestampMs = finiteOrNull(record.ts_ms);
+    const initialResult: VenueOrderResult = {
       venue: this.venue,
-      clientOrderId: String(payload.client_order_id ?? context.clientOrderId),
-      orderId: payload.order_id == null ? null : String(payload.order_id),
-      status: fillCount != null && fillCount >= context.size ? "filled" : "unfilled",
-      fillPrice,
+      clientOrderId: String(record.client_order_id ?? context.clientOrderId),
+      orderId: record.order_id == null ? null : String(record.order_id),
+      status: kalshiOrderStatus(record, fillCount, context.size),
+      fillPrice: kalshiFillPrice(record, leg),
       fillCount,
       requestedAt: isoFromMs(requestedAt),
       respondedAt: isoFromMs(respondedAt),
       error: null,
       fee,
       exchangeTimestampMs,
+      metadata: {
+        orderPlacementMode: context.placementMode ?? "parallel_fok",
+        kalshiInitialStatus: String(record.status ?? initialResultStatus(fillCount, context.size)),
+        kalshiInitialFillCount: fillCount,
+        limitRestMs: isLimitRestMode(context) ? limitRestMs(context) : null,
+      },
+    };
+    if (!isLimitRestMode(context)) return initialResult;
+    return this.finalizeLimitRestOrder(leg, context, initialResult);
+  }
+
+  private async finalizeLimitRestOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    initialResult: VenueOrderResult,
+  ): Promise<VenueOrderResult> {
+    const restMs = limitRestMs(context);
+    const orderId = initialResult.orderId;
+    const initialStatus = initialResult.status;
+    if (isExactFillCount(initialResult.fillCount, context.size)) {
+      return {
+        ...initialResult,
+        metadata: {
+          ...initialResult.metadata,
+          kalshiFinalStatus: initialStatus,
+          kalshiFinalFillCount: initialResult.fillCount,
+          kalshiFinalFillSource: "initial_rest_response",
+          kalshiCancelStatus: "not_needed",
+        },
+      };
+    }
+    if (restMs > 0) await waitMs(restMs);
+
+    let beforeCancel: Record<string, unknown> | null = null;
+    let beforeCancelError: string | null = null;
+    if (orderId) {
+      try {
+        beforeCancel = await this.fetchOrder(orderId, context.signal);
+      } catch (error) {
+        beforeCancelError = sanitizeError(error);
+      }
+    }
+    const beforeFillCount = beforeCancel ? kalshiFillCount(beforeCancel) : null;
+    if (beforeCancel && isExactFillCount(beforeFillCount, context.size)) {
+      return this.resultFromKalshiRecord(leg, context, beforeCancel, initialResult, {
+        cancelStatus: "not_needed",
+        finalFillSource: "pre_cancel_poll",
+        beforeCancelError,
+      });
+    }
+
+    let cancelStatus = "skipped_no_order_id";
+    let cancelError: string | null = null;
+    if (orderId) {
+      try {
+        cancelStatus = await this.cancelOrder(orderId, context.signal);
+      } catch (error) {
+        cancelStatus = "cancel_failed";
+        cancelError = sanitizeError(error);
+      }
+    }
+
+    let finalRecord: Record<string, unknown> | null = null;
+    let finalFetchError: string | null = null;
+    if (orderId) {
+      try {
+        finalRecord = await this.fetchOrder(orderId, context.signal);
+      } catch (error) {
+        finalFetchError = sanitizeError(error);
+      }
+    }
+    return this.resultFromKalshiRecord(leg, context, finalRecord ?? beforeCancel, initialResult, {
+      cancelStatus,
+      cancelError,
+      beforeCancelError,
+      finalFetchError,
+      finalFillSource: finalRecord ? "post_cancel_poll" : beforeCancel ? "pre_cancel_poll" : "initial_rest_response",
+    });
+  }
+
+  private resultFromKalshiRecord(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    record: Record<string, unknown> | null,
+    initialResult: VenueOrderResult,
+    metadata: {
+      cancelStatus: string;
+      cancelError?: string | null;
+      beforeCancelError?: string | null;
+      finalFetchError?: string | null;
+      finalFillSource: string;
+    },
+  ): VenueOrderResult {
+    const fillCount = record ? kalshiFillCount(record) : initialResult.fillCount;
+    const finalStatus = record ? kalshiOrderStatus(record, fillCount, context.size) : "unknown";
+    const exactFill = isExactFillCount(fillCount, context.size);
+    const cancelVerified = metadata.cancelStatus === "canceled" || metadata.cancelStatus === "not_needed";
+    const status = exactFill
+      ? "filled"
+      : cancelVerified && finalStatus !== "resting"
+        ? finalStatus || "canceled"
+        : "unknown";
+    const error = exactFill
+      ? null
+      : status === "unknown"
+        ? `kalshi limit_rest cancellation/final state unverified${metadata.cancelError ? `: ${metadata.cancelError}` : ""}${metadata.finalFetchError ? `; final query failed: ${metadata.finalFetchError}` : ""}`
+        : `kalshi limit_rest order canceled without exact fill (${exactFillError(this.venue, fillCount, context.size) ?? "final fill did not match requested size"})`;
+    return {
+      ...initialResult,
+      status,
+      fillPrice: record ? kalshiFillPrice(record, leg) : initialResult.fillPrice,
+      fillCount,
+      respondedAt: isoFromMs(Date.now()),
+      error,
+      fee: record ? finiteOrNull(record.average_fee_paid ?? record.taker_fees_dollars) : initialResult.fee,
+      exchangeTimestampMs: record ? finiteOrNull(record.ts_ms) : initialResult.exchangeTimestampMs,
+      metadata: {
+        ...initialResult.metadata,
+        kalshiFinalStatus: finalStatus,
+        kalshiFinalFillCount: fillCount,
+        kalshiFinalFillSource: metadata.finalFillSource,
+        kalshiCancelStatus: metadata.cancelStatus,
+        kalshiCancelError: metadata.cancelError ?? null,
+        kalshiBeforeCancelError: metadata.beforeCancelError ?? null,
+        kalshiFinalFetchError: metadata.finalFetchError ?? null,
+      },
     };
   }
+
+  private async fetchOrder(orderId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const url = new URL(this.config.kalshiApiBase);
+    const basePath = url.pathname.replace(/\/$/, "");
+    url.pathname = `${basePath}/portfolio/orders/${encodeURIComponent(orderId)}`;
+    const signPath = `${url.pathname}${url.search}`;
+    const response = await this.fetchFn(url, {
+      method: "GET",
+      headers: getKalshiHeaders("GET", signPath),
+      signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Kalshi order query failed ${response.status}: ${sanitizeError(text)}`);
+    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    return kalshiOrderRecord(payload);
+  }
+
+  private async cancelOrder(orderId: string, signal?: AbortSignal): Promise<string> {
+    const url = new URL(this.config.kalshiApiBase);
+    const basePath = url.pathname.replace(/\/$/, "");
+    url.pathname = `${basePath}/portfolio/events/orders/${encodeURIComponent(orderId)}`;
+    const signPath = `${url.pathname}${url.search}`;
+    const response = await this.fetchFn(url, {
+      method: "DELETE",
+      headers: getKalshiHeaders("DELETE", signPath),
+      signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Kalshi order cancel failed ${response.status}: ${sanitizeError(text)}`);
+    return "canceled";
+  }
+}
+
+function initialResultStatus(fillCount: number | null, requestedSize: number): string {
+  return isExactFillCount(fillCount, requestedSize) ? "filled" : "unfilled";
 }
 
 function normalizePrivateKey(privateKey: string): `0x${string}` {
@@ -391,8 +583,52 @@ function exactFillError(venue: Venue, fillCount: number | null, requestedSize: n
     : `${venue} filled ${fillCount} shares for requested exact size ${requestedSize}`;
 }
 
+function isExactFillCount(fillCount: number | null, requestedSize: number): boolean {
+  return fillCount != null && Math.abs(fillCount - requestedSize) <= 0.000001;
+}
+
+function isLimitRestMode(context: LiveOrderContext): boolean {
+  return context.placementMode === "parallel_limit_rest";
+}
+
+function limitRestMs(context: LiveOrderContext): number {
+  return Math.max(0, Math.floor(context.limitRestMs ?? 0));
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function polymarketMarketBuySpend(context: LiveOrderContext): number {
   return roundPrice(context.size * context.maxBuyPrice);
+}
+
+function polymarketFilledStatus(status: string): boolean {
+  return ["matched", "filled"].includes(status.toLowerCase());
+}
+
+function polymarketTradeMatchesOrder(trade: Record<string, unknown>, orderId: string): boolean {
+  if (String(trade.taker_order_id ?? "") === orderId) return true;
+  const makerOrders = Array.isArray(trade.maker_orders) ? trade.maker_orders : [];
+  return makerOrders.some((order) => recordOrNull(order)?.order_id === orderId);
+}
+
+function polymarketTradeFill(trades: Array<Record<string, unknown>>, orderId: string): { fillCount: number | null; fillPrice: number | null; tradeCount: number } {
+  const matching = trades.filter((trade) => polymarketTradeMatchesOrder(trade, orderId));
+  if (matching.length === 0) return { fillCount: null, fillPrice: null, tradeCount: 0 };
+  let size = 0;
+  let notional = 0;
+  for (const trade of matching) {
+    const tradeSize = finiteOrNull(trade.size) ?? 0;
+    const tradePrice = finiteOrNull(trade.price) ?? 0;
+    size += tradeSize;
+    notional += tradeSize * tradePrice;
+  }
+  return {
+    fillCount: size,
+    fillPrice: size > 0 ? roundPrice(notional / size) : null,
+    tradeCount: matching.length,
+  };
 }
 
 export async function resolvePolymarketApiCreds(config: AppConfig): Promise<{ creds: ApiKeyCreds; source: PolymarketCredentialsSource }> {
@@ -650,6 +886,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
       throw new Error(`Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`);
     }
 
+    if (isLimitRestMode(context)) {
+      return this.placeLimitRestOrder(leg, context, client, book, requestedAt);
+    }
+
     const orderType = polymarketOrderType(this.config.polymarketOrderType);
     const requestedSpend = polymarketMarketBuySpend(context);
     const worstPrice = roundPrice(context.maxBuyPrice);
@@ -743,6 +983,213 @@ export class PolymarketOrderClient implements VenueOrderClient {
     };
   }
 
+  private async placeLimitRestOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    client: PolymarketClobLike,
+    book: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">,
+    requestedAt: number,
+  ): Promise<VenueOrderResult> {
+    if (!leg.tokenId) throw new Error("Polymarket token id is required for live trading");
+    const worstPrice = roundPrice(context.maxBuyPrice);
+    const signStartedAt = Date.now();
+    const signedOrder = await client.createOrder({
+      tokenID: leg.tokenId,
+      price: worstPrice,
+      size: context.size,
+      side: Side.BUY,
+      metadata: metadataFromClientOrderId(context.clientOrderId),
+    }, {
+      tickSize: book.tick_size as TickSize,
+      negRisk: Boolean(book.neg_risk),
+    });
+    const signMs = Math.max(0, Date.now() - signStartedAt);
+    const payload = await withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, OrderType.GTC, false));
+    const response = payload as Record<string, unknown>;
+    const orderId = response.orderID == null ? null : String(response.orderID);
+    const initialStatus = String(response.status ?? "");
+    const success = response.success !== false;
+    const takingAmount = finiteOrNull(response.takingAmount);
+    const makingAmount = finiteOrNull(response.makingAmount);
+    const initialFillCount = success && polymarketFilledStatus(initialStatus) ? takingAmount : 0;
+    const initialFillPrice = initialFillCount != null && initialFillCount > 0 && makingAmount != null
+      ? roundPrice(makingAmount / initialFillCount)
+      : null;
+    const initialResult: VenueOrderResult = {
+      venue: this.venue,
+      clientOrderId: context.clientOrderId,
+      orderId,
+      status: success
+        ? isExactFillCount(initialFillCount, context.size) ? "filled" : initialStatus || "live"
+        : initialStatus || "failed",
+      fillPrice: initialFillPrice,
+      fillCount: initialFillCount,
+      requestedAt: isoFromMs(requestedAt),
+      respondedAt: isoFromMs(Date.now()),
+      error: success
+        ? null
+        : `polymarket GTC limit order rejected: ${sanitizeError(response.errorMsg ?? response.error ?? "unknown")}`,
+      fee: null,
+      exchangeTimestampMs: null,
+      signMs,
+      metadata: {
+        orderPlacementMode: "parallel_limit_rest",
+        limitRestMs: limitRestMs(context),
+        polymarketOrderType: OrderType.GTC,
+        polymarketInitialStatus: initialStatus || (success ? "unknown" : "rejected"),
+        polymarketInitialFillCount: initialFillCount,
+        polymarketLimitPrice: worstPrice,
+        polymarketRequestedShares: context.size,
+        polymarketTakingAmount: takingAmount,
+        polymarketMakingAmount: makingAmount,
+        polymarketSuccess: success,
+      },
+    };
+    if (!success || isExactFillCount(initialFillCount, context.size)) return initialResult;
+    return this.finalizePolymarketLimitRestOrder(leg, context, client, initialResult);
+  }
+
+  private async finalizePolymarketLimitRestOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    client: PolymarketClobLike,
+    initialResult: VenueOrderResult,
+  ): Promise<VenueOrderResult> {
+    const restMs = limitRestMs(context);
+    const orderId = initialResult.orderId;
+    if (restMs > 0) await waitMs(restMs);
+
+    let beforeCancel: Record<string, unknown> | null = null;
+    let beforeCancelError: string | null = null;
+    if (orderId && client.getOrder) {
+      try {
+        beforeCancel = recordOrNull(await withMutedPolymarketClientLogs(() => client.getOrder!(orderId)));
+      } catch (error) {
+        beforeCancelError = sanitizeError(error);
+      }
+    }
+    const beforeFillCount = finiteOrNull(beforeCancel?.size_matched);
+    if (isExactFillCount(beforeFillCount, context.size)) {
+      return this.resultFromPolymarketFinalState(leg, context, client, initialResult, beforeCancel, {
+        cancelStatus: "not_needed",
+        finalFillSource: "pre_cancel_poll",
+        beforeCancelError,
+      });
+    }
+
+    let cancelStatus = "skipped_no_order_id";
+    let cancelError: string | null = null;
+    if (orderId) {
+      if (!client.cancelOrder) {
+        cancelStatus = "cancel_unavailable";
+      } else {
+        try {
+          await withMutedPolymarketClientLogs(() => client.cancelOrder!({ orderID: orderId }));
+          cancelStatus = "canceled";
+        } catch (error) {
+          cancelStatus = "cancel_failed";
+          cancelError = sanitizeError(error);
+        }
+      }
+    }
+
+    let finalOrder: Record<string, unknown> | null = null;
+    let finalFetchError: string | null = null;
+    if (orderId && client.getOrder) {
+      try {
+        finalOrder = recordOrNull(await withMutedPolymarketClientLogs(() => client.getOrder!(orderId)));
+      } catch (error) {
+        finalFetchError = sanitizeError(error);
+      }
+    }
+    return this.resultFromPolymarketFinalState(leg, context, client, initialResult, finalOrder ?? beforeCancel, {
+      cancelStatus,
+      cancelError,
+      beforeCancelError,
+      finalFetchError,
+      finalFillSource: finalOrder ? "post_cancel_poll" : beforeCancel ? "pre_cancel_poll" : "initial_rest_response",
+    });
+  }
+
+  private async resultFromPolymarketFinalState(
+    _leg: ArbLeg,
+    context: LiveOrderContext,
+    client: PolymarketClobLike,
+    initialResult: VenueOrderResult,
+    finalOrder: Record<string, unknown> | null,
+    metadata: {
+      cancelStatus: string;
+      cancelError?: string | null;
+      beforeCancelError?: string | null;
+      finalFetchError?: string | null;
+      finalFillSource: string;
+    },
+  ): Promise<VenueOrderResult> {
+    const orderId = initialResult.orderId;
+    let openOrders: Array<Record<string, unknown>> = [];
+    let openOrdersError: string | null = null;
+    if (orderId && client.getOpenOrders) {
+      try {
+        openOrders = (await withMutedPolymarketClientLogs(() => client.getOpenOrders!({ id: orderId }, true)))
+          .map((order) => recordOrNull(order))
+          .filter((order): order is Record<string, unknown> => order != null);
+      } catch (error) {
+        openOrdersError = sanitizeError(error);
+      }
+    }
+    let trades: Array<Record<string, unknown>> = [];
+    let tradesError: string | null = null;
+    if (orderId && client.getTrades) {
+      try {
+        trades = (await withMutedPolymarketClientLogs(() => client.getTrades!({ asset_id: String(finalOrder?.asset_id ?? "") || undefined }, true)))
+          .map((trade) => recordOrNull(trade))
+          .filter((trade): trade is Record<string, unknown> => trade != null);
+      } catch (error) {
+        tradesError = sanitizeError(error);
+      }
+    }
+    const tradeFill = orderId ? polymarketTradeFill(trades, orderId) : { fillCount: null, fillPrice: null, tradeCount: 0 };
+    const orderFillCount = finiteOrNull(finalOrder?.size_matched);
+    const fillCount = orderFillCount ?? tradeFill.fillCount ?? initialResult.fillCount;
+    const fillPrice = tradeFill.fillPrice ?? finiteOrNull(finalOrder?.price) ?? initialResult.fillPrice;
+    const finalStatus = String(finalOrder?.status ?? "").trim() || (metadata.cancelStatus === "canceled" ? "canceled" : "unknown");
+    const exactFill = isExactFillCount(fillCount, context.size);
+    const hasOpenOrder = openOrders.length > 0 || ["live", "open", "delayed"].includes(finalStatus.toLowerCase());
+    const cancelVerified = metadata.cancelStatus === "canceled" || metadata.cancelStatus === "not_needed";
+    const status = exactFill
+      ? "filled"
+      : !cancelVerified || hasOpenOrder || openOrdersError
+        ? "unknown"
+        : finalStatus;
+    const error = exactFill
+      ? null
+      : status === "unknown"
+        ? `polymarket limit_rest cancellation/final state unverified${metadata.cancelError ? `: ${metadata.cancelError}` : ""}${openOrdersError ? `; open-order query failed: ${openOrdersError}` : ""}${metadata.finalFetchError ? `; final query failed: ${metadata.finalFetchError}` : ""}`
+        : `polymarket limit_rest order canceled without exact fill (${exactFillError(this.venue, fillCount, context.size) ?? "final fill did not match requested size"})`;
+    return {
+      ...initialResult,
+      status,
+      fillPrice,
+      fillCount,
+      respondedAt: isoFromMs(Date.now()),
+      error,
+      metadata: {
+        ...initialResult.metadata,
+        polymarketFinalStatus: finalStatus,
+        polymarketFinalFillCount: fillCount,
+        polymarketFinalFillSource: metadata.finalFillSource,
+        polymarketCancelStatus: metadata.cancelStatus,
+        polymarketCancelError: metadata.cancelError ?? null,
+        polymarketBeforeCancelError: metadata.beforeCancelError ?? null,
+        polymarketFinalFetchError: metadata.finalFetchError ?? null,
+        polymarketOpenOrderCount: openOrders.length,
+        polymarketOpenOrdersError: openOrdersError,
+        polymarketTradeCount: tradeFill.tradeCount,
+        polymarketTradesError: tradesError,
+      },
+    };
+  }
+
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     if (!leg.tokenId) return "Polymarket token id is required for live trading";
     const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
@@ -765,6 +1212,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
       polymarketRequiredCollateral: requiredCollateral,
       polymarketOrderBook: book,
     };
+    if (isLimitRestMode(context)) return null;
     if (this.config.livePolymarketPresignEnabled) {
       try {
         const signStartedAt = Date.now();

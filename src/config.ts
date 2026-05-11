@@ -1,3 +1,5 @@
+import type { LiveOrderPlacementMode } from "./types";
+
 export interface AppConfig {
   port: number;
   databaseUrl: string;
@@ -43,6 +45,8 @@ export interface AppConfig {
   liveOrderTimeoutMs: number;
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
+  liveOrderPlacementMode: LiveOrderPlacementMode;
+  liveAggressiveLimitRestMs: number;
   liveParallelExecutionEnabled: boolean;
   liveHotPathEnabled: boolean;
   liveHotPathCacheMaxAgeMs: number;
@@ -92,6 +96,12 @@ function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]):
   const parsed = raw.split(",").map((part) => Number(part.trim()));
   if (parsed.some((value) => !Number.isFinite(value))) throw new Error(`${key} must be a comma-separated list of numbers`);
   return parsed;
+}
+
+function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMode {
+  const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "parallel_limit_rest").toLowerCase();
+  if (value === "parallel_fok" || value === "parallel_limit_rest") return value;
+  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok or parallel_limit_rest");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -145,6 +155,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
     liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
     liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),
+    liveOrderPlacementMode: envLiveOrderPlacementMode(env),
+    liveAggressiveLimitRestMs: envNumber(env, "LIVE_AGGRESSIVE_LIMIT_REST_MS", 500),
     liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", true),
     liveHotPathEnabled: envBoolean(env, "LIVE_HOT_PATH_ENABLED", true),
     liveHotPathCacheMaxAgeMs: envNumber(env, "LIVE_HOT_PATH_CACHE_MAX_AGE_MS", 5_000),

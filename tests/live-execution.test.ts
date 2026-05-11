@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { AssetType, OrderType, Side, type BalanceAllowanceResponse, type SignedOrder } from "@polymarket/clob-client-v2";
 import type { AppConfig } from "../src/config";
 import { loadConfig } from "../src/config";
@@ -9,6 +10,7 @@ import {
   buildKalshiV2OrderBody,
   checkPolymarketGeoblock,
   deriveOrCreatePolymarketApiCreds,
+  KalshiOrderClient,
   polymarketApiCredsFromConfig,
   PolymarketOrderClient,
   type LiveOrderContext,
@@ -22,6 +24,28 @@ import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner
 import type { ArbLeg, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "../src/execution/venue-confirmations";
 import { contract } from "./helpers";
+
+const { privateKey: kalshiTestPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const kalshiTestPrivateKeyPem = kalshiTestPrivateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+async function withKalshiEnv<T>(operation: () => Promise<T>): Promise<T> {
+  const previousKeyId = process.env.KALSHI_API_KEY_ID;
+  const previousPrivateKey = process.env.KALSHI_PRIVATE_KEY;
+  const previousPrivateKeyB64 = process.env.KALSHI_PRIVATE_KEY_B64;
+  process.env.KALSHI_API_KEY_ID = "test-key";
+  process.env.KALSHI_PRIVATE_KEY = kalshiTestPrivateKeyPem;
+  delete process.env.KALSHI_PRIVATE_KEY_B64;
+  try {
+    return await operation();
+  } finally {
+    if (previousKeyId == null) delete process.env.KALSHI_API_KEY_ID;
+    else process.env.KALSHI_API_KEY_ID = previousKeyId;
+    if (previousPrivateKey == null) delete process.env.KALSHI_PRIVATE_KEY;
+    else process.env.KALSHI_PRIVATE_KEY = previousPrivateKey;
+    if (previousPrivateKeyB64 == null) delete process.env.KALSHI_PRIVATE_KEY_B64;
+    else process.env.KALSHI_PRIVATE_KEY_B64 = previousPrivateKeyB64;
+  }
+}
 
 function config(input: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -69,6 +93,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderTimeoutMs: 2_500,
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,
+    liveOrderPlacementMode: "parallel_limit_rest",
+    liveAggressiveLimitRestMs: 500,
     liveParallelExecutionEnabled: false,
     liveHotPathEnabled: false,
     liveHotPathCacheMaxAgeMs: 5_000,
@@ -276,6 +302,95 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
   assert.equal(no.side, "ask");
   assert.equal(no.price, "0.4900");
   assert.equal("order_group_id" in no, false);
+
+  const limitRest = buildKalshiV2OrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-LIMIT",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-limit",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "parallel_limit_rest",
+    limitRestMs: 500,
+  });
+  assert.equal(limitRest.time_in_force, "good_till_canceled");
+});
+
+test("Kalshi order client uses aggressive GTC limit and cancels unfilled remainder", async () => {
+  const calls: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
+  const responses: Array<Record<string, unknown>> = [
+    {
+      order: {
+        order_id: "kalshi-order",
+        client_order_id: "client",
+        status: "resting",
+        fill_count: "0",
+        yes_price_dollars: "0.4100",
+      },
+    },
+    {
+      order: {
+        order_id: "kalshi-order",
+        client_order_id: "client",
+        status: "resting",
+        fill_count: "0",
+        yes_price_dollars: "0.4100",
+      },
+    },
+    { order_id: "kalshi-order", client_order_id: "client", reduced_by: "1.00" },
+    {
+      order: {
+        order_id: "kalshi-order",
+        client_order_id: "client",
+        status: "canceled",
+        fill_count: "0",
+        yes_price_dollars: "0.4100",
+      },
+    },
+  ];
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    calls.push({
+      method: init?.method ?? "GET",
+      path: new URL(String(url)).pathname,
+      body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null,
+    });
+    return new Response(JSON.stringify(responses.shift() ?? {}), { status: 200 });
+  };
+  const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
+
+  const result = await withKalshiEnv(() => client.placeOrder({
+    venue: "kalshi",
+    contractId: "KXBTC15M-LIMIT",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "parallel_limit_rest",
+    limitRestMs: 0,
+  }));
+
+  assert.equal(calls[0]?.method, "POST");
+  assert.equal(calls[0]?.path, "/trade-api/v2/portfolio/events/orders");
+  assert.equal(calls[0]?.body?.time_in_force, "good_till_canceled");
+  assert.equal(calls[1]?.method, "GET");
+  assert.equal(calls[1]?.path, "/trade-api/v2/portfolio/orders/kalshi-order");
+  assert.equal(calls[2]?.method, "DELETE");
+  assert.equal(calls[2]?.path, "/trade-api/v2/portfolio/events/orders/kalshi-order");
+  assert.equal(calls[3]?.method, "GET");
+  assert.equal(calls[3]?.path, "/trade-api/v2/portfolio/orders/kalshi-order");
+  assert.equal(result.status, "canceled");
+  assert.equal(result.fillCount, 0);
+  assert.match(result.error ?? "", /canceled without exact fill/);
+  assert.equal(result.metadata?.kalshiCancelStatus, "canceled");
+  assert.equal(result.metadata?.kalshiFinalStatus, "canceled");
 });
 
 test("Polymarket order client builds a market FOK buy for the selected token", async () => {
@@ -337,6 +452,83 @@ test("Polymarket order client builds a market FOK buy for the selected token", a
   assert.equal(readiness.ready, true);
   assert.equal(readiness.balance, 10);
   assert.equal(readiness.allowance, 10);
+});
+
+test("Polymarket order client builds aggressive GTC limit and cancels unfilled remainder", async () => {
+  class FakeClob implements PolymarketClobLike {
+    createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
+    postedType: OrderType | undefined;
+    postOnly: boolean | undefined;
+    cancelCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      this.createdOrder = order;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(_order: SignedOrder, orderType?: OrderType, postOnly?: boolean): Promise<unknown> {
+      this.postedType = orderType;
+      this.postOnly = postOnly;
+      return { success: true, orderID: "poly-order", status: "live", takingAmount: "1", makingAmount: "0.41" };
+    }
+
+    async cancelOrder(): Promise<unknown> {
+      this.cancelCalls += 1;
+      return { canceled: ["poly-order"] };
+    }
+
+    async getOrder(): Promise<unknown> {
+      return { id: "poly-order", status: "canceled", size_matched: "0", price: "0.41", asset_id: "yes-token" };
+    }
+
+    async getOpenOrders(): Promise<unknown[]> {
+      return [];
+    }
+
+    async getTrades(): Promise<unknown[]> {
+      return [];
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new FakeClob();
+  const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
+  const result = await client.placeOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "parallel_limit_rest",
+    limitRestMs: 0,
+  });
+
+  assert.equal(fake.createdOrder?.tokenID, "yes-token");
+  assert.equal(fake.createdOrder?.price, 0.41);
+  assert.equal(fake.createdOrder?.size, 1);
+  assert.equal(fake.createdOrder?.side, Side.BUY);
+  assert.equal(fake.postedType, OrderType.GTC);
+  assert.equal(fake.postOnly, false);
+  assert.equal(fake.cancelCalls, 1);
+  assert.equal(result.status, "canceled");
+  assert.equal(result.fillCount, 0);
+  assert.match(result.error ?? "", /canceled without exact fill/);
+  assert.equal(result.metadata?.polymarketOrderType, OrderType.GTC);
+  assert.equal(result.metadata?.polymarketCancelStatus, "canceled");
 });
 
 test("Polymarket order client reuses fresh preflight readiness and orderbook data for placement", async () => {
@@ -1274,8 +1466,9 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   assert.equal(result.executionTimings?.polymarketRttMs, 15);
 });
 
-test("live executor defaults to parallel FOK and starts both venue orders concurrently after preflight", async () => {
+test("live executor defaults to parallel aggressive limit and starts both venue orders concurrently after preflight", async () => {
   assert.equal(loadConfig({}).liveParallelExecutionEnabled, true);
+  assert.equal(loadConfig({}).liveOrderPlacementMode, "parallel_limit_rest");
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -1294,11 +1487,13 @@ test("live executor defaults to parallel FOK and starts both venue orders concur
       return super.placeOrder(leg, context);
     }
   }
+  const kalshi = new ParallelClient("kalshi");
+  const polymarket = new ParallelClient("polymarket");
   const executor = new LiveExecutor(
     config({ liveOrderSize: 1, liveParallelExecutionEnabled: loadConfig({}).liveParallelExecutionEnabled, liveOrderTimeoutMs: 5_000 }),
     books,
-    new ParallelClient("kalshi"),
-    new ParallelClient("polymarket"),
+    kalshi,
+    polymarket,
     () => now,
   );
 
@@ -1307,11 +1502,36 @@ test("live executor defaults to parallel FOK and starts both venue orders concur
   releaseKalshi();
   const result = await execution;
 
-  assert.equal(result.executionStrategy, "parallel_fok");
+  assert.equal(result.executionStrategy, "parallel_limit_rest");
   assert.equal(result.action, "filled");
   assert.equal(result.executionTimings?.firstVenue, null);
-  assert.match(result.executionTimings?.firstVenueReason ?? "", /concurrently/);
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /aggressive limit orders submitted concurrently/);
   assert.deepEqual(starts.sort(), ["kalshi", "polymarket"]);
+  assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_limit_rest");
+  assert.equal(polymarket.placed[0]?.context.limitRestMs, 500);
+});
+
+test("live executor keeps parallel FOK available when configured", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 1, liveParallelExecutionEnabled: true, liveOrderPlacementMode: "parallel_fok" }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_fok");
+  assert.equal(result.action, "filled");
+  assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_fok");
 });
 
 test("live executor skips without submitting when preflight exceeds quote freshness window", async () => {
@@ -1366,10 +1586,60 @@ test("live executor locks parallel one-sided fills", async () => {
 
   const result = await executor.execute(candidate);
 
-  assert.equal(result.executionStrategy, "parallel_fok");
+  assert.equal(result.executionStrategy, "parallel_limit_rest");
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, true);
   assert.match(result.liveLockReason ?? "", /venue fill mismatch kalshi=5 polymarket=0/);
+  assert.equal(locks.engageCalls, 1);
+});
+
+test("live executor does not lock when both parallel limit orders cancel with zero fills", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveParallelExecutionEnabled: true }),
+    books,
+    new FakeVenueClient("kalshi", { status: "canceled", fillCount: 0, error: "kalshi limit_rest order canceled without exact fill" }),
+    new FakeVenueClient("polymarket", { status: "canceled", fillCount: 0, error: "polymarket limit_rest order canceled without exact fill" }),
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_limit_rest");
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.liveLockReason, null);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("live executor locks when aggressive limit cancellation cannot be verified", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveParallelExecutionEnabled: true }),
+    books,
+    new FakeVenueClient("kalshi", { status: "unknown", fillCount: 0, error: "kalshi limit_rest cancellation/final state unverified" }),
+    new FakeVenueClient("polymarket", { status: "canceled", fillCount: 0, error: "polymarket limit_rest order canceled without exact fill" }),
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_limit_rest");
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, false);
+  assert.match(result.liveLockReason ?? "", /timeout\/unknown/);
   assert.equal(locks.engageCalls, 1);
 });
 
@@ -1392,7 +1662,7 @@ test("live executor locks parallel Polymarket partial and overfills", async () =
 
     const result = await executor.execute(candidate);
 
-    assert.equal(result.executionStrategy, "parallel_fok");
+    assert.equal(result.executionStrategy, "parallel_limit_rest");
     assert.equal(result.action, "failed");
     assert.equal(result.partialFill, true);
     assert.match(result.liveLockReason ?? "", /venue fill mismatch|venue unexpected fill count/);

@@ -219,7 +219,9 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
-    executionStrategy: row.execution_strategy === "parallel_fok"
+    executionStrategy: row.execution_strategy === "parallel_limit_rest"
+      ? "parallel_limit_rest"
+      : row.execution_strategy === "parallel_fok"
       ? "parallel_fok"
       : row.execution_strategy === "parallel_canary"
         ? "parallel_canary"

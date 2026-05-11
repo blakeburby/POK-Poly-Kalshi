@@ -2699,7 +2699,7 @@ function SignalTape({
                     <div><span className="signal-label">Gate</span><strong>{formatCents(signal.threshold)}</strong></div>
                     <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
                     <div><span className="signal-label">Strategy</span><strong>{signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</strong></div>
-                    <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" ? "BOTH" : "--"}</strong></div>
+                    <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</strong></div>
                   </div>
 
                   {signal.risk ? (
@@ -2888,6 +2888,8 @@ function ExecutionControlsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Live Trading</span><strong className={snapshot.health.liveTrading ? "loss" : "profit"}>{snapshot.health.liveTrading ? "TRUE" : "FALSE"}</strong></div>
         <div><span>Order Size</span><strong>{execution ? formatDollars(execution.orderSize) : "--"}</strong></div>
         <div><span>Order Type</span><strong>{execution?.orderType ?? "--"}</strong></div>
+        <div><span>Placement</span><strong>{execution?.orderPlacementMode ? execution.orderPlacementMode.replace(/_/g, " ").toUpperCase() : "--"}</strong></div>
+        <div><span>Limit Rest</span><strong>{execution?.aggressiveLimitRestMs == null ? "--" : `${execution.aggressiveLimitRestMs}ms`}</strong></div>
         <div><span>Max Slippage</span><strong>{execution ? formatCents(execution.maxSlippageCents / 100) : "--"}</strong></div>
         <div><span>Protected Only</span><strong>{execution?.protectedOnly ? "YES" : "NO"}</strong></div>
         <div><span>Min Expiry</span><strong>{execution ? formatCompactTime(execution.minExpiryMs) : "--"}</strong></div>
@@ -3025,7 +3027,7 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <span>Edge {formatSignedCents(signal.projectedEdgeAfterFees ?? signal.guaranteedProfit)}</span>
             <span>Skew {signal.quoteSnapshot?.quoteSkewMs == null ? "--" : `${Math.round(signal.quoteSnapshot.quoteSkewMs)}ms`}</span>
             <span>Strategy {signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</span>
-            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" ? "BOTH" : "--"}</span>
+            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</span>
             <span>RTT K {signal.executionTimings?.kalshiRttMs == null ? "--" : `${Math.round(signal.executionTimings.kalshiRttMs)}ms`}</span>
             <span>Partial {signal.partialFill ? "YES" : "NO"}</span>
             <span>K {signal.kalshiFillCount ?? "--"} / P {signal.polymarketFillCount ?? "--"}</span>

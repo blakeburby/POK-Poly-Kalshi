@@ -54,6 +54,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderTimeoutMs: 2_500,
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,
+    liveOrderPlacementMode: "parallel_limit_rest",
+    liveAggressiveLimitRestMs: 500,
     liveParallelExecutionEnabled: false,
     liveHotPathEnabled: false,
     liveHotPathCacheMaxAgeMs: 5_000,
