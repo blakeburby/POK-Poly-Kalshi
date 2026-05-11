@@ -245,6 +245,14 @@ test("execution mode migration backfills live rows from real execution metadata"
   assert.match(sql, /CHECK \(execution_mode IN \('paper', 'live'\)\)/);
 });
 
+test("reconciliation resolution migration adds operator-resolved incident markers", () => {
+  const sql = readFileSync("src/db/migrations/011_add_live_reconciliation_resolution.sql", "utf8");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS reconciliation_resolved_at TIMESTAMPTZ/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS reconciliation_resolution_reason TEXT/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS reconciliation_resolution JSONB/);
+  assert.match(sql, /reconciliation_resolved_at IS NULL/);
+});
+
 test("signal persistence blocks live candidates with same-window exposure", async () => {
   const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
   const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
@@ -256,6 +264,79 @@ test("signal persistence blocks live candidates with same-window exposure", asyn
   assert.match(maxTradeReason ?? "", /max trades per window/);
   const legReason = await store.liveExposureBlockReason(candidate, 1_799_999_999_000, 2);
   assert.match(legReason ?? "", /Kalshi leg kalshi already has exposure/);
+});
+
+test("live reconciliation blocks unresolved partial fills but ignores operator-resolved incidents", async () => {
+  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
+  const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+
+  const unresolvedDb: Queryable = {
+    async query() {
+      return {
+        rows: [{
+          id: 14741,
+          action: "failed",
+          partial_fill: true,
+          kalshi_status: "no_order",
+          polymarket_status: "filled",
+          kalshi_fill_count: 0,
+          polymarket_fill_count: 5,
+          venue_confirmations: null,
+          reconciliation_resolved_at: null,
+        }],
+      };
+    },
+  };
+  const unresolved = await new SignalStore(unresolvedDb).liveReconciliationBlockReason(candidate, 1_799_999_999_000);
+  assert.match(unresolved ?? "", /signal #14741 is marked partial_fill/);
+
+  const resolvedDb: Queryable = {
+    async query() {
+      return {
+        rows: [{
+          id: 14741,
+          action: "failed",
+          partial_fill: true,
+          kalshi_status: "no_order",
+          polymarket_status: "filled",
+          kalshi_fill_count: 0,
+          polymarket_fill_count: 5,
+          venue_confirmations: null,
+          reconciliation_resolved_at: "2026-05-11T03:10:00.000Z",
+        }],
+      };
+    },
+  };
+  assert.equal(await new SignalStore(resolvedDb).liveReconciliationBlockReason(candidate, 1_799_999_999_000), null);
+});
+
+test("live reconciliation keeps unknown venue statuses blocking until resolved", async () => {
+  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
+  const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+
+  const db: Queryable = {
+    async query() {
+      return {
+        rows: [{
+          id: 14742,
+          action: "failed",
+          partial_fill: false,
+          kalshi_status: "unknown",
+          polymarket_status: "filled",
+          kalshi_fill_count: 0,
+          polymarket_fill_count: 0,
+          venue_confirmations: null,
+          reconciliation_resolved_at: null,
+        }],
+      };
+    },
+  };
+  const reason = await new SignalStore(db).liveReconciliationBlockReason(candidate, 1_799_999_999_000);
+  assert.match(reason ?? "", /signal #14742 has unresolved venue status/);
 });
 
 test("live execution lock store persists a restart-safe active lock", async () => {

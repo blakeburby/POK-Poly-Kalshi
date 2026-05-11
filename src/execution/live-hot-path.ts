@@ -14,6 +14,7 @@ function confirmedByUserStream(confirmations: VenueConfirmations | null | undefi
 
 function hasLiveExposure(signal: DashboardSignal): boolean {
   return Boolean(signal.executionGroupId)
+    && signal.reconciliationResolvedAt == null
     && (
       signal.action === "filled"
       || signal.partialFill === true
@@ -152,7 +153,7 @@ export class LiveExposureCache {
   async liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
     const staleReason = this.status().reason;
     if (staleReason) return staleReason;
-    const exposed = this.signals.filter((signal) => signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
+    const exposed = this.signals.filter((signal) => signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
     if (exposed.length >= maxTrades) {
       return `live max trades per window reached for expiry ${candidate.expiryMs}: ${exposed.length}/${maxTrades}`;
@@ -160,6 +161,7 @@ export class LiveExposureCache {
 
     const candidateKeys = new Set(liveLegKeys(candidate));
     for (const signal of exposed) {
+      if (signal.reconciliationResolvedAt != null) continue;
       for (const key of signalLegKeys(signal)) {
         if (candidateKeys.has(key)) return `live ${key} already has exposure in signal #${signal.id}`;
       }
@@ -170,8 +172,9 @@ export class LiveExposureCache {
   async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
     const staleReason = this.status().reason;
     if (staleReason) return `live reconciliation blocked: ${staleReason}`;
-    const exposed = this.signals.filter((signal) => signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
+    const exposed = this.signals.filter((signal) => signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
     for (const signal of exposed) {
+      if (signal.reconciliationResolvedAt != null) continue;
       const kalshiFillCount = signal.kalshiFillCount ?? 0;
       const polymarketFillCount = signal.polymarketFillCount ?? 0;
       const hasAnyFill = kalshiFillCount > 0 || polymarketFillCount > 0;

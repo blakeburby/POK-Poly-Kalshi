@@ -2199,6 +2199,20 @@ function fillIdForVenue(signal: DashboardSignal, venue: SignalVenue): string | n
   return venue === "kalshi" ? signal.kalshiFillId : signal.polymarketFillId;
 }
 
+function isResolvedPartialSignal(signal: DashboardSignal): boolean {
+  return signal.reconciliationResolvedAt != null;
+}
+
+function signalActionLabel(signal: DashboardSignal): string {
+  if (isResolvedPartialSignal(signal) && signal.partialFill) return "resolved partial";
+  return signal.action;
+}
+
+function signalActionClass(signal: DashboardSignal): string {
+  if (isResolvedPartialSignal(signal) && signal.partialFill) return "skipped";
+  return signal.action === "filled" ? "filled" : signal.action === "failed" ? "failed" : "skipped";
+}
+
 function SignalVenueRow({ signal, venue }: { signal: DashboardSignal; venue: SignalVenue }) {
   const leg = legForVenue(signal, venue);
   const fillPrice = fillPriceForVenue(signal, venue);
@@ -2672,7 +2686,7 @@ function SignalTape({
                 <div className="signal-card-details">
                   <div className="signal-card-header">
                     <div className="signal-title">
-                      <span className={`action action-${signal.action}`}>{signal.action}</span>
+                      <span className={`action action-${signalActionClass(signal)}`}>{signalActionLabel(signal)}</span>
                       <strong>Signal #{signal.id}</strong>
                       <span>{formatCountdown(signal.expiryMs, now)} to expiry</span>
                     </div>
@@ -2700,6 +2714,7 @@ function SignalTape({
                     <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
                     <div><span className="signal-label">Strategy</span><strong>{signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</strong></div>
                     <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</strong></div>
+                    <div><span className="signal-label">Reconciliation</span><strong className={isResolvedPartialSignal(signal) ? "warn" : signal.partialFill ? "loss" : "profit"}>{isResolvedPartialSignal(signal) ? "RESOLVED" : signal.partialFill ? "PARTIAL" : "NORMAL"}</strong></div>
                   </div>
 
                   {signal.risk ? (
@@ -2720,6 +2735,11 @@ function SignalTape({
                     <SignalVenueRow signal={signal} venue="polymarket" />
                   </div>
 
+                  {signal.reconciliationResolvedAt ? (
+                    <div className="signal-reconciliation">
+                      Manual reconciliation: {signal.reconciliationResolutionReason ?? "operator verified and resolved this live incident"} at {formatTimestamp(signal.reconciliationResolvedAt)}
+                    </div>
+                  ) : null}
                   {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
                 </div>
 

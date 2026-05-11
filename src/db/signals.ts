@@ -6,6 +6,7 @@ import type {
   ExecutionTimings,
   LegDirection,
   QuoteSnapshot,
+  ReconciliationResolution,
   SignalAction,
   SignalInsert,
   SignalUpdate,
@@ -75,6 +76,9 @@ interface DashboardSignalRow {
   risk_hedge: boolean | string | null;
   realized_guaranteed_profit: string | number | null;
   hedge_cap_price: string | number | null;
+  reconciliation_resolved_at: string | Date | null;
+  reconciliation_resolution_reason: string | null;
+  reconciliation_resolution: ReconciliationResolution | string | null;
 }
 
 interface LiveExposureRow {
@@ -91,6 +95,7 @@ interface LiveExposureRow {
   higher_direction: string;
   kalshi_fill_count: string | number | null;
   polymarket_fill_count: string | number | null;
+  reconciliation_resolved_at: string | Date | null;
 }
 
 interface LiveReconciliationRow {
@@ -102,6 +107,7 @@ interface LiveReconciliationRow {
   kalshi_fill_count: string | number | null;
   polymarket_fill_count: string | number | null;
   venue_confirmations: VenueConfirmations | string | null;
+  reconciliation_resolved_at: string | Date | null;
 }
 
 const SIGNAL_COLUMNS = `
@@ -116,7 +122,8 @@ const SIGNAL_COLUMNS = `
   kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
   kalshi_error, polymarket_error, partial_fill,
   quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations,
-  execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price
+  execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
+  reconciliation_resolved_at, reconciliation_resolution_reason, reconciliation_resolution
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -231,6 +238,9 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     riskHedge: booleanFrom(row.risk_hedge),
     realizedGuaranteedProfit: numberFrom(row.realized_guaranteed_profit),
     hedgeCapPrice: numberFrom(row.hedge_cap_price),
+    reconciliationResolvedAt: optionalDateString(row.reconciliation_resolved_at),
+    reconciliationResolutionReason: row.reconciliation_resolution_reason,
+    reconciliationResolution: jsonFromRow<ReconciliationResolution>(row.reconciliation_resolution),
     risk: buildSyntheticStructureRisk(lower, higher, threshold),
   };
 }
@@ -313,6 +323,9 @@ export class SignalStore {
           risk_hedge = $28,
           realized_guaranteed_profit = $29,
           hedge_cap_price = $30,
+          reconciliation_resolved_at = CASE WHEN $31::TEXT IS NULL THEN NULL ELSE $31::TIMESTAMPTZ END,
+          reconciliation_resolution_reason = $32,
+          reconciliation_resolution = CASE WHEN $33::TEXT IS NULL THEN NULL ELSE $33::JSONB END,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -347,6 +360,9 @@ export class SignalStore {
       update.riskHedge ?? false,
       update.realizedGuaranteedProfit ?? null,
       update.hedgeCapPrice ?? null,
+      update.reconciliationResolvedAt ?? null,
+      update.reconciliationResolutionReason ?? null,
+      update.reconciliationResolution == null ? null : JSON.stringify(update.reconciliationResolution),
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
@@ -368,9 +384,10 @@ export class SignalStore {
       SELECT id, pair_key, expiry_ms, kalshi_contract_id, polymarket_contract_id,
              lower_venue, lower_contract_id, lower_direction,
              higher_venue, higher_contract_id, higher_direction,
-             kalshi_fill_count, polymarket_fill_count
+             kalshi_fill_count, polymarket_fill_count, reconciliation_resolved_at
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
+        AND reconciliation_resolved_at IS NULL
         AND expiry_ms = $1
         AND expiry_ms > $2
         AND (
@@ -389,6 +406,7 @@ export class SignalStore {
     }
 
     for (const row of result.rows) {
+      if (row.reconciliation_resolved_at != null) continue;
       if (row.kalshi_contract_id === candidate.kalshiContractId) {
         return `live Kalshi leg ${candidate.kalshiContractId} already has exposure in signal #${row.id}`;
       }
@@ -420,6 +438,7 @@ export class SignalStore {
       FROM cross_venue_arb_signals
       WHERE execution_mode = 'live'
         AND execution_group_id IS NOT NULL
+        AND reconciliation_resolved_at IS NULL
         AND expiry_ms > $1
         AND (
           action = 'filled'
@@ -438,9 +457,10 @@ export class SignalStore {
   async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
     const result = await this.db.query<LiveReconciliationRow>(`
       SELECT id, action, partial_fill, kalshi_status, polymarket_status,
-             kalshi_fill_count, polymarket_fill_count, venue_confirmations
+             kalshi_fill_count, polymarket_fill_count, venue_confirmations, reconciliation_resolved_at
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
+        AND reconciliation_resolved_at IS NULL
         AND expiry_ms = $1
         AND expiry_ms > $2
         AND (
@@ -455,6 +475,7 @@ export class SignalStore {
     `, [candidate.expiryMs, now]);
 
     for (const row of result.rows) {
+      if (row.reconciliation_resolved_at != null) continue;
       const kalshiFillCount = numberFrom(row.kalshi_fill_count) ?? 0;
       const polymarketFillCount = numberFrom(row.polymarket_fill_count) ?? 0;
       const hasAnyFill = kalshiFillCount > 0 || polymarketFillCount > 0;

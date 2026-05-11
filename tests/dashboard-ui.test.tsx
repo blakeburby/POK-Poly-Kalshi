@@ -723,6 +723,50 @@ test("live dashboard signal tape excludes paper simulated fills", () => {
   assert.doesNotMatch(markup, /dry-run-poly-paper/);
 });
 
+test("live dashboard shows operator-resolved one-sided partials without labeling them as paired fills", () => {
+  const resolvedPartial = signal({
+    id: 14741,
+    action: "failed",
+    executionMode: "live",
+    failureReason: "kalshi private stream confirmation timeout",
+    partialFill: true,
+    kalshiFillId: null,
+    kalshiFillPrice: null,
+    kalshiFillCount: 0,
+    kalshiStatus: "no_order",
+    polymarketFillId: "0x0d72905edc4468f43cb3b3faa59af7211ca0175368f65f57c499adb08284bf6f",
+    polymarketFillPrice: 0.39,
+    polymarketFillCount: 5,
+    polymarketStatus: "filled",
+    reconciliationResolvedAt: "2026-05-11T03:10:00.000Z",
+    reconciliationResolutionReason: "manual recovery: verified Polymarket-only fill; Kalshi no-order/no-fill; market finalized",
+    reconciliationResolution: {
+      resolutionType: "settlement_reconciliation",
+      executionGroupId: "6d105c10-ec31-47f2-8a32-cc169c7f94ed",
+      polymarketOrderId: "0x0d72905edc4468f43cb3b3faa59af7211ca0175368f65f57c499adb08284bf6f",
+      kalshiClientOrderId: "kalshi-dca90cf2-7618-44c4-a169-512cb644644c",
+    },
+  });
+  const markup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        live: { recentSignals: [resolvedPartial], analytics: buildDashboardAnalytics([], snapshot().generatedAt) },
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /Signal #14741/);
+  assert.match(markup, /resolved partial/);
+  assert.match(markup, /Manual reconciliation:/);
+  assert.match(markup, /verified Polymarket-only fill/);
+  assert.match(markup, /39c/);
+  assert.match(markup, /0x0d7290/);
+  assert.doesNotMatch(markup, /action action-filled/);
+});
+
 test("paper dashboard signal tape excludes real live fills", () => {
   const liveSignal = signal({
     id: 88,

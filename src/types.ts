@@ -148,6 +148,16 @@ export interface VenueConfirmations {
   polymarket?: Record<string, unknown> | null;
 }
 
+export interface ReconciliationResolution {
+  resolvedBy?: string | null;
+  resolutionType?: "manual_recovery" | "settlement_reconciliation" | "operator_override" | string;
+  executionGroupId?: string | null;
+  polymarketOrderId?: string | null;
+  kalshiClientOrderId?: string | null;
+  evidence?: Record<string, unknown> | null;
+  notes?: string | null;
+}
+
 export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_limit_rest";
 
 export interface UserStreamVenueState {
@@ -210,6 +220,9 @@ export interface ExecutionResult {
   riskHedge?: boolean;
   realizedGuaranteedProfit?: number | null;
   hedgeCapPrice?: number | null;
+  reconciliationResolvedAt?: string | null;
+  reconciliationResolutionReason?: string | null;
+  reconciliationResolution?: ReconciliationResolution | null;
 }
 
 export interface SignalInsert {
@@ -249,6 +262,9 @@ export interface SignalUpdate {
   riskHedge?: boolean;
   realizedGuaranteedProfit?: number | null;
   hedgeCapPrice?: number | null;
+  reconciliationResolvedAt?: string | null;
+  reconciliationResolutionReason?: string | null;
+  reconciliationResolution?: ReconciliationResolution | null;
 }
 
 export interface DashboardSignal {
@@ -295,6 +311,9 @@ export interface DashboardSignal {
   riskHedge?: boolean;
   realizedGuaranteedProfit?: number | null;
   hedgeCapPrice?: number | null;
+  reconciliationResolvedAt?: string | null;
+  reconciliationResolutionReason?: string | null;
+  reconciliationResolution?: ReconciliationResolution | null;
   risk?: SyntheticStructureRisk;
 }
 
