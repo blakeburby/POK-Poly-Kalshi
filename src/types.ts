@@ -12,7 +12,7 @@ export type LiveRecoveryStatus =
   | "auto_resolved_paired_fill"
   | "risk_quarantined"
   | "operator_required";
-export type LiveRiskState = "trading" | "recovering" | "blocked" | "hard_locked" | "quarantined";
+export type LiveRiskState = "trading" | "recovering" | "blocked" | "hard_locked" | "quarantined" | "auto_hardlocks_disabled";
 
 export interface BookLevel {
   price: number;
@@ -428,6 +428,7 @@ export interface LiveExecutionReadiness {
   hotPathCacheMaxAgeMs?: number;
   polymarketPresignEnabled?: boolean;
   partialFillLockMode?: LivePartialFillLockMode;
+  autoHardlocksEnabled?: boolean;
   maxUnresolvedExposureDollars?: number;
   orderTimeoutMs: number;
   kalshiOrderGroupEnabled: boolean;
@@ -639,6 +640,7 @@ export interface DashboardSnapshot {
     liveFinalRecoveryTimeoutMs: number;
     liveFinalRecoveryPollMs: number;
     liveAutoResolveVerifiedIncidents: boolean;
+    liveAutoHardlocksEnabled: boolean;
     livePartialFillLockMode: LivePartialFillLockMode;
     liveMaxUnresolvedExposureDollars: number;
     liveReconcileBeforeTrade: boolean;

@@ -4238,6 +4238,13 @@ tbody tr:hover {
     var(--surface);
 }
 
+.live-operational-autoHardlocksDisabled {
+  border-color: rgba(255, 189, 82, 0.58);
+  background:
+    linear-gradient(120deg, rgba(255, 189, 82, 0.22), rgba(255, 95, 101, 0.08) 52%, transparent 72%),
+    var(--surface);
+}
+
 .live-operational-blocked {
   border-color: rgba(255, 95, 101, 0.48);
   background:

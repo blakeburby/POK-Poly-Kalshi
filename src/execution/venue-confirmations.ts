@@ -199,6 +199,8 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       streamReadiness: (now: number) => UserStreamReadiness;
       reconciliationStore?: LiveSignalReconciliationStore;
       maxUnresolvedExposureDollars?: number;
+      autoHardlocksEnabled?: boolean;
+      allowUnresolvedRisk?: boolean;
       liveLocks?: LiveExecutionLockWriter;
       now?: () => number;
     },
@@ -235,6 +237,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       quarantinedSignalCount: quarantine?.count ?? null,
       quarantineCapDollars: this.options.maxUnresolvedExposureDollars ?? null,
     };
+    if (reason && this.options.allowUnresolvedRisk) return null;
     return reason;
   }
 
@@ -330,6 +333,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     const reason = isFailureStatus(event.status)
       ? `live safety lock engaged: ${event.venue} user stream reported ${event.status}`
       : `live safety lock engaged: ${event.venue} user stream fill mismatch ${fillCount}/${expectedSize}`;
+    if (this.options.autoHardlocksEnabled === false) return;
     await this.options.liveLocks?.engageLock({
       reason,
       executionGroupId,

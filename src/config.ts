@@ -64,6 +64,7 @@ export interface AppConfig {
   liveFinalRecoveryTimeoutMs: number;
   liveFinalRecoveryPollMs: number;
   liveAutoResolveVerifiedIncidents: boolean;
+  liveAutoHardlocksEnabled: boolean;
   livePartialFillLockMode: LivePartialFillLockMode;
   liveMaxUnresolvedExposureDollars: number;
   liveReconcileBeforeTrade: boolean;
@@ -187,6 +188,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveFinalRecoveryTimeoutMs: envNumber(env, "LIVE_FINAL_RECOVERY_TIMEOUT_MS", 3_000),
     liveFinalRecoveryPollMs: envNumber(env, "LIVE_FINAL_RECOVERY_POLL_MS", 250),
     liveAutoResolveVerifiedIncidents: envBoolean(env, "LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS", true),
+    liveAutoHardlocksEnabled: envBoolean(env, "LIVE_AUTO_HARDLOCKS_ENABLED", true),
     livePartialFillLockMode: envLivePartialFillLockMode(env),
     liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),

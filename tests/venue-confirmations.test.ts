@@ -201,6 +201,37 @@ test("confirmation coordinator locks when a known Polymarket settlement later fa
   assert.equal(locks.lock?.executionGroupId, "group");
 });
 
+test("confirmation coordinator suppresses unsafe-event locks when auto-hardlocks are disabled", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    autoHardlocksEnabled: false,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
+  assert.equal((await pending).status, "confirmed");
+
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 5 });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(locks.lock, null);
+  assert.equal(store.events.some((event) => event.status === "failed"), true);
+});
+
 test("confirmation coordinator blocks preflight when reconciliation is dirty", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);
@@ -223,4 +254,30 @@ test("confirmation coordinator blocks preflight when reconciliation is dirty", a
 
   assert.match(reason ?? "", /private-stream confirmations/);
   assert.equal(coordinator.reconciliationReadiness().clean, false);
+});
+
+test("confirmation coordinator audits dirty reconciliation but allows preflight when unresolved risk is allowed", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const reconciliationStore: LiveSignalReconciliationStore = {
+    async liveReconciliationBlockReason(): Promise<string | null> {
+      return "live reconciliation blocked: signal #7 has venue fills without private-stream confirmations";
+    },
+  };
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: true,
+    allowUnresolvedRisk: true,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    reconciliationStore,
+    now: () => 1_800_000_000_200,
+  });
+
+  const reason = await coordinator.preflight({ expiryMs: 1_800_000_100_000 } as ArbCandidate, 1_800_000_000_200);
+
+  assert.equal(reason, null);
+  assert.equal(coordinator.reconciliationReadiness().clean, false);
+  assert.match(coordinator.reconciliationReadiness().reason ?? "", /private-stream confirmations/);
 });

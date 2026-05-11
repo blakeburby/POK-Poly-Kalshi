@@ -83,6 +83,8 @@ async function main(): Promise<void> {
     ),
     reconciliationStore: liveExposure,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
+    autoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+    allowUnresolvedRisk: !config.liveAutoHardlocksEnabled,
     liveLocks,
     now: Date.now,
   });
@@ -96,6 +98,7 @@ async function main(): Promise<void> {
     liveTrading: config.liveTrading,
     maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
+    liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
     liveExposure,
     liveLocks,
     deferLivePersistence: config.liveHotPathEnabled,
@@ -257,7 +260,12 @@ async function main(): Promise<void> {
       if (handled) return;
 
       if (request.url === "/health") {
-        sendJson(response, 200, { ok: true, liveTrading: config.liveTrading, arbEnabled: config.arbEnabled });
+        sendJson(response, 200, {
+          ok: true,
+          liveTrading: config.liveTrading,
+          arbEnabled: config.arbEnabled,
+          liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+        });
         return;
       }
       if (request.url === "/status") {

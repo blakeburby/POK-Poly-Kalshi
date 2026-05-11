@@ -284,6 +284,7 @@ export function dryRunExecutionReadiness(config: AppConfig, now = Date.now()): L
     hotPathCacheMaxAgeMs: config.liveHotPathCacheMaxAgeMs,
     polymarketPresignEnabled: config.livePolymarketPresignEnabled,
     partialFillLockMode: config.livePartialFillLockMode,
+    autoHardlocksEnabled: config.liveAutoHardlocksEnabled,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     orderTimeoutMs: config.liveOrderTimeoutMs,
     kalshiOrderGroupEnabled: config.liveKalshiOrderGroupEnabled && Boolean(config.liveKalshiOrderGroupId),
@@ -357,7 +358,14 @@ export class LiveExecutor implements ArbExecutor {
         quarantineCapDollars: baseReconciliation.quarantineCapDollars ?? this.config.liveMaxUnresolvedExposureDollars,
       }
       : baseReconciliation;
-    const riskState = this.liveRiskState(activeLock?.reason ?? null, reconciliation, userStreams.reason);
+    const effectiveActiveLock = this.config.liveAutoHardlocksEnabled ? activeLock : null;
+    const effectivePartialFillLocked = this.config.liveAutoHardlocksEnabled ? this.partialFillLocked : false;
+    const riskState = this.liveRiskState(
+      effectiveActiveLock?.reason ?? null,
+      reconciliation,
+      userStreams.reason,
+      effectivePartialFillLocked,
+    );
     return {
       mode: "live",
       liveTrading: this.config.liveTrading,
@@ -380,6 +388,7 @@ export class LiveExecutor implements ArbExecutor {
       hotPathCacheMaxAgeMs: this.config.liveHotPathCacheMaxAgeMs,
       polymarketPresignEnabled: this.config.livePolymarketPresignEnabled,
       partialFillLockMode: this.config.livePartialFillLockMode,
+      autoHardlocksEnabled: this.config.liveAutoHardlocksEnabled,
       maxUnresolvedExposureDollars: this.config.liveMaxUnresolvedExposureDollars,
       orderTimeoutMs: this.config.liveOrderTimeoutMs,
       kalshiOrderGroupEnabled: this.config.liveKalshiOrderGroupEnabled && Boolean(this.config.liveKalshiOrderGroupId),
@@ -387,10 +396,10 @@ export class LiveExecutor implements ArbExecutor {
       reconciliation,
       riskState: riskState.state,
       riskStateReason: riskState.reason,
-      partialFillLocked: this.partialFillLocked,
-      circuitBreakerLocked: Boolean(activeLock),
-      circuitBreakerReason: activeLock?.reason ?? null,
-      circuitBreaker: activeLock ?? null,
+      partialFillLocked: effectivePartialFillLocked,
+      circuitBreakerLocked: Boolean(effectiveActiveLock),
+      circuitBreakerReason: effectiveActiveLock?.reason ?? null,
+      circuitBreaker: effectiveActiveLock ?? null,
       kalshi,
       polymarket,
       lastAttempt: this.lastAttempt,
@@ -434,9 +443,11 @@ export class LiveExecutor implements ArbExecutor {
     const hotGateStartedAt = executeStartedAt;
     const guardFailure = protectedGuardFailure(candidate, this.config.minProfitDollars);
     if (guardFailure) return guardFailure;
-    const activeLock = await this.liveLocks?.getActiveLock();
+    const activeLock = this.config.liveAutoHardlocksEnabled ? await this.liveLocks?.getActiveLock() : null;
     if (activeLock) return failed(`live circuit breaker locked: ${activeLock.reason}`);
-    if (this.partialFillLocked) return liveLocked("live execution locked after unsafe fill; manual operator review required before trading resumes");
+    if (this.config.liveAutoHardlocksEnabled && this.partialFillLocked) {
+      return liveLocked("live execution locked after unsafe fill; manual operator review required before trading resumes");
+    }
     const monitorFailure = await this.confirmationPreflight(candidate);
     if (monitorFailure) return monitorFailure;
     const kalshiLeg = legForVenue(candidate, "kalshi");
@@ -694,9 +705,16 @@ export class LiveExecutor implements ArbExecutor {
     circuitBreakerReason: string | null,
     reconciliation: { reason: string | null; quarantinedExposureDollars?: number | null; quarantinedSignalCount?: number | null },
     userStreamReason: string | null,
+    partialFillLocked = this.partialFillLocked,
   ): { state: LiveRiskState; reason: string | null } {
+    if (!this.config.liveAutoHardlocksEnabled) {
+      return {
+        state: "auto_hardlocks_disabled",
+        reason: "temporary operator override: automatic hardlocks are disabled; unresolved risk will be audited but will not stop new candidates",
+      };
+    }
     if (circuitBreakerReason) return { state: "hard_locked", reason: circuitBreakerReason };
-    if (this.partialFillLocked) return { state: "hard_locked", reason: "in-memory partial-fill latch is set" };
+    if (partialFillLocked) return { state: "hard_locked", reason: "in-memory partial-fill latch is set" };
     if (reconciliation.reason) return { state: "blocked", reason: reconciliation.reason };
     if (userStreamReason) return { state: "blocked", reason: userStreamReason };
     const status = this.lastAttempt?.recoveryStatus ?? null;
@@ -1181,7 +1199,7 @@ export class LiveExecutor implements ArbExecutor {
       ?? (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
     const finalizationMs = metadata.finalizationMs ?? metadata.executionTimings?.totalMs ?? null;
     const autoResolution = this.autoResolution(recoveryStatus, executionGroupId, recoveryEvidence);
-    if (liveLockReason) this.partialFillLocked = true;
+    if (liveLockReason && this.config.liveAutoHardlocksEnabled) this.partialFillLocked = true;
     const venueFailureReason = [kalshi, polymarket]
       .filter((result) => result.error || (result.fillCount ?? 0) < this.config.liveOrderSize)
       .map((result) => `${result.venue}: ${result.error ?? result.status}`)
@@ -1253,7 +1271,7 @@ export class LiveExecutor implements ArbExecutor {
       reconciliationResolutionReason: metadata.reconciliationResolutionReason ?? autoResolution.reason,
       reconciliationResolution: metadata.reconciliationResolution ?? autoResolution.resolution,
     };
-    if (liveLockReason) {
+    if (liveLockReason && this.config.liveAutoHardlocksEnabled) {
       await this.liveLocks?.engageLock({
         reason: liveLockReason,
         executionGroupId,

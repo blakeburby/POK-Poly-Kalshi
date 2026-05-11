@@ -21,6 +21,7 @@ export interface ScannerOptions {
   liveTrading?: boolean;
   maxLiveTradesPerWindow?: number;
   maxUnresolvedExposureDollars?: number;
+  liveAutoHardlocksEnabled?: boolean;
   liveExposure?: {
     liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
     observeSignal?(signal: DashboardSignal): void;
@@ -94,7 +95,7 @@ export class CrossVenueArbScanner {
     try {
       const polymarket = this.books.getPolymarketContracts(this.options.staleBookMs, now);
       const kalshi = this.books.getKalshiContracts(this.options.staleBookMs, now);
-      if (this.options.liveTrading) {
+      if (this.options.liveTrading && this.options.liveAutoHardlocksEnabled !== false) {
         const activeLock = await this.options.liveLocks?.getActiveLock();
         if (activeLock) {
           this.lastCandidateCount = 0;
@@ -218,7 +219,7 @@ export class CrossVenueArbScanner {
       const updatedSignal = await this.signals.updateSignal(signalId, result);
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
       if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
-      if (result.liveLockReason) {
+      if (result.liveLockReason && this.options.liveAutoHardlocksEnabled !== false) {
         await this.options.liveLocks?.engageLock({
           reason: result.liveLockReason,
           sourceSignalId: signalId,
@@ -281,7 +282,7 @@ export class CrossVenueArbScanner {
         this.options.analytics?.recordSignal(updatedSignal);
         this.options.liveExposure?.observeSignal?.(updatedSignal);
       }
-      if (result.liveLockReason) {
+      if (result.liveLockReason && this.options.liveAutoHardlocksEnabled !== false) {
         await this.options.liveLocks?.engageLock({
           reason: result.liveLockReason,
           sourceSignalId: signalId,
@@ -345,6 +346,7 @@ export class CrossVenueArbScanner {
     for (const key of this.liveLegKeys(candidate)) {
       if (this.activeLiveLegs.has(key)) return `live leg already reserved in this scan: ${key}`;
     }
+    if (this.options.liveAutoHardlocksEnabled === false) return null;
     return await this.options.liveExposure?.liveExposureBlockReason(
       candidate,
       now,

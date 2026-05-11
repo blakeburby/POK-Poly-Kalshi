@@ -113,6 +113,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFinalRecoveryTimeoutMs: 3_000,
     liveFinalRecoveryPollMs: 250,
     liveAutoResolveVerifiedIncidents: true,
+    liveAutoHardlocksEnabled: true,
     livePartialFillLockMode: "lock",
     liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,
@@ -1539,6 +1540,8 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
 test("live executor defaults to parallel aggressive limit and starts both venue orders concurrently after preflight", async () => {
   assert.equal(loadConfig({}).liveParallelExecutionEnabled, true);
   assert.equal(loadConfig({}).liveOrderPlacementMode, "parallel_limit_rest");
+  assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
+  assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -1990,6 +1993,61 @@ test("live executor hard-locks partials when an open order cannot be ruled out",
   assert.equal(locks.engageCalls, 1);
 });
 
+test("live executor preserves lock reason but suppresses automatic hardlock when disabled", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    kalshi: { status: "timeout", reason: "kalshi stream did not confirm", fillCount: null, fillPrice: null },
+    polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.84 },
+  };
+  const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 6 };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        kalshiTimeoutRecoveryAttempted: true,
+        kalshiTimeoutRecoveryStatus: "not_found",
+      },
+    }),
+    new FakeVenueClient("polymarket", { status: "filled", fillCount: 5, fillPrice: 0.84 }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+    exposureReader,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(result.recoveryStatus, "operator_required");
+  assert.equal(locks.engageCalls, 0);
+  const readiness = await executor.readiness(now);
+  assert.equal(readiness.riskState, "auto_hardlocks_disabled");
+  assert.equal(readiness.partialFillLocked, false);
+  assert.equal(readiness.circuitBreakerLocked, false);
+});
+
 test("live executor does not lock when both parallel limit orders cancel with zero fills", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
@@ -2434,6 +2492,28 @@ test("live executor refuses to trade when a persistent circuit breaker is active
   const readiness = await executor.readiness(now);
   assert.equal(readiness.circuitBreakerLocked, true);
   assert.equal(readiness.circuitBreaker?.executionGroupId, "prior-group");
+});
+
+test("live executor ignores persistent circuit breakers while auto-hardlocks are disabled", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  await locks.engageLock({ reason: "manual incident lock", executionGroupId: "prior-group" });
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 5, liveAutoHardlocksEnabled: false }), books, kalshi, polymarket, () => now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
+  const readiness = await executor.readiness(now);
+  assert.equal(readiness.riskState, "auto_hardlocks_disabled");
+  assert.equal(readiness.circuitBreakerLocked, false);
 });
 
 test("live executor does not submit Polymarket when first Kalshi leg fails", async () => {

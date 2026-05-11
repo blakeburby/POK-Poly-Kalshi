@@ -67,6 +67,7 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_FINAL_RECOVERY_TIMEOUT_MS=3000`: extra post-submit finalization window for timeout/unknown venue responses before a persistent lock is engaged.
 - `LIVE_FINAL_RECOVERY_POLL_MS=250`: intended poll cadence for venue finalization/recovery checks.
 - `LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS=true`: allow the worker to auto-resolve authoritative no-exposure or exact paired-fill outcomes; unresolved one-sided exposure follows the partial-fill lock mode below.
+- `LIVE_AUTO_HARDLOCKS_ENABLED=true`: master switch for automatic persistent hard-lock creation. Keep `true` normally. Setting `false` is a temporary operator override that preserves audit metadata but allows trading through unresolved risk.
 - `LIVE_PARTIAL_FILL_LOCK_MODE=quarantine`: verified small partial fills/fill mismatches are marked as truthful quarantined risk instead of globally hard-locking the worker.
 - `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS=10`: maximum total unresolved quarantined one-sided exposure allowed before the worker falls back to a persistent hard lock.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block live entries when recent audit rows, private-stream confirmations, or persistent locks show unresolved drift.

@@ -46,7 +46,7 @@ type TradeDetailDirection = ArbCandidate["lower"]["direction"];
 type TradeDetailRegionKey = "below_lower" | "between_strikes" | "above_higher";
 type DashboardViewMode = "risk" | "raw" | "execution";
 export type DashboardKind = "live" | "paper";
-type LiveOperationalState = "clean" | "quarantined" | "blocked" | "degraded" | "standby";
+type LiveOperationalState = "clean" | "quarantined" | "autoHardlocksDisabled" | "blocked" | "degraded" | "standby";
 
 interface TradeDetailLeg {
   label: "A" | "B";
@@ -116,6 +116,7 @@ interface LiveOperationalStatus {
   quarantineCap: number | null;
   activeLockLabel: string;
   reason: string | null;
+  autoHardlocksEnabled: boolean;
 }
 
 export interface TradeRiskIntelligence {
@@ -232,7 +233,8 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
   const venuesReady = kalshiReady && polymarketReady;
   const streamsReady = execution?.userStreams?.ready ?? false;
   const reconciliationClean = execution?.reconciliation?.clean ?? false;
-  const hardLocked = Boolean(execution?.circuitBreakerLocked || execution?.partialFillLocked || execution?.riskState === "hard_locked");
+  const autoHardlocksEnabled = execution?.autoHardlocksEnabled ?? snapshot.health.liveAutoHardlocksEnabled ?? true;
+  const hardLocked = autoHardlocksEnabled && Boolean(execution?.circuitBreakerLocked || execution?.partialFillLocked || execution?.riskState === "hard_locked");
   const quarantineExposure = Math.max(
     execution?.reconciliation?.quarantinedExposureDollars ?? 0,
     execution?.lastAttempt?.riskQuarantineExposureDollars ?? 0,
@@ -241,8 +243,8 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
     ?? execution?.maxUnresolvedExposureDollars
     ?? snapshot.health.liveMaxUnresolvedExposureDollars
     ?? null;
-  const canTrade = liveArmed && venuesReady && streamsReady && reconciliationClean && !hardLocked;
-  const isClean = canTrade && quarantineExposure <= 0;
+  const canTrade = liveArmed && venuesReady && streamsReady && (reconciliationClean || !autoHardlocksEnabled) && !hardLocked;
+  const isClean = canTrade && autoHardlocksEnabled && quarantineExposure <= 0;
   const activeLockLabel = execution?.circuitBreakerLocked
     ? "Circuit breaker"
     : execution?.partialFillLocked
@@ -273,6 +275,28 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
       quarantineCap,
       activeLockLabel,
       reason,
+      autoHardlocksEnabled,
+    };
+  }
+
+  if (!autoHardlocksEnabled) {
+    return {
+      state: "autoHardlocksDisabled",
+      headline: "LIVE AUTO-HARDLOCKS DISABLED",
+      summary: "Temporary operator override is active: the worker can keep trading while unresolved risk is audited instead of hard-locking.",
+      pillState: "warn",
+      canTrade,
+      isClean: false,
+      liveArmed,
+      hardLocked,
+      venuesReady,
+      streamsReady,
+      reconciliationClean,
+      quarantineExposure,
+      quarantineCap,
+      activeLockLabel,
+      reason: reason ?? "automatic hardlocks disabled; unresolved risk allowed",
+      autoHardlocksEnabled,
     };
   }
 
@@ -293,6 +317,7 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
       quarantineCap,
       activeLockLabel,
       reason,
+      autoHardlocksEnabled,
     };
   }
 
@@ -313,6 +338,7 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
       quarantineCap,
       activeLockLabel,
       reason,
+      autoHardlocksEnabled,
     };
   }
 
@@ -333,6 +359,7 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
       quarantineCap,
       activeLockLabel,
       reason,
+      autoHardlocksEnabled,
     };
   }
 
@@ -352,6 +379,7 @@ function getLiveOperationalStatus(snapshot: DashboardSnapshot): LiveOperationalS
     quarantineCap,
     activeLockLabel,
     reason,
+    autoHardlocksEnabled,
   };
 }
 
@@ -3255,6 +3283,10 @@ function LiveOperationalPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <strong className={status.activeLockLabel === "None" ? "profit" : "loss"}>{status.activeLockLabel}</strong>
         </div>
         <div>
+          <span>Auto Hardlocks</span>
+          <strong className={status.autoHardlocksEnabled ? "profit" : "warn"}>{status.autoHardlocksEnabled ? "Enabled" : "Disabled"}</strong>
+        </div>
+        <div>
           <span>Quarantined Exposure</span>
           <strong className={status.quarantineExposure > 0 ? "warn" : "profit"}>{quarantineText}</strong>
         </div>
@@ -3291,6 +3323,8 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
   const riskState = execution?.riskState ?? "blocked";
   const riskStateLabel = riskState === "hard_locked"
     ? "HARD LOCKED"
+    : riskState === "auto_hardlocks_disabled"
+      ? "AUTO HARDLOCKS OFF"
     : riskState === "recovering"
       ? "RECOVERING"
       : riskState === "quarantined"
@@ -3298,7 +3332,7 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
         : riskState === "blocked"
           ? "BLOCKED"
           : "TRADING";
-  const riskStatePill = riskState === "trading" ? "live" : riskState === "recovering" || riskState === "quarantined" ? "warn" : "stale";
+  const riskStatePill = riskState === "trading" ? "live" : riskState === "recovering" || riskState === "quarantined" || riskState === "auto_hardlocks_disabled" ? "warn" : "stale";
   return (
     <section className="panel live-safety-compact" aria-label="Live execution safety state">
       <div>

@@ -73,6 +73,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFinalRecoveryTimeoutMs: 3_000,
     liveFinalRecoveryPollMs: 250,
     liveAutoResolveVerifiedIncidents: true,
+    liveAutoHardlocksEnabled: true,
     livePartialFillLockMode: "quarantine",
     liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,

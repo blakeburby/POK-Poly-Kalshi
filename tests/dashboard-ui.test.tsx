@@ -107,6 +107,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       ok: true,
       liveTrading: false,
       arbEnabled: true,
+      liveAutoHardlocksEnabled: true,
       minProfitDollars: 0.05,
       reentryIntervalMs: 15_000,
       staleBookMs: 10_000,
@@ -236,6 +237,7 @@ function liveExecution(input: Partial<NonNullable<DashboardSnapshot["execution"]
     hotPathCacheMaxAgeMs: 1_000,
     polymarketPresignEnabled: false,
     partialFillLockMode: "quarantine",
+    autoHardlocksEnabled: true,
     maxUnresolvedExposureDollars: 10,
     orderTimeoutMs: 2_500,
     kalshiOrderGroupEnabled: true,
@@ -383,6 +385,40 @@ test("live dashboard strict-clean panel shows tradable quarantine as not clean",
   assert.match(markup, /aria-label="Clean: No"/);
   assert.match(markup, /\$4.20 \/ \$10.00/);
   assert.match(markup, /Latest risk reason: trading with quarantined unresolved exposure 4.20 across 1 signal\(s\)/);
+});
+
+test("live dashboard shows temporary auto-hardlock disablement as tradable but not clean", () => {
+  const execution = liveExecution({
+    autoHardlocksEnabled: false,
+    riskState: "auto_hardlocks_disabled",
+    riskStateReason: "temporary operator override: automatic hardlocks are disabled",
+    reconciliation: {
+      ...liveExecution().reconciliation,
+      clean: false,
+      reason: "live reconciliation blocked: signal #7 has unresolved venue status",
+      quarantinedExposureDollars: 6.35,
+      quarantinedSignalCount: 2,
+      quarantineCapDollars: 10,
+    },
+  });
+  const markup = renderToStaticMarkup(
+    <DashboardTerminalView
+      dashboardKind="live"
+      dashboardName="POK Terminal"
+      snapshot={snapshot({
+        health: { ...snapshot().health, liveTrading: true, arbEnabled: true, liveAutoHardlocksEnabled: false },
+        execution,
+      })}
+      streamState="live"
+    />,
+  );
+
+  assert.match(markup, /LIVE AUTO-HARDLOCKS DISABLED/);
+  assert.match(markup, /aria-label="Can take real trades: Yes"/);
+  assert.match(markup, /aria-label="Clean: No"/);
+  assert.match(markup, /Auto Hardlocks/);
+  assert.match(markup, /Disabled/);
+  assert.match(markup, /AUTO HARDLOCKS OFF/);
 });
 
 test("live dashboard strict-clean panel blocks hard locks and degraded readiness", () => {

@@ -202,6 +202,78 @@ test("live hot-path scanner submits before live signal persistence", async () =>
   assert.deepEqual(order, ["execute", "insert", "update"]);
 });
 
+test("live hot-path scanner suppresses automatic lock writes when disabled", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesTokenId: "yes-token", updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
+  ]);
+
+  let lockCalls = 0;
+  let updated: ExecutionResult | null = null;
+  const scanner = new CrossVenueArbScanner(
+    books,
+    {
+      async insertSignal() {
+        return 1;
+      },
+      async updateSignal(_id, update) {
+        updated = update as ExecutionResult;
+        return undefined;
+      },
+    },
+    {
+      async execute(): Promise<ExecutionResult> {
+        return {
+          action: "failed",
+          failureReason: "live safety lock engaged: venue fill mismatch kalshi=5 polymarket=0",
+          kalshiFillId: "kalshi-order",
+          polymarketFillId: null,
+          kalshiFillPrice: 0.5,
+          polymarketFillPrice: null,
+          executionGroupId: "group",
+          partialFill: true,
+          liveLockReason: "live safety lock engaged: venue fill mismatch kalshi=5 polymarket=0",
+        };
+      },
+    },
+    new ReentryThrottle(15_000),
+    {
+      enabled: true,
+      minProfitDollars: 0.05,
+      staleBookMs: 10_000,
+      executionConcurrency: 1,
+      liveTrading: true,
+      deferLivePersistence: true,
+      liveAutoHardlocksEnabled: false,
+      liveLocks: {
+        async getActiveLock() {
+          return null;
+        },
+        async engageLock() {
+          lockCalls += 1;
+          throw new Error("should not engage lock");
+        },
+      },
+      liveExposure: {
+        async liveExposureBlockReason() {
+          throw new Error("should not check persisted exposure when auto-hardlocks are disabled");
+        },
+      },
+    },
+  );
+
+  const accepted = await scanner.scan(now);
+
+  assert.equal(accepted.length, 1);
+  await waitFor(() => updated != null);
+  assert.equal(updated?.liveLockReason, "live safety lock engaged: venue fill mismatch kalshi=5 polymarket=0");
+  assert.equal(lockCalls, 0);
+});
+
 test("live scanner limits canary execution to one candidate per expiry window", async () => {
   const books = new BookStore();
   const now = 1_800_000_000_000;
