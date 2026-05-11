@@ -4,7 +4,7 @@ import { loadConfig } from "../config";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { VenueOrderEventWriter } from "../db/venue-order-events";
 import { protectedCandidateBlockReason } from "../scanner/safety";
-import type { ArbCandidate, ArbLeg, BinaryContract, ExecutionResult, ExecutionTimings, LiveExecutionLastAttempt, LiveExecutionReadiness, QuoteSnapshot, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
+import type { ArbCandidate, ArbLeg, BinaryContract, ExecutionResult, ExecutionStrategy, ExecutionTimings, LiveExecutionLastAttempt, LiveExecutionReadiness, QuoteSnapshot, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
 import {
   failedVenueResult,
   generatedClientOrderId,
@@ -182,7 +182,7 @@ interface ExecutionMetadata {
   quoteSnapshot?: QuoteSnapshot | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
-  executionStrategy?: "sequential_hedge" | "parallel_canary";
+  executionStrategy?: ExecutionStrategy;
   riskHedge?: boolean;
   hedgeCapPrice?: number | null;
   hedgeFailureReason?: string | null;
@@ -411,13 +411,13 @@ export class LiveExecutor implements ArbExecutor {
           preflightStartedAt,
           preflightCompletedAt,
           firstVenue: null,
-          firstVenueReason: "parallel orders submitted concurrently",
+          firstVenueReason: "parallel FOK orders submitted concurrently",
           firstVenueVwap: null,
           hotGateStartedAt,
           hotGateCompletedAt,
         }),
         venueConfirmations,
-        executionStrategy: "parallel_canary",
+        executionStrategy: "parallel_fok",
         riskHedge: false,
       });
     }
@@ -795,6 +795,22 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
+  private attachRestMetadata(
+    confirmations: VenueConfirmations,
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+  ): VenueConfirmations {
+    const attach = (record: Record<string, unknown> | null | undefined, result: VenueOrderResult): Record<string, unknown> | null => {
+      if (!result.metadata) return record ?? null;
+      return { ...(record ?? {}), ...result.metadata };
+    };
+    return {
+      ...confirmations,
+      kalshi: attach(confirmations.kalshi, kalshi),
+      polymarket: attach(confirmations.polymarket, polymarket),
+    };
+  }
+
   private async resultFromVenueOrders(
     executionGroupId: string,
     kalshi: VenueOrderResult,
@@ -830,6 +846,19 @@ export class LiveExecutor implements ArbExecutor {
       realizedGuaranteedProfit == null
       || (!riskHedgeWithinLossCap && realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars)
     );
+    const fallbackVenueConfirmations: VenueConfirmations = {
+      kalshi: {
+        status: kalshi.status,
+        exchangeTimestampMs: kalshi.exchangeTimestampMs ?? null,
+        fee: kalshi.fee ?? null,
+      },
+      polymarket: {
+        status: polymarket.status,
+        exchangeTimestampMs: polymarket.exchangeTimestampMs ?? null,
+        fee: polymarket.fee ?? null,
+      },
+    };
+    const venueConfirmations = this.attachRestMetadata(metadata.venueConfirmations ?? fallbackVenueConfirmations, kalshi, polymarket);
     const liveLockReason = this.confirmationLockReason(metadata.venueConfirmations)
       ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
     if (liveLockReason) this.partialFillLocked = true;
@@ -880,18 +909,7 @@ export class LiveExecutor implements ArbExecutor {
       depthVwap: metadata.quoteSnapshot?.projectedPremium ?? null,
       projectedEdgeAfterFees: metadata.quoteSnapshot?.projectedEdgeAfterFees ?? null,
       executionTimings: metadata.executionTimings ?? null,
-      venueConfirmations: metadata.venueConfirmations ?? {
-        kalshi: {
-          status: kalshi.status,
-          exchangeTimestampMs: kalshi.exchangeTimestampMs ?? null,
-          fee: kalshi.fee ?? null,
-        },
-        polymarket: {
-          status: polymarket.status,
-          exchangeTimestampMs: polymarket.exchangeTimestampMs ?? null,
-          fee: polymarket.fee ?? null,
-        },
-      },
+      venueConfirmations,
       executionStrategy: metadata.executionStrategy ?? null,
       riskHedge: Boolean(metadata.riskHedge),
       realizedGuaranteedProfit,
@@ -916,6 +934,8 @@ export class LiveExecutor implements ArbExecutor {
           hedgeCapPrice: metadata.hedgeCapPrice ?? null,
           quoteSnapshot: metadata.quoteSnapshot ?? null,
           executionTimings: metadata.executionTimings ?? null,
+          kalshiRestMetadata: kalshi.metadata ?? null,
+          polymarketRestMetadata: polymarket.metadata ?? null,
         },
       });
     }

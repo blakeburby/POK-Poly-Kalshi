@@ -53,6 +53,7 @@ export interface VenueOrderResult {
   fee?: number | null;
   exchangeTimestampMs?: number | null;
   signMs?: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface VenueOrderClient {
@@ -68,7 +69,8 @@ export interface PolymarketClobLike {
   getTickSize?(tokenID: string): Promise<TickSize | string>;
   getNegRisk?(tokenID: string): Promise<boolean>;
   createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }, options: { tickSize: TickSize; negRisk?: boolean }): Promise<SignedOrder>;
-  postOrder(order: SignedOrder, orderType?: OrderType): Promise<unknown>;
+  createMarketOrder?(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType.FOK | OrderType.FAK; metadata?: string }, options: { tickSize: TickSize; negRisk?: boolean }): Promise<SignedOrder>;
+  postOrder(order: SignedOrder, orderType?: OrderType, postOnly?: boolean, deferExec?: boolean): Promise<unknown>;
   cancelOrder?(payload: { orderID: string }): Promise<unknown>;
   getBalanceAllowance(params?: { asset_type: AssetType; token_id?: string }): Promise<BalanceAllowanceResponse>;
   updateBalanceAllowance(params?: { asset_type: AssetType; token_id?: string }): Promise<void>;
@@ -389,6 +391,10 @@ function exactFillError(venue: Venue, fillCount: number | null, requestedSize: n
     : `${venue} filled ${fillCount} shares for requested exact size ${requestedSize}`;
 }
 
+function polymarketMarketBuySpend(context: LiveOrderContext): number {
+  return roundPrice(context.size * context.maxBuyPrice);
+}
+
 export async function resolvePolymarketApiCreds(config: AppConfig): Promise<{ creds: ApiKeyCreds; source: PolymarketCredentialsSource }> {
   if (!config.polymarketPrivateKey) throw new Error("POLYMARKET_PRIVATE_KEY is required for live trading");
   const account = privateKeyToAccount(normalizePrivateKey(config.polymarketPrivateKey));
@@ -644,6 +650,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       throw new Error(`Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`);
     }
 
+    const orderType = polymarketOrderType(this.config.polymarketOrderType);
+    const requestedSpend = polymarketMarketBuySpend(context);
+    const worstPrice = roundPrice(context.maxBuyPrice);
     const preflight = context.preflight;
     const preflightSignedOrderAgeMs = preflight?.polymarketSignedOrderCreatedAt == null
       ? Number.POSITIVE_INFINITY
@@ -652,12 +661,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
       && preflightSignedOrderAgeMs <= this.config.livePolymarketSignedOrderTtlMs
       ? preflight.polymarketSignedOrder
       : null;
+    if (!preflightSignedOrder && !client.createMarketOrder) {
+      throw new Error("Polymarket market FOK order creation is not supported by the configured CLOB client");
+    }
     const signStartedAt = Date.now();
-    const signedOrder = preflightSignedOrder ?? await client.createOrder({
+    const signedOrder = preflightSignedOrder ?? await client.createMarketOrder!({
       tokenID: tokenId,
-      price: roundPrice(context.maxBuyPrice),
-      size: context.size,
+      price: worstPrice,
+      amount: requestedSpend,
       side: Side.BUY,
+      orderType,
       metadata: metadataFromClientOrderId(context.clientOrderId),
     }, {
       tickSize: book.tick_size as TickSize,
@@ -666,21 +679,20 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const signMs = preflightSignedOrder
       ? preflight?.polymarketSignMs ?? 0
       : Math.max(0, Date.now() - signStartedAt);
-    // Polymarket FOK/FAK BUY orders are notional-based: if the market improves,
-    // a "5 share" canary can spend the whole max notional and receive many more
-    // shares. Use a marketable GTC limit order to cap the token amount, then
-    // cancel any unfilled remainder immediately.
-    const payload = await withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, OrderType.GTC));
+    const payload = await withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, orderType));
     const respondedAt = Date.now();
     const response = payload as Record<string, unknown>;
-    if (response.success === false) throw new Error(`Polymarket order failed: ${sanitizeError(response.errorMsg ?? response.error ?? "unknown")}`);
 
     const orderId = response.orderID == null ? null : String(response.orderID);
     const status = String(response.status ?? "");
-    if (orderId && !["matched", "filled"].includes(status.toLowerCase())) {
+    const success = response.success !== false;
+    const filledStatus = ["matched", "filled"].includes(status.toLowerCase());
+    let canceledOpenRemainder = false;
+    if (orderId && !filledStatus) {
       await withMutedPolymarketClientLogs(async () => {
         try {
           await client.cancelOrder?.({ orderID: orderId });
+          canceledOpenRemainder = true;
         } catch {
           // The executor will lock on non-exact fills; cancellation errors are
           // less useful than preserving the actual fill response.
@@ -688,16 +700,28 @@ export class PolymarketOrderClient implements VenueOrderClient {
       });
     }
 
-    const fillCount = finiteOrNull(response.takingAmount) ?? context.size;
+    const takingAmount = finiteOrNull(response.takingAmount);
     const makingAmount = finiteOrNull(response.makingAmount);
-    const fillPrice = makingAmount != null && fillCount != null && fillCount > 0 ? roundPrice(makingAmount / fillCount) : context.maxBuyPrice;
-    const fillError = exactFillError(this.venue, fillCount, context.size);
+    const fillCount = success && filledStatus ? takingAmount : 0;
+    const filledMakingAmount = success && filledStatus ? makingAmount : null;
+    const fillPrice = filledMakingAmount != null && fillCount != null && fillCount > 0 ? roundPrice(filledMakingAmount / fillCount) : null;
+    const responseError = sanitizeError(response.errorMsg ?? response.error ?? "unknown");
+    const fillError = !success
+      ? `polymarket ${orderType} order rejected: ${responseError}`
+      : filledStatus
+        ? exactFillError(this.venue, fillCount, context.size)
+        : `polymarket ${orderType} order status ${status || "unknown"} did not immediately fill expected ${context.size} shares${canceledOpenRemainder ? "; canceled open order/remainder" : ""}`;
+    const resultStatus = !success
+      ? status || "failed"
+      : !filledStatus
+        ? status || "unfilled"
+        : fillError ? "unexpected_fill_count" : String(response.status ?? ((fillCount ?? 0) >= context.size ? "filled" : "unfilled"));
     this.cachedReadiness = null;
     return {
       venue: this.venue,
       clientOrderId: context.clientOrderId,
       orderId,
-      status: fillError ? "unexpected_fill_count" : String(response.status ?? (fillCount >= context.size ? "filled" : "unfilled")),
+      status: resultStatus,
       fillPrice,
       fillCount,
       requestedAt: isoFromMs(requestedAt),
@@ -706,6 +730,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
       fee: null,
       exchangeTimestampMs: null,
       signMs,
+      metadata: {
+        polymarketOrderType: orderType,
+        polymarketFokStatus: status || (success ? "unknown" : "rejected"),
+        polymarketRequestedSpend: requestedSpend,
+        polymarketWorstPrice: worstPrice,
+        polymarketRequestedShares: context.size,
+        polymarketTakingAmount: takingAmount,
+        polymarketMakingAmount: makingAmount,
+        polymarketSuccess: success,
+      },
     };
   }
 
@@ -735,11 +769,14 @@ export class PolymarketOrderClient implements VenueOrderClient {
       try {
         const signStartedAt = Date.now();
         const { client } = await this.client();
-        const signedOrder = await client.createOrder({
+        if (!client.createMarketOrder) return "Polymarket market FOK order creation is not supported by the configured CLOB client";
+        const orderType = polymarketOrderType(this.config.polymarketOrderType);
+        const signedOrder = await client.createMarketOrder({
           tokenID: leg.tokenId,
           price: roundPrice(context.maxBuyPrice),
-          size: context.size,
+          amount: polymarketMarketBuySpend(context),
           side: Side.BUY,
+          orderType,
           metadata: metadataFromClientOrderId(context.clientOrderId),
         }, {
           tickSize: book.tick_size as TickSize,

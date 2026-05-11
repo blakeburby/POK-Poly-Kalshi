@@ -89,6 +89,7 @@ export class VenueOrderEventStore implements VenueOrderEventWriter {
         requestedAt: result.requestedAt,
         respondedAt: result.respondedAt,
         error: result.error,
+        metadata: result.metadata ?? null,
       },
     });
   }
@@ -126,6 +127,7 @@ export class VenueOrderEventHub implements VenueOrderEventWriter {
         requestedAt: result.requestedAt,
         respondedAt: result.respondedAt,
         error: result.error,
+        metadata: result.metadata ?? null,
       },
     });
   }

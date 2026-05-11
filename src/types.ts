@@ -147,6 +147,8 @@ export interface VenueConfirmations {
   polymarket?: Record<string, unknown> | null;
 }
 
+export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok";
+
 export interface UserStreamVenueState {
   enabled: boolean;
   connected: boolean;
@@ -203,7 +205,7 @@ export interface ExecutionResult {
   projectedEdgeAfterFees?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
-  executionStrategy?: "sequential_hedge" | "parallel_canary" | null;
+  executionStrategy?: ExecutionStrategy | null;
   riskHedge?: boolean;
   realizedGuaranteedProfit?: number | null;
   hedgeCapPrice?: number | null;
@@ -242,7 +244,7 @@ export interface SignalUpdate {
   projectedEdgeAfterFees?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
-  executionStrategy?: "sequential_hedge" | "parallel_canary" | null;
+  executionStrategy?: ExecutionStrategy | null;
   riskHedge?: boolean;
   realizedGuaranteedProfit?: number | null;
   hedgeCapPrice?: number | null;
@@ -288,7 +290,7 @@ export interface DashboardSignal {
   projectedEdgeAfterFees?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
-  executionStrategy?: "sequential_hedge" | "parallel_canary" | null;
+  executionStrategy?: ExecutionStrategy | null;
   riskHedge?: boolean;
   realizedGuaranteedProfit?: number | null;
   hedgeCapPrice?: number | null;

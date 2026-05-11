@@ -278,9 +278,9 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
   assert.equal("order_group_id" in no, false);
 });
 
-test("Polymarket order client builds an exact-size marketable buy for the selected token", async () => {
+test("Polymarket order client builds a market FOK buy for the selected token", async () => {
   class FakeClob implements PolymarketClobLike {
-    createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
+    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
     postedType: OrderType | undefined;
 
     async getOrderBook() {
@@ -288,7 +288,11 @@ test("Polymarket order client builds an exact-size marketable buy for the select
     }
 
     async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
-      this.createdOrder = order;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+      this.createdMarketOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
@@ -318,13 +322,16 @@ test("Polymarket order client builds an exact-size marketable buy for the select
     tokenId: "yes-token",
   }, { executionGroupId: "group", clientOrderId: "client", size: 1, maxBuyPrice: 0.41 });
 
-  assert.equal(fake.createdOrder?.tokenID, "yes-token");
-  assert.equal(fake.createdOrder?.price, 0.41);
-  assert.equal(fake.createdOrder?.size, 1);
-  assert.equal(fake.createdOrder?.side, Side.BUY);
-  assert.equal(fake.postedType, OrderType.GTC);
+  assert.equal(fake.createdMarketOrder?.tokenID, "yes-token");
+  assert.equal(fake.createdMarketOrder?.price, 0.41);
+  assert.equal(fake.createdMarketOrder?.amount, 0.41);
+  assert.equal(fake.createdMarketOrder?.side, Side.BUY);
+  assert.equal(fake.createdMarketOrder?.orderType, OrderType.FOK);
+  assert.equal(fake.postedType, OrderType.FOK);
   assert.equal(result.fillPrice, 0.41);
   assert.equal(result.fillCount, 1);
+  assert.equal(result.metadata?.polymarketRequestedSpend, 0.41);
+  assert.equal(result.metadata?.polymarketFokStatus, "filled");
 
   const readiness = await client.readiness();
   assert.equal(readiness.ready, true);
@@ -343,6 +350,10 @@ test("Polymarket order client reuses fresh preflight readiness and orderbook dat
     }
 
     async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
@@ -414,6 +425,10 @@ test("Polymarket hot-path preflight uses warmed readiness and metadata without n
     }
 
     async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
       this.createCalls += 1;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
@@ -483,6 +498,10 @@ test("Polymarket optional pre-sign stores signed order for hot-path placement", 
     }
 
     async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
       this.createCalls += 1;
       return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
     }
@@ -539,6 +558,10 @@ test("Polymarket expired pre-signed order falls back to live signing", async () 
     }
 
     async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
       this.createCalls += 1;
       return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
     }
@@ -587,7 +610,7 @@ test("Polymarket expired pre-signed order falls back to live signing", async () 
   assert.equal(fake.createCalls, 2);
 });
 
-test("Polymarket order client cancels open remainders and flags non-exact fills", async () => {
+test("Polymarket order client cancels open orders and does not treat live status as a fill", async () => {
   class FakeClob implements PolymarketClobLike {
     cancelCalls = 0;
 
@@ -596,6 +619,10 @@ test("Polymarket order client cancels open remainders and flags non-exact fills"
     }
 
     async createOrder(): Promise<SignedOrder> {
+      return { tokenId: "yes-token" } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(): Promise<SignedOrder> {
       return { tokenId: "yes-token" } as unknown as SignedOrder;
     }
 
@@ -627,10 +654,11 @@ test("Polymarket order client cancels open remainders and flags non-exact fills"
   }, { executionGroupId: "group", clientOrderId: "client", size: 5, maxBuyPrice: 0.23 });
 
   assert.equal(fake.cancelCalls, 1);
-  assert.equal(result.status, "unexpected_fill_count");
-  assert.equal(result.fillCount, 115);
-  assert.equal(result.fillPrice, 0.01);
-  assert.match(result.error ?? "", /filled 115 shares for requested exact size 5/);
+  assert.equal(result.status, "live");
+  assert.equal(result.fillCount, 0);
+  assert.equal(result.fillPrice, null);
+  assert.match(result.error ?? "", /status live did not immediately fill expected 5 shares/);
+  assert.match(result.error ?? "", /canceled open order/);
 });
 
 test("Polymarket direct API creds are preferred when all relayer fields are present", () => {
@@ -1246,7 +1274,7 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   assert.equal(result.executionTimings?.polymarketRttMs, 15);
 });
 
-test("live executor defaults to parallel canary and starts both venue orders concurrently after preflight", async () => {
+test("live executor defaults to parallel FOK and starts both venue orders concurrently after preflight", async () => {
   assert.equal(loadConfig({}).liveParallelExecutionEnabled, true);
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
@@ -1279,7 +1307,7 @@ test("live executor defaults to parallel canary and starts both venue orders con
   releaseKalshi();
   const result = await execution;
 
-  assert.equal(result.executionStrategy, "parallel_canary");
+  assert.equal(result.executionStrategy, "parallel_fok");
   assert.equal(result.action, "filled");
   assert.equal(result.executionTimings?.firstVenue, null);
   assert.match(result.executionTimings?.firstVenueReason ?? "", /concurrently/);
@@ -1338,11 +1366,38 @@ test("live executor locks parallel one-sided fills", async () => {
 
   const result = await executor.execute(candidate);
 
-  assert.equal(result.executionStrategy, "parallel_canary");
+  assert.equal(result.executionStrategy, "parallel_fok");
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, true);
   assert.match(result.liveLockReason ?? "", /venue fill mismatch kalshi=5 polymarket=0/);
   assert.equal(locks.engageCalls, 1);
+});
+
+test("live executor locks parallel Polymarket partial and overfills", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  for (const fillCount of [2, 6]) {
+    const books = new BookStore();
+    books.setPolymarketContracts([lower]);
+    books.setKalshiContracts([higher]);
+    const locks = new FakeLiveLockStore();
+    const executor = new LiveExecutor(
+      config({ liveOrderSize: 5, liveParallelExecutionEnabled: true }),
+      books,
+      new FakeVenueClient("kalshi", { fillCount: 5 }),
+      new FakeVenueClient("polymarket", { fillCount, status: "filled", fillPrice: 0.4 }),
+      () => now,
+      locks,
+    );
+
+    const result = await executor.execute(candidate);
+
+    assert.equal(result.executionStrategy, "parallel_fok");
+    assert.equal(result.action, "failed");
+    assert.equal(result.partialFill, true);
+    assert.match(result.liveLockReason ?? "", /venue fill mismatch|venue unexpected fill count/);
+    assert.equal(locks.engageCalls, 1);
+  }
 });
 
 test("live executor keeps immediate hedge flow and then requires private stream confirmations", async () => {

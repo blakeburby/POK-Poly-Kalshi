@@ -219,7 +219,13 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
-    executionStrategy: row.execution_strategy === "parallel_canary" ? "parallel_canary" : row.execution_strategy === "sequential_hedge" ? "sequential_hedge" : null,
+    executionStrategy: row.execution_strategy === "parallel_fok"
+      ? "parallel_fok"
+      : row.execution_strategy === "parallel_canary"
+        ? "parallel_canary"
+        : row.execution_strategy === "sequential_hedge"
+          ? "sequential_hedge"
+          : null,
     riskHedge: booleanFrom(row.risk_hedge),
     realizedGuaranteedProfit: numberFrom(row.realized_guaranteed_profit),
     hedgeCapPrice: numberFrom(row.hedge_cap_price),

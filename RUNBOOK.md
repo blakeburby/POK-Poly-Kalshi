@@ -42,7 +42,7 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `POLYMARKET_CHAIN_ID=137`: Polygon mainnet.
 - `POLYMARKET_CLOB_HOST=https://clob.polymarket.com`: official Polymarket CLOB host.
 - `POLYMARKET_GEOBLOCK_URL=https://polymarket.com/api/geoblock`: official worker-egress geoblock preflight. Unknown or blocked status makes Polymarket not ready.
-- `POLYMARKET_ORDER_TYPE=FOK`: retained for readiness/status; Polymarket live buys use exact-size marketable limits because CLOB FOK/FAK BUYs are notional-based.
+- `POLYMARKET_ORDER_TYPE=FOK`: Polymarket live buys use immediate market FOK with a worst-price limit. BUY amount is USDC spend, and exact share count is still validated after the REST/private-stream responses.
 - `LIVE_ORDER_SIZE=5`: first practical Polymarket BTC 15m live canary size because current CLOB markets commonly reject smaller orders with `min_order_size=5`.
 - `LIVE_MAX_SLIPPAGE_CENTS=1`: live preflight and limit-price buffer per buy leg.
 - `LIVE_MIN_EXPIRY_MS=120000`: production recommendation to skip entries too close to settlement.
