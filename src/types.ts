@@ -111,6 +111,7 @@ export interface QuoteSnapshotLeg {
   topAsk: number | null;
   worstAsk: number | null;
   vwap: number | null;
+  maxBuyPrice: number | null;
   depth: number;
   depthRequired: number;
   levelsConsumed: BookLevel[];
@@ -130,7 +131,12 @@ export interface QuoteSnapshot {
   polymarket: QuoteSnapshotLeg | null;
   projectedPremium: number | null;
   projectedEdge: number | null;
+  projectedPremiumAtLimit?: number | null;
+  projectedEdgeAtLimit?: number | null;
   projectedEdgeAfterFees: number | null;
+  takerPriceCushionCents?: number | null;
+  kalshiMaxBuyPrice?: number | null;
+  polymarketMaxBuyPrice?: number | null;
   minProfitDollars: number;
   failureReason: string | null;
 }
@@ -413,6 +419,7 @@ export interface LiveExecutionReadiness {
   orderSize: number;
   orderType: string;
   maxSlippageCents: number;
+  takerPriceCushionCents?: number;
   minExpiryMs: number;
   maxTradesPerWindow: number;
   collateralBufferDollars: number;
@@ -617,6 +624,7 @@ export interface DashboardSnapshot {
     reentryIntervalMs: number;
     staleBookMs: number;
     liveMaxTradesPerWindow: number;
+    liveTakerPriceCushionCents?: number;
     liveQuoteMaxAgeMs: number;
     liveQuoteSyncMaxSkewMs: number;
     liveMinBookDepthShares: number;

@@ -13,6 +13,7 @@ function safetyConfig(input: Partial<AppConfig> = {}): AppConfig {
       LIVE_ORDER_SIZE: "5",
       LIVE_MIN_BOOK_DEPTH_SHARES: "5",
       ARB_MIN_PROFIT_DOLLARS: "0.05",
+      LIVE_TAKER_PRICE_CUSHION_CENTS: "0",
       LIVE_QUOTE_MAX_AGE_MS: "750",
       LIVE_QUOTE_SYNC_MAX_SKEW_MS: "250",
     }),
@@ -89,7 +90,7 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and raw 
     polymarket: [{ ...poly, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }] }],
   }, config, now);
   assert.equal(noEdge.ok, false);
-  assert.match(noEdge.reason ?? "", /depth VWAP edge 0.0400 below threshold 0.0500/);
+  assert.match(noEdge.reason ?? "", /cushioned executable edge 0.0400 below threshold 0.0500/);
 });
 
 test("live quote quality uses raw VWAP edge without extra live edge buffers", () => {
@@ -125,7 +126,50 @@ test("live quote quality uses raw VWAP edge without extra live edge buffers", ()
   }, config, now);
   assert.equal(fourCentEdge.ok, false);
   assert.equal(fourCentEdge.snapshot.projectedEdge, 0.04);
-  assert.match(fourCentEdge.reason ?? "", /depth VWAP edge 0.0400 below threshold 0.0500/);
+  assert.match(fourCentEdge.reason ?? "", /cushioned executable edge 0.0400 below threshold 0.0500/);
+});
+
+test("live quote quality gates on cushioned executable edge and applies cushion to both venues", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveTakerPriceCushionCents: 2 });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.55,
+    noAskLevels: [{ price: 0.55, size: 5 }],
+    updatedAt: now,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const rawFiveCentEdge = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(rawFiveCentEdge.ok, false);
+  assert.equal(rawFiveCentEdge.snapshot.projectedEdge, 0.05);
+  assert.equal(rawFiveCentEdge.snapshot.projectedPremiumAtLimit, 0.99);
+  assert.equal(rawFiveCentEdge.snapshot.projectedEdgeAtLimit, 0.01);
+  assert.equal(rawFiveCentEdge.snapshot.projectedEdgeAfterFees, 0.01);
+  assert.equal(rawFiveCentEdge.kalshiMaxBuyPrice, 0.57);
+  assert.equal(rawFiveCentEdge.polymarketMaxBuyPrice, 0.42);
+  assert.match(rawFiveCentEdge.reason ?? "", /cushioned executable edge 0.0100 below threshold 0.0500/);
+
+  const rawNineCentEdge = evaluateLiveQuoteQuality(candidate, {
+    kalshi: [{ ...kalshi, noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 5 }] }],
+    polymarket: [poly],
+  }, config, now);
+  assert.equal(rawNineCentEdge.ok, true);
+  assert.equal(rawNineCentEdge.snapshot.projectedEdge, 0.09);
+  assert.equal(rawNineCentEdge.snapshot.projectedEdgeAfterFees, 0.05);
+  assert.equal(rawNineCentEdge.kalshiMaxBuyPrice, 0.53);
+  assert.equal(rawNineCentEdge.polymarketMaxBuyPrice, 0.42);
 });
 
 test("incident-shaped Kalshi 30 NO versus Polymarket 5 YES cannot pass live quote gates", () => {
@@ -154,5 +198,5 @@ test("incident-shaped Kalshi 30 NO versus Polymarket 5 YES cannot pass live quot
   assert.equal(result.snapshot.kalshi?.depth, 5);
   assert.equal(result.snapshot.polymarket?.depth, 5);
   assert.equal(result.snapshot.projectedPremium, 1.1);
-  assert.match(result.reason ?? "", /depth VWAP edge -0.1000 below threshold 0.0500/);
+  assert.match(result.reason ?? "", /cushioned executable edge -0.1000 below threshold 0.0500/);
 });

@@ -46,7 +46,8 @@ Live canary trading, still disabled unless `ARB_LIVE_TRADING=true`:
 - `LIVE_AGGRESSIVE_LIMIT_REST_MS=500`: maximum time an aggressive limit entry order may rest before cancellation/final validation.
 - `POLYMARKET_ORDER_TYPE=FOK`: used only when `LIVE_ORDER_PLACEMENT_MODE=parallel_fok`; Polymarket immediate market buys use FOK/FAK with a worst-price limit. BUY amount is USDC spend, and exact share count is still validated after the REST/private-stream responses.
 - `LIVE_ORDER_SIZE=5`: first practical Polymarket BTC 15m live canary size because current CLOB markets commonly reject smaller orders with `min_order_size=5`.
-- `LIVE_MAX_SLIPPAGE_CENTS=1`: live preflight and limit-price buffer per buy leg.
+- `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: shared live taker cushion per buy leg. The worker only enters when the worst-case cushioned edge still clears `ARB_MIN_PROFIT_DOLLARS`.
+- `LIVE_MAX_SLIPPAGE_CENTS=1`: legacy dry-run/status field; live capped entry prices use `LIVE_TAKER_PRICE_CUSHION_CENTS`.
 - `LIVE_MIN_EXPIRY_MS=120000`: production recommendation to skip entries too close to settlement.
 - `LIVE_MAX_TRADES_PER_WINDOW=1`: hard live canary cap per 15-minute expiry window.
 - `LIVE_COLLATERAL_BUFFER_DOLLARS=0.25`: extra Polymarket collateral required during fresh execution preflight.

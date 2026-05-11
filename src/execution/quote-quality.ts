@@ -112,6 +112,7 @@ function quoteLeg(
     topAsk,
     worstAsk: vwap?.worstAsk ?? null,
     vwap: vwap?.vwap ?? null,
+    maxBuyPrice: null,
     depth: vwap?.depth ?? bookLevels.reduce((sum, level) => sum + (finite(level.size) ? level.size : 0), 0),
     depthRequired,
     levelsConsumed: vwap?.levelsConsumed ?? [],
@@ -142,11 +143,10 @@ function quoteLeg(
     return { snapshot, reason: `${leg.venue} ${leg.direction} tick size changed within quote freshness window`, maxBuyPrice: null, adjustedLeg: null };
   }
 
-  const maxBuyPrice = leg.venue === "kalshi"
-    ? roundPrice(Math.min(1, vwap.worstAsk + config.liveMaxSlippageCents / 100))
-    : vwap.worstAsk;
+  const takerCushion = Math.max(0, config.liveTakerPriceCushionCents);
+  const maxBuyPrice = roundPrice(Math.min(1, vwap.worstAsk + takerCushion / 100));
   return {
-    snapshot,
+    snapshot: { ...snapshot, maxBuyPrice },
     reason: null,
     maxBuyPrice,
     adjustedLeg: { ...leg, ask: topAsk },
@@ -178,9 +178,13 @@ export function evaluateLiveQuoteQuality(
     ? roundPrice(kalshi.snapshot.vwap + polymarket.snapshot.vwap)
     : null;
   const projectedEdge = projectedPremium == null ? null : roundPrice(1 - projectedPremium);
-  const projectedEdgeAfterFees = projectedEdge;
+  const projectedPremiumAtLimit = kalshi.maxBuyPrice != null && polymarket.maxBuyPrice != null
+    ? roundPrice(kalshi.maxBuyPrice + polymarket.maxBuyPrice)
+    : null;
+  const projectedEdgeAtLimit = projectedPremiumAtLimit == null ? null : roundPrice(1 - projectedPremiumAtLimit);
+  const projectedEdgeAfterFees = projectedEdgeAtLimit;
   if (!failureReason && projectedEdgeAfterFees != null && projectedEdgeAfterFees + 1e-9 < config.minProfitDollars) {
-    failureReason = `depth VWAP edge ${projectedEdgeAfterFees.toFixed(4)} below threshold ${config.minProfitDollars.toFixed(4)}`;
+    failureReason = `cushioned executable edge ${projectedEdgeAfterFees.toFixed(4)} below threshold ${config.minProfitDollars.toFixed(4)}`;
   }
 
   const snapshot: QuoteSnapshot = {
@@ -190,7 +194,12 @@ export function evaluateLiveQuoteQuality(
     polymarket: polymarket.snapshot,
     projectedPremium,
     projectedEdge,
+    projectedPremiumAtLimit,
+    projectedEdgeAtLimit,
     projectedEdgeAfterFees,
+    takerPriceCushionCents: Math.max(0, config.liveTakerPriceCushionCents),
+    kalshiMaxBuyPrice: kalshi.maxBuyPrice,
+    polymarketMaxBuyPrice: polymarket.maxBuyPrice,
     minProfitDollars: config.minProfitDollars,
     failureReason,
   };

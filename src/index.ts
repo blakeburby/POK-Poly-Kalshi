@@ -264,6 +264,8 @@ async function main(): Promise<void> {
           ok: true,
           liveTrading: config.liveTrading,
           arbEnabled: config.arbEnabled,
+          liveOrderPlacementMode: config.liveOrderPlacementMode,
+          liveTakerPriceCushionCents: config.liveTakerPriceCushionCents,
           liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
         });
         return;

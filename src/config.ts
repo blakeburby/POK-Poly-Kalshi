@@ -36,6 +36,7 @@ export interface AppConfig {
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
   liveMaxSlippageCents: number;
+  liveTakerPriceCushionCents: number;
   liveMinExpiryMs: number;
   liveMaxTradesPerWindow: number;
   liveCollateralBufferDollars: number;
@@ -120,6 +121,7 @@ function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLock
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 1);
+  const liveMaxSlippageCents = envNumber(env, "LIVE_MAX_SLIPPAGE_CENTS", 1);
   return {
     port: envNumber(env, "PORT", 8080),
     databaseUrl: envString(env, "DATABASE_URL"),
@@ -159,7 +161,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FOK").toUpperCase() === "FAK" ? "FAK" : "FOK",
     liveOrderSize,
-    liveMaxSlippageCents: envNumber(env, "LIVE_MAX_SLIPPAGE_CENTS", 1),
+    liveMaxSlippageCents,
+    liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
     liveMinExpiryMs: envNumber(env, "LIVE_MIN_EXPIRY_MS", 30_000),
     liveMaxTradesPerWindow: envNumber(env, "LIVE_MAX_TRADES_PER_WINDOW", 1),
     liveCollateralBufferDollars: envNumber(env, "LIVE_COLLATERAL_BUFFER_DOLLARS", 0.25),

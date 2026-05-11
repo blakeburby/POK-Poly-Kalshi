@@ -3102,7 +3102,7 @@ function ExecutionControlsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div><span>Order Type</span><strong>{execution?.orderType ?? "--"}</strong></div>
         <div><span>Placement</span><strong>{execution?.orderPlacementMode ? execution.orderPlacementMode.replace(/_/g, " ").toUpperCase() : "--"}</strong></div>
         <div><span>Limit Rest</span><strong>{execution?.aggressiveLimitRestMs == null ? "--" : `${execution.aggressiveLimitRestMs}ms`}</strong></div>
-        <div><span>Max Slippage</span><strong>{execution ? formatCents(execution.maxSlippageCents / 100) : "--"}</strong></div>
+        <div><span>Taker Cushion</span><strong>{execution ? formatCents(((execution.takerPriceCushionCents ?? execution.maxSlippageCents) ?? 0) / 100) : "--"}</strong></div>
         <div><span>Protected Only</span><strong>{execution?.protectedOnly ? "YES" : "NO"}</strong></div>
         <div><span>Min Expiry</span><strong>{execution ? formatCompactTime(execution.minExpiryMs) : "--"}</strong></div>
         <div><span>Max/Window</span><strong>{execution?.maxTradesPerWindow ?? snapshot.health.liveMaxTradesPerWindow}</strong></div>

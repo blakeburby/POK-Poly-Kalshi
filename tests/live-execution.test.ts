@@ -85,6 +85,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
     liveMaxSlippageCents: 1,
+    liveTakerPriceCushionCents: 2,
     liveMinExpiryMs: 30_000,
     liveMaxTradesPerWindow: 1,
     liveCollateralBufferDollars: 0.25,
@@ -1337,7 +1338,7 @@ test("live executor fills only protected candidates after stale book and capped-
   assert.equal(result.partialFill, false);
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed.length, 1);
-  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.4);
+  assert.equal(polymarket.placed[0].context.maxBuyPrice, 0.42);
   assert.equal(kalshi.placed[0].context.maxBuyPrice, 0.61);
 });
 
@@ -2617,6 +2618,16 @@ test("live executor skips stale or below-threshold capped live books before plac
   const expensive = await expensiveExecutor.execute(candidate);
   assert.equal(expensive.action, "skipped");
   assert.match(expensive.failureReason ?? "", /below threshold|slippage cap/);
+
+  const rawEdgeOnlyBooks = new BookStore();
+  rawEdgeOnlyBooks.setPolymarketContracts([{ ...lower, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 999 }], updatedAt: now }]);
+  rawEdgeOnlyBooks.setKalshiContracts([{ ...higher, noAsk: 0.55, noAskLevels: [{ price: 0.55, size: 999 }], updatedAt: now }]);
+  const rawEdgeOnlyExecutor = new LiveExecutor(config(), rawEdgeOnlyBooks, kalshi, polymarket, () => now);
+  const rawEdgeOnly = await rawEdgeOnlyExecutor.execute(candidate);
+  assert.equal(rawEdgeOnly.action, "skipped");
+  assert.match(rawEdgeOnly.failureReason ?? "", /cushioned executable edge 0.0100 below threshold 0.0500/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
 });
 
 test("live executor rejects dead-zone candidates and locks after one-sided fills", async () => {
