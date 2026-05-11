@@ -1850,6 +1850,42 @@ test("live executor quarantines a bounded one-sided fill instead of hard-locking
   assert.equal(readiness.riskState, "quarantined");
 });
 
+test("live executor readiness surfaces persisted quarantined exposure after restart", async () => {
+  const now = 1_799_999_900_000;
+  const { lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const exposureReader = {
+    unresolvedRiskQuarantineExposureDollars: async () => 4.2,
+    liveRiskQuarantineStatus: async () => ({ total: 4.2, count: 1 }),
+  };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+    }),
+    books,
+    new FakeVenueClient("kalshi"),
+    new FakeVenueClient("polymarket"),
+    () => now,
+    new FakeLiveLockStore(),
+    undefined,
+    new FakeConfirmationMonitor(),
+    exposureReader,
+  );
+
+  const readiness = await executor.readiness(now);
+
+  assert.equal(readiness.riskState, "quarantined");
+  assert.equal(readiness.reconciliation.quarantinedExposureDollars, 4.2);
+  assert.equal(readiness.reconciliation.quarantinedSignalCount, 1);
+  assert.match(readiness.riskStateReason ?? "", /trading with quarantined unresolved exposure 4.20/);
+});
+
 test("live executor hard-locks quarantined fills when exposure cap would be exceeded", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);

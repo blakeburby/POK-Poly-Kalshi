@@ -234,6 +234,7 @@ interface ExecutionMetadata {
 
 export interface RiskQuarantineExposureReader {
   unresolvedRiskQuarantineExposureDollars(): Promise<number>;
+  liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
 }
 
 interface RiskQuarantineDecision {
@@ -326,10 +327,13 @@ export class LiveExecutor implements ArbExecutor {
   }
 
   async readiness(now = this.now()): Promise<LiveExecutionReadiness> {
-    const [kalshi, polymarket, activeLock] = await Promise.all([
+    const [kalshi, polymarket, activeLock, quarantineStatus] = await Promise.all([
       this.kalshiClient.readiness(now),
       this.polymarketClient.readiness(now),
       this.liveLocks?.getActiveLock() ?? Promise.resolve(null),
+      this.quarantineExposureReader?.liveRiskQuarantineStatus?.()
+        ?? this.quarantineExposureReader?.unresolvedRiskQuarantineExposureDollars().then((total) => ({ total, count: total > 0 ? 1 : 0 }))
+        ?? Promise.resolve(null),
     ]);
     const userStreams = this.confirmationMonitor?.userStreamReadiness(now)
       ?? buildUserStreamReadiness(
@@ -339,12 +343,20 @@ export class LiveExecutor implements ArbExecutor {
         undefined,
         now,
       );
-    const reconciliation = this.confirmationMonitor?.reconciliationReadiness(now)
+    const baseReconciliation = this.confirmationMonitor?.reconciliationReadiness(now)
       ?? defaultReconciliationReadiness(
         this.config.liveReconcileBeforeTrade,
         null,
         this.config.liveUserStreamsEnabled ? "live reconciliation monitor is not configured" : null,
       );
+    const reconciliation = quarantineStatus
+      ? {
+        ...baseReconciliation,
+        quarantinedExposureDollars: baseReconciliation.quarantinedExposureDollars ?? quarantineStatus.total,
+        quarantinedSignalCount: baseReconciliation.quarantinedSignalCount ?? quarantineStatus.count,
+        quarantineCapDollars: baseReconciliation.quarantineCapDollars ?? this.config.liveMaxUnresolvedExposureDollars,
+      }
+      : baseReconciliation;
     const riskState = this.liveRiskState(activeLock?.reason ?? null, reconciliation, userStreams.reason);
     return {
       mode: "live",
@@ -691,7 +703,10 @@ export class LiveExecutor implements ArbExecutor {
     if (status === "finalizing" || status === "pretrade_retry") {
       return { state: "recovering", reason: `last attempt recovery status: ${recoveryStatusLabel(status)}` };
     }
-    const quarantinedExposure = reconciliation.quarantinedExposureDollars ?? this.lastAttempt?.riskQuarantineExposureDollars ?? 0;
+    const quarantinedExposure = Math.max(
+      reconciliation.quarantinedExposureDollars ?? 0,
+      this.lastAttempt?.riskQuarantineExposureDollars ?? 0,
+    );
     if (quarantinedExposure > 0) {
       return {
         state: "quarantined",
