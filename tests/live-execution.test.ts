@@ -19,6 +19,7 @@ import {
   type VenueOrderClient,
   type VenueOrderResult,
 } from "../src/execution/live-clients";
+import { LiveExposureCache } from "../src/execution/live-hot-path";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { ArbLeg, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
@@ -1884,6 +1885,19 @@ test("live executor readiness surfaces persisted quarantined exposure after rest
   assert.equal(readiness.reconciliation.quarantinedExposureDollars, 4.2);
   assert.equal(readiness.reconciliation.quarantinedSignalCount, 1);
   assert.match(readiness.riskStateReason ?? "", /trading with quarantined unresolved exposure 4.20/);
+});
+
+test("live exposure cache reads persisted quarantine totals from the backing store", async () => {
+  const cache = new LiveExposureCache({
+    listLiveExposureSignals: async () => [],
+    unresolvedRiskQuarantineExposureDollars: async () => 4.2,
+    liveRiskQuarantineStatus: async () => ({ total: 4.2, count: 1 }),
+  }, 5_000, 10, () => 1_800_000_000_000);
+
+  await cache.refresh();
+
+  assert.equal(await cache.unresolvedRiskQuarantineExposureDollars(), 4.2);
+  assert.deepEqual(await cache.liveRiskQuarantineStatus(), { total: 4.2, count: 1 });
 });
 
 test("live executor hard-locks quarantined fills when exposure cap would be exceeded", async () => {

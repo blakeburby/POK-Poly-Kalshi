@@ -4,6 +4,7 @@ import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../db/live
 export interface LiveExposureSignalReader {
   listLiveExposureSignals(now: number, limit?: number): Promise<DashboardSignal[]>;
   unresolvedRiskQuarantineExposureDollars?(): Promise<number>;
+  liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
 }
 
 function confirmedByUserStream(confirmations: VenueConfirmations | null | undefined, venue: Venue): boolean {
@@ -170,10 +171,16 @@ export class LiveExposureCache {
   }
 
   async unresolvedRiskQuarantineExposureDollars(): Promise<number> {
+    if (this.reader.unresolvedRiskQuarantineExposureDollars) {
+      return this.reader.unresolvedRiskQuarantineExposureDollars();
+    }
     return quarantineStatus(this.signals).total;
   }
 
   async liveRiskQuarantineStatus(): Promise<{ total: number; count: number }> {
+    if (this.reader.liveRiskQuarantineStatus) {
+      return this.reader.liveRiskQuarantineStatus();
+    }
     return quarantineStatus(this.signals);
   }
 
