@@ -44,6 +44,7 @@ interface PlatformAccountData {
 
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const KALSHI_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
+const POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
@@ -137,6 +138,30 @@ async function fetchJson(fetchFn: FetchFn, url: URL, init?: RequestInit): Promis
   const text = await response.text();
   if (!response.ok) throw new Error(`${url.pathname} failed ${response.status}: ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) as unknown : {};
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function fetchJsonWithTimeout(fetchFn: FetchFn, url: URL, init: RequestInit | undefined, timeoutMs: number): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchJson(fetchFn, url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function fetchKalshiJson(config: AppConfig, fetchFn: FetchFn, path: string, search?: URLSearchParams): Promise<unknown> {
@@ -318,7 +343,7 @@ async function polymarketDataApi(path: string, address: string, fetchFn: FetchFn
   const url = new URL(`${POLYMARKET_DATA_API_BASE}${path}`);
   url.searchParams.set("user", address);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  return fetchJson(fetchFn, url);
+  return fetchJsonWithTimeout(fetchFn, url, undefined, POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS);
 }
 
 function normalizePolymarketPosition(row: JsonRecord, now: number): TradingPosition | null {
@@ -389,10 +414,22 @@ async function resolvePolymarketClient(options: AccountSourceOptions): Promise<P
 }
 
 async function polymarketCashAndOpenOrders(options: AccountSourceOptions): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
-  const client = await resolvePolymarketClient(options);
+  const client = await withTimeout(
+    resolvePolymarketClient(options),
+    POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS,
+    "Polymarket account client",
+  );
   const [balanceAllowance, openOrders] = await Promise.all([
-    client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }),
-    client.getOpenOrders?.({}, true) ?? Promise.resolve([]),
+    withTimeout(
+      client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }),
+      POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS,
+      "Polymarket collateral balance",
+    ),
+    withTimeout(
+      client.getOpenOrders?.({}, true) ?? Promise.resolve([]),
+      POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS,
+      "Polymarket open orders",
+    ),
   ]);
   return {
     cashValue: usdcRawToDollars(numberOrNull(balanceAllowance.balance)),
