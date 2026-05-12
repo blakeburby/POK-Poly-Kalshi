@@ -18,6 +18,7 @@ import { isContractStale, sortCandidatesForBlotter } from "../app/lib/dashboard-
 import { buildDashboardAnalytics } from "../src/analytics/performance";
 import { buildSyntheticStructureRisk } from "../src/scanner/payoff";
 import type { ArbCandidate, BinaryContract, DashboardSignal, DashboardSnapshot, UserStreamVenueState } from "../src/types";
+import type { TradingActivitySnapshot } from "../types/trading";
 
 const generatedAt = 1_800_000_010_000;
 
@@ -114,6 +115,73 @@ function streamVenue(input: Partial<UserStreamVenueState> = {}): UserStreamVenue
   };
 }
 
+function tradingActivity(): TradingActivitySnapshot {
+  return {
+    kalshi: {
+      platform: "kalshi",
+      connectionStatus: "live",
+      lastUpdatedAt: generatedAt - 30_000,
+      portfolio: {
+        platform: "kalshi",
+        portfolioValue: 124.2,
+        cashValue: 98.4,
+        dayChangeDollars: 5.2,
+        dayChangePercent: 0.043,
+        lastUpdatedAt: generatedAt - 30_000,
+      },
+      positions: [{ id: "kalshi-position", market: "KXBTC15M", outcome: "NO", shares: 5, value: 2.55, averagePrice: 0.51, updatedAt: generatedAt - 1_000 }],
+      openOrders: [],
+      history: [{
+        id: "kalshi-history",
+        activity: "Buy",
+        marketName: "KXBTC15M",
+        outcome: "NO",
+        shares: 5,
+        value: -2.55,
+        timeMs: generatedAt - 7 * 60_000,
+        venueOrderId: "real-kalshi-order",
+        clientOrderId: "kalshi-client",
+        status: "filled",
+      }],
+      sparkline: [
+        { timestamp: generatedAt - 24 * 60 * 60_000, value: 119 },
+        { timestamp: generatedAt - 7 * 60_000, value: 124.2 },
+      ],
+    },
+    polymarket: {
+      platform: "polymarket",
+      connectionStatus: "live",
+      lastUpdatedAt: generatedAt - 20_000,
+      portfolio: {
+        platform: "polymarket",
+        portfolioValue: 88.8,
+        cashValue: 80.5,
+        dayChangeDollars: -2.05,
+        dayChangePercent: -0.023,
+        lastUpdatedAt: generatedAt - 20_000,
+      },
+      positions: [{ id: "poly-position", market: "btc-updown-15m", outcome: "YES", shares: 5, value: 2.05, averagePrice: 0.41, updatedAt: generatedAt - 1_000 }],
+      openOrders: [],
+      history: [{
+        id: "poly-history",
+        activity: "Buy",
+        marketName: "btc-updown-15m",
+        outcome: "YES",
+        shares: 5,
+        value: -2.05,
+        timeMs: generatedAt - 7 * 60_000,
+        venueOrderId: "real-poly-order",
+        clientOrderId: "poly-client",
+        status: "matched",
+      }],
+      sparkline: [
+        { timestamp: generatedAt - 24 * 60 * 60_000, value: 91 },
+        { timestamp: generatedAt - 7 * 60_000, value: 88.8 },
+      ],
+    },
+  };
+}
+
 function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
   const signals = input.recentSignals ?? [signal()];
   return {
@@ -181,6 +249,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
     syntheticStructures: input.syntheticStructures ?? [candidate()],
     recentSignals: signals,
     analytics: input.analytics ?? buildDashboardAnalytics(signals, generatedAt),
+    tradingActivity: input.tradingActivity ?? tradingActivity(),
     execution: input.execution ?? {
       mode: "live",
       liveTrading: true,
@@ -269,6 +338,13 @@ test("password session helpers validate configured credentials", () => {
 test("live-only dashboard renders one live command surface", () => {
   const markup = render();
   assert.match(markup, /Live Trading Dashboard/);
+  assert.match(markup, /Trading Activity/);
+  assert.match(markup, /Kalshi/);
+  assert.match(markup, /Polymarket/);
+  assert.match(markup, /Activity/);
+  assert.match(markup, /Market/);
+  assert.match(markup, /Value/);
+  assert.match(markup, /7m ago/);
   assert.match(markup, /Live Signal Tape/);
   assert.match(markup, /LIVE-ONLY DASHBOARD/);
   assert.match(markup, /real-kalshi-order/);

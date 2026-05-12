@@ -420,6 +420,7 @@ export class SignalStore {
       SELECT pair_key, EXTRACT(EPOCH FROM MAX(updated_at)) * 1000 AS filled_at_ms
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
+        AND execution_group_id IS NOT NULL
       GROUP BY pair_key
     `);
     return result.rows
@@ -603,13 +604,6 @@ export class SignalStore {
       SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
-        OR kalshi_fill_id IS NOT NULL
-        OR polymarket_fill_id IS NOT NULL
-        OR COALESCE(kalshi_fill_count, 0) > 0
-        OR COALESCE(polymarket_fill_count, 0) > 0
-        OR partial_fill = TRUE
-        OR risk_quarantined_at IS NOT NULL
-        OR reconciliation_resolved_at IS NOT NULL
       ORDER BY created_at DESC
       LIMIT $1
     `, values);
@@ -622,6 +616,7 @@ export class SignalStore {
       SELECT ${SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
+        AND execution_group_id IS NOT NULL
         AND updated_at >= to_timestamp($1 / 1000.0)
       ORDER BY updated_at ASC
       LIMIT $2

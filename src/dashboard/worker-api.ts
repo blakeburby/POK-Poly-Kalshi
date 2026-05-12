@@ -7,6 +7,8 @@ import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
 import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
+import { emptyTradingActivity } from "../trading/activity";
+import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity } from "../../types/trading";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -28,6 +30,9 @@ export interface DashboardRuntime {
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
   getLatencySnapshot?: (now: number, snapshotBuildMs: number) => DashboardLatencySnapshot;
   getExecutionReadiness?: (now: number) => LiveExecutionReadiness | Promise<LiveExecutionReadiness>;
+  getTradingActivity?: (now: number, readiness?: LiveExecutionReadiness) => TradingActivitySnapshot | Promise<TradingActivitySnapshot>;
+  getTradingPlatformActivity?: (platform: TradingPlatform, now: number, readiness?: LiveExecutionReadiness) => TradingPlatformActivity | Promise<TradingPlatformActivity>;
+  subscribeTradingActivityEvents?: (listener: (event: TradingActivityEvent) => void) => () => void;
   getLogs: (limit?: number) => DashboardLogEntry[];
 }
 
@@ -39,6 +44,10 @@ export interface DashboardSnapshotCache {
   analytics?: {
     refreshedAt: number;
     value: DashboardAnalytics;
+  };
+  tradingActivity?: {
+    refreshedAt: number;
+    value: TradingActivitySnapshot;
   };
 }
 
@@ -97,6 +106,25 @@ async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: D
   return value;
 }
 
+async function cachedTradingActivity(
+  runtime: DashboardRuntime,
+  now: number,
+  readiness: LiveExecutionReadiness | undefined,
+  cache?: DashboardSnapshotCache,
+): Promise<TradingActivitySnapshot> {
+  const cached = cache?.tradingActivity;
+  if (cached && now - cached.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
+    return cached.value;
+  }
+  const value = runtime.getTradingActivity
+    ? await runtime.getTradingActivity(now, readiness)
+    : emptyTradingActivity(now);
+  if (cache) {
+    cache.tradingActivity = { refreshedAt: now, value };
+  }
+  return value;
+}
+
 export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
   const snapshotStartedAt = Date.now();
   const books = runtime.books.snapshot();
@@ -105,6 +133,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     cachedAnalytics(runtime, now, cache),
   ]);
   const execution = await runtime.getExecutionReadiness?.(now);
+  const tradingActivity = await cachedTradingActivity(runtime, now, execution, cache);
   const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
     runtime.books.getKalshiContracts(runtime.config.staleBookMs, now),
@@ -173,6 +202,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     syntheticStructures,
     recentSignals,
     analytics,
+    tradingActivity,
     execution,
     logs: runtime.getLogs(150),
   };
@@ -184,6 +214,16 @@ export function formatSseEvent(event: string, data: unknown): string {
 
 async function writeSnapshot(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
   sendJson(response, 200, await createDashboardSnapshot(runtime));
+}
+
+async function writeTradingActivity(response: ServerResponse, runtime: DashboardRuntime, platform: TradingPlatform | null): Promise<void> {
+  const now = Date.now();
+  const readiness = await runtime.getExecutionReadiness?.(now);
+  if (platform && runtime.getTradingPlatformActivity) {
+    sendJson(response, 200, await runtime.getTradingPlatformActivity(platform, now, readiness));
+    return;
+  }
+  sendJson(response, 200, runtime.getTradingActivity ? await runtime.getTradingActivity(now, readiness) : emptyTradingActivity(now));
 }
 
 async function writeStream(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
@@ -204,8 +244,14 @@ async function writeStream(response: ServerResponse, runtime: DashboardRuntime):
   };
 
   await send();
+  const unsubscribe = runtime.subscribeTradingActivityEvents?.((event) => {
+    response.write(formatSseEvent("tradingActivity", event));
+  });
   const timer = setInterval(() => void send(), Math.max(50, runtime.config.dashboardStreamIntervalMs));
-  response.on("close", () => clearInterval(timer));
+  response.on("close", () => {
+    clearInterval(timer);
+    unsubscribe?.();
+  });
 }
 
 export async function handleDashboardRequest(
@@ -213,8 +259,9 @@ export async function handleDashboardRequest(
   response: ServerResponse,
   runtime: DashboardRuntime,
 ): Promise<boolean> {
-  const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-  if (pathname !== "/dashboard/snapshot" && pathname !== "/dashboard/stream") return false;
+  const url = new URL(request.url ?? "/", "http://localhost");
+  const pathname = url.pathname;
+  if (pathname !== "/dashboard/snapshot" && pathname !== "/dashboard/stream" && pathname !== "/trading/activity") return false;
 
   if (!runtime.config.dashboardApiToken) {
     sendJson(response, 503, { error: "dashboard_token_not_configured" });
@@ -227,6 +274,17 @@ export async function handleDashboardRequest(
 
   if (pathname === "/dashboard/snapshot") {
     await writeSnapshot(response, runtime);
+    return true;
+  }
+
+  if (pathname === "/trading/activity") {
+    const rawPlatform = url.searchParams.get("platform");
+    const platform = rawPlatform === "kalshi" || rawPlatform === "polymarket" ? rawPlatform : null;
+    if (rawPlatform && !platform) {
+      sendJson(response, 400, { error: "invalid_platform" });
+      return true;
+    }
+    await writeTradingActivity(response, runtime, platform);
     return true;
   }
 

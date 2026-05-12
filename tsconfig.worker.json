@@ -8,6 +8,6 @@
     "incremental": false,
     "plugins": []
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "types/**/*.ts"],
   "exclude": ["node_modules", "app"]
 }

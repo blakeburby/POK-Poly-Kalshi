@@ -32,6 +32,7 @@
     "app/**/*.ts",
     "app/**/*.tsx",
     "src/**/*.ts",
+    "types/**/*.ts",
     "tests/**/*.ts",
     "tests/**/*.tsx",
     ".next/types/**/*.ts",

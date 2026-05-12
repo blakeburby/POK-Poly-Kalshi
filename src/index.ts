@@ -26,6 +26,7 @@ import { PolymarketUserStreamClient } from "./polymarket/user-stream";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
 import { CoalescedScanScheduler } from "./scanner/scheduler";
+import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "./trading/activity";
 import type { PolymarketDiagnostics } from "./types";
 
 function sendJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
@@ -50,6 +51,7 @@ async function main(): Promise<void> {
     : null;
   const liveExposure = liveExposureCache ?? signals;
   const orderEvents = new VenueOrderEventHub(new VenueOrderEventStore(pool));
+  const tradingActivity = new TradingActivityStore(pool);
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
@@ -240,6 +242,11 @@ async function main(): Promise<void> {
         getExecutionReadiness: async (now) => {
           return liveReadinessProbe.readiness(now);
         },
+        getTradingActivity: (now, readiness) => tradingActivity.getSnapshot({ now, readiness }),
+        getTradingPlatformActivity: (platform, now, readiness) => tradingActivity.getPlatformActivity(platform, { now, readiness }),
+        subscribeTradingActivityEvents: (listener) => orderEvents.onEvent((event) => {
+          listener(tradingActivityEventFromVenueEvent(event));
+        }),
         getLogs: getRecentLogs,
       });
       if (handled) return;

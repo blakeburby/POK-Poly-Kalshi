@@ -1,3 +1,5 @@
+import type { TradingActivitySnapshot } from "../types/trading";
+
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
@@ -665,6 +667,7 @@ export interface DashboardSnapshot {
   syntheticStructures?: ArbCandidate[];
   recentSignals: DashboardSignal[];
   analytics?: DashboardAnalytics;
+  tradingActivity: TradingActivitySnapshot;
   execution?: LiveExecutionReadiness;
   logs: DashboardLogEntry[];
 }

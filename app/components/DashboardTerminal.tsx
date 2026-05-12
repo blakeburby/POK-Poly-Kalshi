@@ -14,6 +14,7 @@ import {
   YAxis,
 } from "recharts";
 import * as THREE from "three";
+import type { TradingOpenOrder, TradingPlatform, TradingPlatformActivity, TradingPosition } from "../../types/trading";
 import type {
   AnalyticsWindow,
   ArbCandidate,
@@ -36,6 +37,8 @@ import {
   sortContractsForBook,
   staleContractCount,
 } from "../lib/dashboard-view-model";
+import { formatCurrency as formatActivityCurrency, formatPercentValue as formatActivityPercent, formatRelativeTime as formatActivityRelativeTime, formatSignedCurrency as formatActivitySignedCurrency } from "../lib/formatters";
+import { useTradingData } from "../hooks/useTradingData";
 import type { RiskSurface3DProps } from "./dashboard/risk-surface-types";
 
 type StreamState = "connecting" | "live" | "degraded";
@@ -45,6 +48,7 @@ type TradeDetailDirection = ArbCandidate["lower"]["direction"];
 type TradeDetailRegionKey = "below_lower" | "between_strikes" | "above_higher";
 type DashboardViewMode = "risk" | "raw" | "execution";
 type LiveOperationalState = "clean" | "quarantined" | "autoHardlocksDisabled" | "blocked" | "degraded" | "standby";
+type TradingTab = "history" | "positions" | "openOrders";
 
 interface TradeDetailLeg {
   label: "A" | "B";
@@ -3206,6 +3210,232 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
   );
 }
 
+function TradingActivitySection({ snapshot }: { snapshot: DashboardSnapshot }) {
+  const kalshi = snapshot.tradingActivity?.kalshi ?? emptyTradingActivityForPanel("kalshi", snapshot.generatedAt);
+  const polymarket = snapshot.tradingActivity?.polymarket ?? emptyTradingActivityForPanel("polymarket", snapshot.generatedAt);
+  return (
+    <section className="trading-activity-section" aria-label="Trading Activity">
+      <div className="panel combined-dashboard-heading trading-activity-heading">
+        <p className="panel-kicker">venue activity</p>
+        <h2>Trading Activity</h2>
+        <p>Live venue activity only, sourced from authenticated worker-side Kalshi and Polymarket order/fill streams.</p>
+      </div>
+      <div className="trading-platform-grid">
+        <TradingPlatformPanel
+          initial={kalshi}
+          now={snapshot.generatedAt}
+          platform="kalshi"
+          title="Kalshi"
+        />
+        <TradingPlatformPanel
+          initial={polymarket}
+          now={snapshot.generatedAt}
+          platform="polymarket"
+          title="Polymarket"
+        />
+      </div>
+    </section>
+  );
+}
+
+function emptyTradingActivityForPanel(platform: TradingPlatform, now: number): TradingPlatformActivity {
+  return {
+    platform,
+    connectionStatus: "reconnecting",
+    lastUpdatedAt: now,
+    portfolio: {
+      platform,
+      portfolioValue: null,
+      cashValue: null,
+      dayChangeDollars: 0,
+      dayChangePercent: null,
+      lastUpdatedAt: now,
+    },
+    positions: [],
+    openOrders: [],
+    history: [],
+    sparkline: [
+      { timestamp: now - 24 * 60 * 60_000, value: 0 },
+      { timestamp: now, value: 0 },
+    ],
+  };
+}
+
+function TradingPlatformPanel({
+  initial,
+  now,
+  platform,
+  title,
+}: {
+  initial: TradingPlatformActivity;
+  now: number;
+  platform: TradingPlatform;
+  title: string;
+}) {
+  const activity = useTradingData(platform, initial) ?? initial;
+  const [tab, setTab] = useState<TradingTab>("history");
+  const sparkline = activity.sparkline.map((point) => ({
+    timestamp: point.timestamp,
+    value: Number(point.value.toFixed(2)),
+  }));
+  const lastUpdated = activity.lastUpdatedAt ?? activity.portfolio.lastUpdatedAt;
+
+  return (
+    <section className={`panel trading-platform-panel trading-platform-${platform}`} aria-label={`${title} trading activity`}>
+      <div className="trading-panel-header">
+        <div>
+          <div className="trading-panel-title-row">
+            <VenueBadge venue={platform} />
+            <h3>{title}</h3>
+            <span className={`connection-dot connection-${activity.connectionStatus}`} />
+            <span>{activity.connectionStatus === "live" ? "live" : "reconnecting"}</span>
+          </div>
+          <small>last updated {formatActivityRelativeTime(lastUpdated, now)}</small>
+        </div>
+        <div className="trading-panel-values">
+          <div><span>Portfolio</span><strong>{formatActivityCurrency(activity.portfolio.portfolioValue)}</strong></div>
+          <div><span>Cash</span><strong>{formatActivityCurrency(activity.portfolio.cashValue)}</strong></div>
+        </div>
+      </div>
+
+      <div className="trading-summary-row">
+        <div>
+          <span>Past-day change</span>
+          <strong className={(activity.portfolio.dayChangeDollars ?? 0) >= 0 ? "profit" : "loss"}>
+            {formatActivitySignedCurrency(activity.portfolio.dayChangeDollars)}
+          </strong>
+          <small>{formatActivityPercent(activity.portfolio.dayChangePercent)}</small>
+        </div>
+        <div className="trading-sparkline" aria-label={`${title} past-day P/L sparkline`}>
+          <AreaChart accessibilityLayer data={sparkline} height={84} margin={{ top: 8, right: 8, bottom: 0, left: 8 }} width={260}>
+            <defs>
+              <linearGradient id={`trading-activity-${platform}`} x1="0" x2="0" y1="0" y2="1">
+                <stop offset="5%" stopColor="var(--green)" stopOpacity={0.34} />
+                <stop offset="100%" stopColor="var(--green)" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <Tooltip
+              contentStyle={{ background: "#08101a", border: "1px solid rgba(138, 160, 184, 0.24)", borderRadius: 12 }}
+              formatter={(value) => formatActivityCurrency(Number(value))}
+              labelFormatter={(value) => new Date(Number(value)).toLocaleTimeString()}
+            />
+            <Area dataKey="value" fill={`url(#trading-activity-${platform})`} stroke="var(--green)" strokeWidth={2} type="monotone" />
+          </AreaChart>
+        </div>
+      </div>
+
+      <div className="trading-tabs" role="tablist" aria-label={`${title} activity tabs`}>
+        <button className={tab === "positions" ? "active" : ""} onClick={() => setTab("positions")} type="button">Positions</button>
+        <button className={tab === "openOrders" ? "active" : ""} onClick={() => setTab("openOrders")} type="button">Open Orders</button>
+        <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")} type="button">History</button>
+      </div>
+
+      {tab === "history" ? <TradingHistoryTable activity={activity} now={now} /> : null}
+      {tab === "positions" ? <TradingPositionsTable positions={activity.positions} /> : null}
+      {tab === "openOrders" ? <TradingOpenOrdersTable openOrders={activity.openOrders} /> : null}
+    </section>
+  );
+}
+
+function TradingHistoryTable({ activity, now }: { activity: TradingPlatformActivity; now: number }) {
+  return (
+    <div className="trading-table-wrap">
+      <table className="trading-activity-table">
+        <thead>
+          <tr>
+            <th>Activity</th>
+            <th>Market</th>
+            <th>Value</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {activity.history.slice(0, 8).map((row) => (
+            <tr key={row.id}>
+              <td><strong className={row.activity === "Buy" ? "loss" : "profit"}>{row.activity}</strong></td>
+              <td>
+                <div className="activity-market-cell">
+                  <strong>{row.marketName}</strong>
+                  <span>{row.outcome} · {formatShares(row.shares)} shares</span>
+                </div>
+              </td>
+              <td><strong className={(row.value ?? 0) >= 0 ? "profit" : "loss"}>{formatActivitySignedCurrency(row.value)}</strong></td>
+              <td>{formatActivityRelativeTime(row.timeMs, now)}</td>
+            </tr>
+          ))}
+          {activity.history.length === 0 ? <tr><td colSpan={4} className="empty-cell">No live fills recorded for this venue yet.</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TradingPositionsTable({ positions }: { positions: TradingPosition[] }) {
+  return (
+    <div className="trading-table-wrap">
+      <table className="trading-activity-table">
+        <thead>
+          <tr>
+            <th>Market</th>
+            <th>Outcome</th>
+            <th>Shares</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.slice(0, 8).map((position) => (
+            <tr key={position.id}>
+              <td>{position.market}</td>
+              <td>{position.outcome}</td>
+              <td>{formatShares(position.shares)}</td>
+              <td>{formatActivityCurrency(position.value)}</td>
+            </tr>
+          ))}
+          {positions.length === 0 ? <tr><td colSpan={4} className="empty-cell">No live positions inferred from venue fills yet.</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TradingOpenOrdersTable({ openOrders }: { openOrders: TradingOpenOrder[] }) {
+  return (
+    <div className="trading-table-wrap">
+      <table className="trading-activity-table">
+        <thead>
+          <tr>
+            <th>Side</th>
+            <th>Market</th>
+            <th>Price</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {openOrders.slice(0, 8).map((order) => (
+            <tr key={order.id}>
+              <td>{order.side}</td>
+              <td>
+                <div className="activity-market-cell">
+                  <strong>{order.market}</strong>
+                  <span>{order.outcome} · {formatShares(order.shares)} shares</span>
+                </div>
+              </td>
+              <td>{formatActivityCurrency(order.price)}</td>
+              <td>{order.status.toUpperCase()}</td>
+            </tr>
+          ))}
+          {openOrders.length === 0 ? <tr><td colSpan={4} className="empty-cell">No open live orders.</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function formatShares(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "--";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 }).format(value);
+}
+
 function PerformanceDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
   const current = snapshot.analytics?.hourly;
   const filled = filledSignals(snapshot.recentSignals);
@@ -3261,6 +3491,7 @@ function LiveDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
         <p>Real Kalshi and Polymarket trades only. This dashboard is fed from live execution records, venue fills, private-stream confirmations, and live risk state.</p>
       </section>
       <PerformanceDashboardSections snapshot={snapshot} />
+      <TradingActivitySection snapshot={snapshot} />
     </section>
   );
 }

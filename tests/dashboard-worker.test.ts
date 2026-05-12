@@ -6,6 +6,7 @@ import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, ty
 import type { AppConfig } from "../src/config";
 import { LatencyMonitor } from "../src/latency/metrics";
 import type { DashboardSignal } from "../src/types";
+import type { TradingActivitySnapshot } from "../types/trading";
 import { contract } from "./helpers";
 
 function config(input: Partial<AppConfig> = {}): AppConfig {
@@ -108,6 +109,53 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
   };
 }
 
+function tradingActivity(now: number): TradingActivitySnapshot {
+  return {
+    kalshi: {
+      platform: "kalshi",
+      connectionStatus: "live",
+      lastUpdatedAt: now - 100,
+      portfolio: { platform: "kalshi", portfolioValue: 25, cashValue: 20, dayChangeDollars: 1, dayChangePercent: 0.04, lastUpdatedAt: now - 100 },
+      positions: [],
+      openOrders: [],
+      history: [{
+        id: "kalshi-activity",
+        activity: "Buy",
+        marketName: "KXBTC15M",
+        outcome: "NO",
+        shares: 5,
+        value: -2.5,
+        timeMs: now - 100,
+        venueOrderId: "kalshi-order",
+        clientOrderId: "kalshi-client",
+        status: "filled",
+      }],
+      sparkline: [{ timestamp: now - 86_400_000, value: 24 }, { timestamp: now, value: 25 }],
+    },
+    polymarket: {
+      platform: "polymarket",
+      connectionStatus: "live",
+      lastUpdatedAt: now - 100,
+      portfolio: { platform: "polymarket", portfolioValue: 35, cashValue: 30, dayChangeDollars: -1, dayChangePercent: -0.03, lastUpdatedAt: now - 100 },
+      positions: [],
+      openOrders: [],
+      history: [{
+        id: "poly-activity",
+        activity: "Buy",
+        marketName: "btc-updown-15m",
+        outcome: "YES",
+        shares: 5,
+        value: -2,
+        timeMs: now - 100,
+        venueOrderId: "poly-order",
+        clientOrderId: "poly-client",
+        status: "matched",
+      }],
+      sparkline: [{ timestamp: now - 86_400_000, value: 36 }, { timestamp: now, value: 35 }],
+    },
+  };
+}
+
 test("dashboard bearer token accepts valid requests and rejects missing or invalid requests", () => {
   assert.equal(dashboardRequestAuthorized({ authorization: "Bearer secret-token" }, "secret-token"), true);
   assert.equal(dashboardRequestAuthorized({ authorization: "Bearer wrong-token" }, "secret-token"), false);
@@ -185,6 +233,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
       latency.recordWsToBookApply("polymarket", latencyNow - 5, latencyNow);
       return latency.snapshot(books.snapshot(), latencyNow, runtime.config, snapshotBuildMs);
     },
+    getTradingActivity: (snapshotNow) => tradingActivity(snapshotNow),
   };
 
   const snapshot = await createDashboardSnapshot(runtime, now);
@@ -202,6 +251,8 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.analytics?.hourly.netPnl, 0.08);
   assert.equal(snapshot.analytics?.daily.window, "daily");
   assert.equal(snapshot.analytics?.weekly.window, "weekly");
+  assert.equal(snapshot.tradingActivity.kalshi.history[0].venueOrderId, "kalshi-order");
+  assert.equal(snapshot.tradingActivity.polymarket.history[0].venueOrderId, "poly-order");
   assert.equal(snapshot.execution?.polymarket.ready, false);
   assert.equal(snapshot.execution?.circuitBreakerLocked, false);
   assert.equal(snapshot.execution?.polymarket.funderAddress, "0x3333...4444");
@@ -290,4 +341,14 @@ test("dashboard snapshot uses hot analytics provider without polling filled sign
 test("dashboard stream events are valid SSE snapshot frames", () => {
   const frame = formatSseEvent("snapshot", { ok: true });
   assert.equal(frame, "event: snapshot\ndata: {\"ok\":true}\n\n");
+});
+
+test("dashboard stream can emit sanitized trading activity frames", () => {
+  const frame = formatSseEvent("tradingActivity", {
+    platform: "polymarket",
+    row: { id: "row", venueOrderId: "order-id" },
+  });
+  assert.equal(frame.includes("PRIVATE_KEY"), false);
+  assert.match(frame, /^event: tradingActivity/);
+  assert.match(frame, /order-id/);
 });

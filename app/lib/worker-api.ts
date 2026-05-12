@@ -1,4 +1,5 @@
 import type { DashboardSnapshot } from "../../src/types";
+import type { TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity } from "../../types/trading";
 
 function workerBase(): string {
   const base = process.env.WORKER_API_BASE?.trim();
@@ -26,4 +27,16 @@ export async function fetchWorkerStream(): Promise<Response> {
     headers: { Authorization: `Bearer ${workerToken()}` },
     cache: "no-store",
   });
+}
+
+export async function fetchTradingActivity(platform: TradingPlatform): Promise<TradingPlatformActivity>;
+export async function fetchTradingActivity(platform?: undefined): Promise<TradingActivitySnapshot>;
+export async function fetchTradingActivity(platform?: TradingPlatform): Promise<TradingActivitySnapshot | TradingPlatformActivity> {
+  const suffix = platform ? `?platform=${encodeURIComponent(platform)}` : "";
+  const response = await fetch(`${workerBase()}/trading/activity${suffix}`, {
+    headers: { Authorization: `Bearer ${workerToken()}` },
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`Worker trading activity failed ${response.status}: ${await response.text()}`);
+  return response.json() as Promise<TradingActivitySnapshot | TradingPlatformActivity>;
 }

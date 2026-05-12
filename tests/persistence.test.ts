@@ -80,25 +80,6 @@ class FakeDb implements Queryable {
     }
     if (/RETURNING id/.test(sql)) return { rows: [{ id: 42 } as T] };
     if (/GROUP BY pair_key/.test(sql)) return { rows: [{ pair_key: "pair", filled_at_ms: "123000" } as T] };
-    if (/execution_group_id IS NOT NULL/.test(sql)) {
-      return {
-        rows: [{
-          id: 99,
-          pair_key: "pair",
-          expiry_ms: 1_800_000_000_000,
-          kalshi_contract_id: "kalshi",
-          polymarket_contract_id: "poly",
-          lower_venue: "polymarket",
-          lower_contract_id: "poly",
-          lower_direction: "yes",
-          higher_venue: "kalshi",
-          higher_contract_id: "kalshi",
-          higher_direction: "no",
-          kalshi_fill_count: 5,
-          polymarket_fill_count: 5,
-        } as T],
-      };
-    }
     if (/updated_at >= to_timestamp/.test(sql)) {
       return {
         rows: [{
@@ -143,6 +124,25 @@ class FakeDb implements Queryable {
           kalshi_error: null,
           polymarket_error: null,
           partial_fill: false,
+        } as T],
+      };
+    }
+    if (/execution_group_id IS NOT NULL/.test(sql)) {
+      return {
+        rows: [{
+          id: 99,
+          pair_key: "pair",
+          expiry_ms: 1_800_000_000_000,
+          kalshi_contract_id: "kalshi",
+          polymarket_contract_id: "poly",
+          lower_venue: "polymarket",
+          lower_contract_id: "poly",
+          lower_direction: "yes",
+          higher_venue: "kalshi",
+          higher_contract_id: "kalshi",
+          higher_direction: "no",
+          kalshi_fill_count: 5,
+          polymarket_fill_count: 5,
         } as T],
       };
     }
@@ -233,9 +233,11 @@ test("signal persistence inserts threshold-crossing candidate before execution u
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
-  const store = new SignalStore(new FakeDb());
+  const db = new FakeDb();
+  const store = new SignalStore(db);
   const attempts = await store.loadRecentFilledAttempts();
   assert.deepEqual(attempts, [{ pairKey: "pair", filledAtMs: 123_000 }]);
+  assert.match(db.calls[0].sql, /execution_group_id IS NOT NULL/);
 });
 
 test("signal persistence exposes filled signals for analytics windows", async () => {
@@ -258,11 +260,12 @@ test("signal persistence readers query live execution records without mode filte
   await store.listRecentSignals(25);
   assert.doesNotMatch(db.calls[0].sql, /execution_mode/);
   assert.match(db.calls[0].sql, /execution_group_id IS NOT NULL/);
-  assert.match(db.calls[0].sql, /kalshi_fill_id IS NOT NULL/);
+  assert.doesNotMatch(db.calls[0].sql, /kalshi_fill_id IS NOT NULL/);
   assert.deepEqual(db.calls[0].values, [25]);
 
   await store.listFilledSignalsSince(1_800_000_000_000, 50);
   assert.doesNotMatch(db.calls[1].sql, /execution_mode/);
+  assert.match(db.calls[1].sql, /execution_group_id IS NOT NULL/);
   assert.deepEqual(db.calls[1].values, [1_800_000_000_000, 50]);
 });
 
@@ -272,6 +275,14 @@ test("live-only cleanup migration removes legacy non-live rows and drops the mod
   assert.match(sql, /DROP COLUMN IF EXISTS execution_mode/);
   assert.match(sql, /idx_cross_venue_arb_signals_live_unresolved_reconciliation/);
   assert.match(sql, /idx_cross_venue_arb_signals_risk_quarantine_active/);
+});
+
+test("orphan execution cleanup migration removes execution-looking rows without live execution groups", () => {
+  const sql = readFileSync("src/db/migrations/015_remove_orphan_execution_rows.sql", "utf8");
+  assert.match(sql, /execution_group_id IS NULL/);
+  assert.match(sql, /action = 'filled'/);
+  assert.match(sql, /kalshi_fill_id IS NOT NULL/);
+  assert.match(sql, /polymarket_fill_id IS NOT NULL/);
 });
 
 test("reconciliation resolution migration adds operator-resolved incident markers", () => {
