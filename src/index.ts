@@ -26,6 +26,7 @@ import { PolymarketUserStreamClient } from "./polymarket/user-stream";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
 import { CoalescedScanScheduler } from "./scanner/scheduler";
+import { createIdempotentShutdown } from "./shutdown";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "./trading/activity";
 import type { PolymarketDiagnostics } from "./types";
 
@@ -287,7 +288,7 @@ async function main(): Promise<void> {
     logEvent({ category: "BOOT", message: "worker listening", context: { port: config.port, liveTrading: true } });
   });
 
-  const shutdown = async (): Promise<void> => {
+  const shutdown = createIdempotentShutdown(async (): Promise<void> => {
     clearInterval(discoveryTimer);
     clearInterval(hotPathWarmTimer);
     clearInterval(analyticsTimer);
@@ -299,10 +300,24 @@ async function main(): Promise<void> {
     polymarketPriceToBeat.close();
     server.close();
     await pool.end();
+  });
+
+  const handleShutdownSignal = (signal: NodeJS.Signals): void => {
+    void shutdown()
+      .then(() => process.exit(0))
+      .catch((error) => {
+        logEvent({
+          severity: "ERROR",
+          category: "BOOT",
+          message: "worker shutdown failed",
+          context: { signal, error: error instanceof Error ? error.message : String(error) },
+        });
+        process.exit(1);
+      });
   };
 
-  process.on("SIGINT", () => void shutdown().then(() => process.exit(0)));
-  process.on("SIGTERM", () => void shutdown().then(() => process.exit(0)));
+  process.on("SIGINT", handleShutdownSignal);
+  process.on("SIGTERM", handleShutdownSignal);
 }
 
 main().catch((error) => {
