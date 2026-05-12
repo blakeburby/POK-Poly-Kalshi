@@ -68,6 +68,46 @@ function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function sanitizeAccountValuePoints(points: TradingSparklinePoint[], now: number): TradingSparklinePoint[] {
+  const since = now - ACCOUNT_HISTORY_WINDOW_MS;
+  const bounded = points
+    .filter((point) => point.timestamp >= since && point.timestamp <= now && isFiniteNumber(point.value))
+    .sort((left, right) => left.timestamp - right.timestamp);
+  const hasRealAccountValue = bounded.some((point) => Math.abs(point.value) > 0.000001);
+  const withoutPlaceholders = hasRealAccountValue
+    ? bounded.filter((point) => Math.abs(point.value) > 0.000001)
+    : bounded;
+
+  const deduped = new Map<number, TradingSparklinePoint>();
+  for (const point of withoutPlaceholders) {
+    deduped.set(point.timestamp, { timestamp: point.timestamp, value: roundCurrency(point.value) });
+  }
+  return [...deduped.values()].sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function shouldSeedAccountHistory(activity: TradingPlatformActivity): boolean {
+  return isFiniteNumber(activity.portfolio.dayChangeDollars) && Math.abs(activity.portfolio.dayChangeDollars) > 0.000001;
+}
+
+function portfolioWithAccountValueChange(
+  portfolio: TradingPortfolioSummary,
+  points: TradingSparklinePoint[],
+): TradingPortfolioSummary {
+  const latestValue = isFiniteNumber(portfolio.portfolioValue)
+    ? portfolio.portfolioValue
+    : points.at(-1)?.value ?? null;
+  if (!isFiniteNumber(latestValue)) return portfolio;
+
+  const baseline = points[0]?.value ?? latestValue;
+  const dayChangeDollars = roundCurrency(latestValue - baseline);
+  const dayChangePercent = Math.abs(baseline) > 0.000001 ? dayChangeDollars / Math.abs(baseline) : 0;
+  return {
+    ...portfolio,
+    dayChangeDollars,
+    dayChangePercent,
+  };
+}
+
 function normalizePlatform(value: Venue): TradingPlatform {
   return value === "kalshi" ? "kalshi" : "polymarket";
 }
@@ -319,23 +359,18 @@ export class TradingActivityStore {
 
   private withAccountValueHistory(activity: TradingPlatformActivity, now: number): TradingPlatformActivity {
     const existing = this.accountValueHistory[activity.platform];
-    const since = now - ACCOUNT_HISTORY_WINDOW_MS;
-    const merged = [...existing, ...activity.sparkline]
-      .filter((point) => point.timestamp >= since && point.timestamp <= now && isFiniteNumber(point.value))
-      .sort((left, right) => left.timestamp - right.timestamp);
+    const seedPoints = this.config && shouldSeedAccountHistory(activity) ? activity.sparkline : [];
+    const merged = [...existing, ...seedPoints];
     if (isFiniteNumber(activity.portfolio.portfolioValue)) {
       merged.push({ timestamp: now, value: roundCurrency(activity.portfolio.portfolioValue) });
     }
 
-    const deduped = new Map<number, TradingSparklinePoint>();
-    for (const point of merged) {
-      deduped.set(point.timestamp, { timestamp: point.timestamp, value: roundCurrency(point.value) });
-    }
-    const sparkline = [...deduped.values()].sort((left, right) => left.timestamp - right.timestamp);
+    const sparkline = sanitizeAccountValuePoints(merged, now);
     this.accountValueHistory[activity.platform] = sparkline;
 
     return {
       ...activity,
+      portfolio: portfolioWithAccountValueChange(activity.portfolio, sparkline),
       sparkline: sparkline.length > 0 ? sparkline : activity.sparkline,
     };
   }

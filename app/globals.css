@@ -4508,14 +4508,17 @@ tbody tr:hover {
 }
 
 .trading-platform-grid {
+  align-items: start;
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .trading-platform-panel {
+  align-content: start;
   display: grid;
   gap: 14px;
+  grid-auto-rows: max-content;
   overflow: hidden;
 }
 
@@ -4580,13 +4583,17 @@ tbody tr:hover {
 }
 
 .trading-panel-values > div,
-.trading-summary-row > div:first-child {
+.trading-account-card {
   border: 1px solid rgba(138, 160, 184, 0.14);
   border-radius: 14px;
   background: rgba(3, 7, 12, 0.42);
   display: grid;
   gap: 5px;
   padding: 12px;
+}
+
+.trading-account-card {
+  min-width: min(100%, 220px);
 }
 
 .trading-panel-values strong,
@@ -4597,28 +4604,41 @@ tbody tr:hover {
 }
 
 .trading-sparkline {
+  height: 96px;
+  justify-self: stretch;
   max-width: 100%;
+  min-width: 220px;
   overflow: hidden;
+  width: min(100%, 380px);
 }
 
 .trading-tabs {
+  align-items: center;
   border-top: 1px solid rgba(138, 160, 184, 0.12);
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 0 var(--panel-pad);
+  padding: 0 var(--panel-pad) 2px;
 }
 
 .trading-tabs button {
+  align-items: center;
   border: 1px solid rgba(138, 160, 184, 0.2);
   border-radius: 999px;
   background: rgba(4, 9, 15, 0.58);
   color: #9fb0c4;
   cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 11px;
+  justify-content: center;
   letter-spacing: 0.08em;
+  line-height: 1;
+  min-height: 34px;
   padding: 8px 11px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .trading-tabs button.active,
@@ -4682,6 +4702,11 @@ tbody tr:hover {
 
   .trading-panel-values {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trading-sparkline {
+    min-width: 0;
+    width: 100%;
   }
 
   .live-operational-hero {

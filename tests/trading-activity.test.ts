@@ -144,6 +144,27 @@ test("trading activity store keeps rolling account value samples for wallet pnl 
   assert.equal(first.sparkline.at(-1)?.value, 20);
   assert.equal(second.sparkline.some((point) => point.value === 20), true);
   assert.equal(second.sparkline.at(-1)?.value, 22.5);
+  assert.equal(second.portfolio.dayChangeDollars, 2.5);
+  assert.equal(second.portfolio.dayChangePercent, 0.125);
+});
+
+test("trading activity store ignores zero placeholder sparkline points once account values exist", async () => {
+  const db = {
+    query: async <T = Record<string, unknown>>() => ({ rows: [] as T[] }),
+  };
+  const store = new TradingActivityStore(db);
+  const firstReadiness = readiness();
+  firstReadiness.kalshi.balance = 0;
+  const first = await store.getPlatformActivity("kalshi", { now, readiness: firstReadiness });
+  const secondReadiness = readiness();
+  secondReadiness.kalshi.balance = 109.41;
+  const second = await store.getPlatformActivity("kalshi", { now: now + 1_000, readiness: secondReadiness });
+
+  assert.equal(first.sparkline.every((point) => point.value === 0), true);
+  assert.equal(second.sparkline.some((point) => point.value === 0), false);
+  assert.equal(second.sparkline.at(-1)?.value, 109.41);
+  assert.equal(second.portfolio.dayChangeDollars, 0);
+  assert.equal(second.portfolio.dayChangePercent, 0);
 });
 
 test("venue stream events normalize into safe trading activity events", () => {

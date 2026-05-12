@@ -9,6 +9,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -3486,6 +3487,7 @@ function TradingPlatformPanel({
     timestamp: point.timestamp,
     value: Number(point.value.toFixed(2)),
   }));
+  const sparklineDomain = accountSparklineDomain(sparkline.map((point) => point.value));
   const lastUpdated = activity.lastUpdatedAt ?? activity.portfolio.lastUpdatedAt;
 
   return (
@@ -3507,7 +3509,7 @@ function TradingPlatformPanel({
       </div>
 
       <div className="trading-summary-row">
-        <div>
+        <div className="trading-account-card">
           <span>Account P/L</span>
           <strong className={(activity.portfolio.dayChangeDollars ?? 0) >= 0 ? "profit" : "loss"}>
             {formatActivitySignedCurrency(activity.portfolio.dayChangeDollars)}
@@ -3515,20 +3517,24 @@ function TradingPlatformPanel({
           <small>{formatActivityPercent(activity.portfolio.dayChangePercent)}</small>
         </div>
         <div className="trading-sparkline" aria-label={`${title} account value sparkline`}>
-          <AreaChart accessibilityLayer data={sparkline} height={84} margin={{ top: 8, right: 8, bottom: 0, left: 8 }} width={260}>
-            <defs>
-              <linearGradient id={`trading-activity-${platform}`} x1="0" x2="0" y1="0" y2="1">
-                <stop offset="5%" stopColor="var(--green)" stopOpacity={0.34} />
-                <stop offset="100%" stopColor="var(--green)" stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <Tooltip
-              contentStyle={{ background: "#08101a", border: "1px solid rgba(138, 160, 184, 0.24)", borderRadius: 12 }}
-              formatter={(value) => formatActivityCurrency(Number(value))}
-              labelFormatter={(value) => new Date(Number(value)).toLocaleTimeString()}
-            />
-            <Area dataKey="value" fill={`url(#trading-activity-${platform})`} stroke="var(--green)" strokeWidth={2} type="monotone" />
-          </AreaChart>
+          <ResponsiveContainer height={96} minWidth={160} width="100%">
+            <AreaChart accessibilityLayer data={sparkline} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+              <defs>
+                <linearGradient id={`trading-activity-${platform}`} x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="5%" stopColor="var(--green)" stopOpacity={0.34} />
+                  <stop offset="100%" stopColor="var(--green)" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="timestamp" domain={["dataMin", "dataMax"]} hide type="number" />
+              <YAxis domain={sparklineDomain} hide />
+              <Tooltip
+                contentStyle={{ background: "#08101a", border: "1px solid rgba(138, 160, 184, 0.24)", borderRadius: 12 }}
+                formatter={(value) => formatActivityCurrency(Number(value))}
+                labelFormatter={(value) => new Date(Number(value)).toLocaleTimeString()}
+              />
+              <Area dataKey="value" fill={`url(#trading-activity-${platform})`} stroke="var(--green)" strokeWidth={2} type="monotone" />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
@@ -3543,6 +3549,16 @@ function TradingPlatformPanel({
       {tab === "openOrders" ? <TradingOpenOrdersTable openOrders={activity.openOrders} /> : null}
     </section>
   );
+}
+
+function accountSparklineDomain(values: number[]): [number, number] {
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (finiteValues.length === 0) return [0, 1];
+  const min = Math.min(...finiteValues);
+  const max = Math.max(...finiteValues);
+  const spread = max - min;
+  const padding = spread < 0.01 ? Math.max(Math.abs(max) * 0.0025, 0.01) : spread * 0.12;
+  return [min - padding, max + padding];
 }
 
 function TradingHistoryTable({ activity, now }: { activity: TradingPlatformActivity; now: number }) {

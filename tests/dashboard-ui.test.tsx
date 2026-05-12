@@ -392,6 +392,9 @@ test("dashboard sections are collapsible and trading rows are mobile-labeled", (
   assert.match(markup, /dashboard-collapsible-summary/);
   assert.match(markup, /collapse-open/);
   assert.match(markup, /collapse-closed/);
+  assert.match(markup, /trading-account-card/);
+  assert.match(markup, /trading-sparkline/);
+  assert.match(markup, /role="tablist"/);
   assert.match(markup, /data-label="Activity"/);
   assert.match(markup, /data-label="Market"/);
   assert.match(markup, /data-label="Value"/);
