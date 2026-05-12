@@ -129,6 +129,23 @@ test("trading activity store returns per-platform live history and portfolio dat
   assert.equal(snapshot.polymarket.positions[0].shares, 5);
 });
 
+test("trading activity store keeps rolling account value samples for wallet pnl charts", async () => {
+  const db = {
+    query: async <T = Record<string, unknown>>() => ({ rows: [] as T[] }),
+  };
+  const store = new TradingActivityStore(db);
+  const firstReadiness = readiness();
+  firstReadiness.kalshi.balance = 20;
+  const first = await store.getPlatformActivity("kalshi", { now, readiness: firstReadiness });
+  const secondReadiness = readiness();
+  secondReadiness.kalshi.balance = 22.5;
+  const second = await store.getPlatformActivity("kalshi", { now: now + 1_000, readiness: secondReadiness });
+
+  assert.equal(first.sparkline.at(-1)?.value, 20);
+  assert.equal(second.sparkline.some((point) => point.value === 20), true);
+  assert.equal(second.sparkline.at(-1)?.value, 22.5);
+});
+
 test("venue stream events normalize into safe trading activity events", () => {
   const event = tradingActivityEventFromVenueEvent({
     venue: "polymarket",
@@ -238,6 +255,8 @@ test("kalshi trading activity normalizes fixed-point account portfolio fields", 
     assert.equal(result.history[0].outcome, "NO");
     assert.equal(result.history[0].shares, 5);
     assert.equal(result.history[0].value, -2.6);
+    assert.equal(result.sparkline[0].value, 56.78);
+    assert.equal(result.sparkline.at(-1)?.value, 56.78);
   });
 });
 
@@ -313,4 +332,6 @@ test("polymarket trading activity uses account positions instead of inferred eve
   assert.equal(result.positions[0].id, "real-token");
   assert.equal(result.positions[0].market, "Bitcoin Up or Down");
   assert.equal(result.openOrders[0].id, "open-real");
+  assert.equal(result.sparkline[0].value, 6.57);
+  assert.equal(result.sparkline.at(-1)?.value, 8.07);
 });

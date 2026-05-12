@@ -14,7 +14,7 @@ import {
   YAxis,
 } from "recharts";
 import * as THREE from "three";
-import type { TradingOpenOrder, TradingPlatform, TradingPlatformActivity, TradingPosition } from "../../types/trading";
+import type { TradingActivitySnapshot, TradingOpenOrder, TradingPlatform, TradingPlatformActivity, TradingPosition } from "../../types/trading";
 import type {
   AnalyticsWindow,
   ArbCandidate,
@@ -50,6 +50,8 @@ type TradeDetailRegionKey = "below_lower" | "between_strikes" | "above_higher";
 type DashboardViewMode = "risk" | "raw" | "execution";
 type LiveOperationalState = "clean" | "quarantined" | "autoHardlocksDisabled" | "blocked" | "degraded" | "standby";
 type TradingTab = "history" | "positions" | "openOrders";
+
+const ACCOUNT_PNL_FALLBACK_WINDOW_MS = 24 * 60 * 60_000;
 
 interface TradeDetailLeg {
   label: "A" | "B";
@@ -127,6 +129,22 @@ interface LiveOperationalStatus {
   activeLockLabel: string;
   reason: string | null;
   autoHardlocksEnabled: boolean;
+}
+
+interface AccountPnlCurvePoint {
+  timestamp: number;
+  label: string;
+  accountValue: number;
+  cumulativePnl: number;
+}
+
+interface AccountPnlCurve {
+  data: AccountPnlCurvePoint[];
+  netPnl: number | null;
+  latestAccountValue: number | null;
+  hasData: boolean;
+  startLabel: string;
+  endLabel: string;
 }
 
 export interface TradeRiskIntelligence {
@@ -1010,17 +1028,141 @@ function handleTradeSelectKey(event: React.KeyboardEvent, onSelect: () => void) 
   onSelect();
 }
 
-export function PnLChart({ analytics }: { analytics: DashboardAnalyticsWindow }) {
-  const data = analytics.buckets.map((bucket) => ({
-    label: bucket.label,
-    cumulativePnl: bucket.cumulativePnl,
-    netPnl: bucket.netPnl,
-  }));
+function roundAccountDollar(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
 
+function finiteAccountNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function accountPnlLabel(timestamp: number, window: AnalyticsWindow): string {
+  const date = new Date(timestamp);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (window === "hourly") {
+    return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}Z`;
+  }
+  return `${months[date.getUTCMonth()]} ${date.getUTCDate()}`;
+}
+
+function normalizeAccountPoints(activity: TradingPlatformActivity, sinceMs: number, now: number): Array<{ timestamp: number; value: number }> {
+  const portfolioValue = activity.portfolio.portfolioValue;
+  const lastUpdated = activity.portfolio.lastUpdatedAt ?? activity.lastUpdatedAt ?? now;
+  const sparkline = activity.sparkline
+    .filter((point) => finiteAccountNumber(point.value) && Number.isFinite(point.timestamp))
+    .map((point) => ({ timestamp: point.timestamp, value: roundAccountDollar(point.value) }));
+  const hasAccountValue = finiteAccountNumber(portfolioValue);
+  const hasNonZeroSparkline = sparkline.some((point) => Math.abs(point.value) > 0.000001);
+  if (!hasAccountValue && !hasNonZeroSparkline) return [];
+
+  const raw = [...sparkline];
+  if (hasAccountValue) {
+    raw.push({
+      timestamp: Math.min(now, Math.max(sinceMs, lastUpdated)),
+      value: roundAccountDollar(portfolioValue),
+    });
+    if (finiteAccountNumber(activity.portfolio.dayChangeDollars)) {
+      raw.push({
+        timestamp: Math.max(sinceMs, Math.min(now, lastUpdated) - ACCOUNT_PNL_FALLBACK_WINDOW_MS),
+        value: roundAccountDollar(portfolioValue - activity.portfolio.dayChangeDollars),
+      });
+    }
+  }
+
+  const sorted = raw.sort((left, right) => left.timestamp - right.timestamp);
+  const beforeStart = [...sorted].reverse().find((point) => point.timestamp <= sinceMs);
+  const firstAfterStart = sorted.find((point) => point.timestamp > sinceMs);
+  const startValue = beforeStart?.value ?? firstAfterStart?.value ?? (hasAccountValue ? roundAccountDollar(portfolioValue) : null);
+  if (startValue == null) return [];
+
+  const points = [{ timestamp: sinceMs, value: startValue }];
+  for (const point of sorted) {
+    if (point.timestamp > sinceMs && point.timestamp <= now) points.push(point);
+  }
+  const last = points.at(-1);
+  if (last && last.timestamp < now) {
+    points.push({ timestamp: now, value: last.value });
+  }
+
+  const deduped = new Map<number, { timestamp: number; value: number }>();
+  for (const point of points) {
+    deduped.set(point.timestamp, point);
+  }
+  return [...deduped.values()].sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function latestValueAt(points: Array<{ timestamp: number; value: number }>, timestamp: number): number | null {
+  let value: number | null = null;
+  for (const point of points) {
+    if (point.timestamp > timestamp) break;
+    value = point.value;
+  }
+  return value;
+}
+
+export function buildCombinedAccountPnlCurve(
+  activity: TradingActivitySnapshot | null | undefined,
+  analytics: DashboardAnalyticsWindow,
+  now: number,
+): AccountPnlCurve {
+  const empty: AccountPnlCurve = {
+    data: [],
+    netPnl: null,
+    latestAccountValue: null,
+    hasData: false,
+    startLabel: "--",
+    endLabel: "--",
+  };
+  if (!activity) return empty;
+
+  const sinceMs = Math.min(now, analytics.sinceMs);
+  const kalshi = normalizeAccountPoints(activity.kalshi, sinceMs, now);
+  const polymarket = normalizeAccountPoints(activity.polymarket, sinceMs, now);
+  if (kalshi.length === 0 && polymarket.length === 0) return empty;
+
+  const timestamps = [...new Set([
+    sinceMs,
+    now,
+    ...kalshi.map((point) => point.timestamp),
+    ...polymarket.map((point) => point.timestamp),
+  ])].filter((timestamp) => timestamp >= sinceMs && timestamp <= now).sort((left, right) => left - right);
+
+  const accountValues = timestamps
+    .map((timestamp) => {
+      const values = [latestValueAt(kalshi, timestamp), latestValueAt(polymarket, timestamp)]
+        .filter((value): value is number => value != null);
+      if (values.length === 0) return null;
+      return {
+        timestamp,
+        accountValue: roundAccountDollar(values.reduce((total, value) => total + value, 0)),
+      };
+    })
+    .filter((point): point is { timestamp: number; accountValue: number } => point != null);
+  if (accountValues.length === 0) return empty;
+
+  const startingValue = accountValues[0].accountValue;
+  const data = accountValues.map((point) => ({
+    timestamp: point.timestamp,
+    label: accountPnlLabel(point.timestamp, analytics.window),
+    accountValue: point.accountValue,
+    cumulativePnl: roundAccountDollar(point.accountValue - startingValue),
+  }));
+  const latest = data.at(-1);
+  return {
+    data,
+    netPnl: latest ? latest.cumulativePnl : null,
+    latestAccountValue: latest ? latest.accountValue : null,
+    hasData: data.length >= 2,
+    startLabel: data[0]?.label ?? "--",
+    endLabel: latest?.label ?? "--",
+  };
+}
+
+export function PnLChart({ curve }: { curve: AccountPnlCurve }) {
   return (
-    <div className="pnl-chart" aria-label="Estimated Guaranteed PnL graph">
-      <span className="sr-only">Estimated Guaranteed PnL Graph. Y-axis: Estimated PnL dollars. X-axis: selected analytics window buckets.</span>
-      <AreaChart accessibilityLayer data={data} height={220} margin={{ top: 12, right: 20, bottom: 8, left: 12 }} width={820}>
+    <div className="pnl-chart" aria-label="Combined account P/L graph">
+      <span className="sr-only">Combined Account P/L Graph. Y-axis: account P/L dollars. X-axis: account value samples from Kalshi and Polymarket.</span>
+      <AreaChart accessibilityLayer data={curve.data} height={220} margin={{ top: 12, right: 20, bottom: 8, left: 12 }} width={820}>
         <defs>
           <linearGradient id="pnlGradient" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#46d67d" stopOpacity={0.34} />
@@ -1030,7 +1172,7 @@ export function PnLChart({ analytics }: { analytics: DashboardAnalyticsWindow })
         <CartesianGrid stroke="rgba(116, 130, 149, 0.16)" strokeDasharray="3 3" />
         <XAxis dataKey="label" minTickGap={18} stroke="#748295" tick={{ fill: "#748295", fontSize: 11 }} tickLine={false} />
         <YAxis
-          label={{ value: "Y-axis: Estimated PnL ($)", angle: -90, position: "insideLeft", fill: "#91a0b5", fontSize: 11 }}
+          label={{ value: "Y-axis: Account P/L ($)", angle: -90, position: "insideLeft", fill: "#91a0b5", fontSize: 11 }}
           stroke="#748295"
           tick={{ fill: "#748295", fontSize: 11 }}
           tickFormatter={(value) => `$${Number(value).toFixed(2)}`}
@@ -1038,15 +1180,15 @@ export function PnLChart({ analytics }: { analytics: DashboardAnalyticsWindow })
         />
         <Tooltip
           contentStyle={{ background: "#071018", border: "1px solid rgba(116, 130, 149, 0.32)", color: "#e6edf3" }}
-          formatter={(value) => [`$${Number(value).toFixed(4)}`, "Cumulative estimated PnL"]}
-          labelFormatter={(label) => `Bucket ${label}`}
+          formatter={(value) => [formatActivitySignedCurrency(Number(value)), "Combined account P/L"]}
+          labelFormatter={(label) => `Sample ${label}`}
         />
-        <Area dataKey="cumulativePnl" fill="url(#pnlGradient)" isAnimationActive={false} name="Estimated Guaranteed PnL" stroke={analytics.netPnl >= 0 ? "#46d67d" : "#ff5f65"} strokeWidth={2.4} type="monotone" />
+        <Area dataKey="cumulativePnl" fill="url(#pnlGradient)" isAnimationActive={false} name="Combined account P/L" stroke={(curve.netPnl ?? 0) >= 0 ? "#46d67d" : "#ff5f65"} strokeWidth={2.4} type="monotone" />
       </AreaChart>
       <div className="pnl-chart-axis">
-        <span>{analytics.buckets[0]?.label ?? "--"}</span>
-        <span>{formatSignedCents(analytics.netPnl)}</span>
-        <span>{analytics.buckets.at(-1)?.label ?? "--"}</span>
+        <span>{curve.startLabel}</span>
+        <span>{formatActivitySignedCurrency(curve.netPnl)}</span>
+        <span>{curve.endLabel}</span>
       </div>
     </div>
   );
@@ -1666,6 +1808,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
   const realtime = analytics.realtime;
   const realtimeMode = realtime?.mode === "fallback_db" ? "Fallback DB" : "Hot-cache";
   const realtimeState = realtime?.stale ? "STALE" : "REALTIME";
+  const accountPnlCurve = buildCombinedAccountPnlCurve(snapshot.tradingActivity, current, snapshot.generatedAt);
   return (
     <section className="panel analytics-panel">
       <div className="panel-header analytics-header">
@@ -1724,22 +1867,22 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
         <div className="pnl-chart-card">
           <div className="pnl-chart-header">
             <div>
-              <span className="signal-label">PnL Curve</span>
-              <strong>Cumulative</strong>
+              <span className="signal-label">Account P/L Curve</span>
+              <strong>Kalshi + Polymarket</strong>
             </div>
             <div>
-              <span className="signal-label">Breakeven</span>
-              <strong>{current.breakevenTrades}</strong>
+              <span className="signal-label">Wallet Value</span>
+              <strong>{formatActivityCurrency(accountPnlCurve.latestAccountValue)}</strong>
             </div>
             <div>
-              <span className="signal-label">Avg / Trade</span>
-              <strong>{formatSignedCents(current.averagePnl)}</strong>
+              <span className="signal-label">Wallet Change</span>
+              <strong className={(accountPnlCurve.netPnl ?? 0) >= 0 ? "profit" : "loss"}>{formatActivitySignedCurrency(accountPnlCurve.netPnl)}</strong>
             </div>
           </div>
-          {noTrades ? (
-            <div className="analytics-empty">No fills</div>
+          {!accountPnlCurve.hasData ? (
+            <div className="analytics-empty">No account P/L samples</div>
           ) : (
-            <PnLChart analytics={current} />
+            <PnLChart curve={accountPnlCurve} />
           )}
         </div>
 

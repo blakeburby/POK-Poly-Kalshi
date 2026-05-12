@@ -123,10 +123,11 @@ function timestampMs(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function accountSparkline(value: number | null, now: number): TradingSparklinePoint[] {
+function accountSparkline(value: number | null, now: number, dayChangeDollars: number | null = null): TradingSparklinePoint[] {
   const y = value ?? 0;
+  const start = value != null && dayChangeDollars != null ? rounded(value - dayChangeDollars) ?? y : y;
   return [
-    { timestamp: now - 24 * 60 * 60_000, value: y },
+    { timestamp: now - 24 * 60 * 60_000, value: start },
     { timestamp: now, value: y },
   ];
 }
@@ -297,7 +298,7 @@ async function kalshiAccountActivity(options: AccountSourceOptions): Promise<Pla
     positions,
     openOrders,
     history: apiHistory.length > 0 ? apiHistory : undefined,
-    sparkline: accountSparkline(portfolio.portfolioValue, now),
+    sparkline: accountSparkline(portfolio.portfolioValue, now, portfolio.dayChangeDollars),
     lastUpdatedAt: now,
   };
 }
@@ -443,7 +444,7 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
     positions,
     openOrders: accountState.openOrders,
     history: apiHistory.length > 0 ? apiHistory : undefined,
-    sparkline: accountSparkline(portfolioValue, now),
+    sparkline: accountSparkline(portfolioValue, now, Number.isFinite(accountPnl) && accountPnl !== 0 ? rounded(accountPnl) : null),
     lastUpdatedAt: now,
   };
 }
@@ -465,7 +466,7 @@ export async function accountBackedPlatformActivity(
       positions: account.positions,
       openOrders: account.openOrders,
       history: account.history ?? fallback.history,
-      sparkline: account.sparkline ?? accountSparkline(account.portfolio.portfolioValue, options.now),
+      sparkline: account.sparkline ?? accountSparkline(account.portfolio.portfolioValue, options.now, account.portfolio.dayChangeDollars),
     };
   } catch {
     const cashValue = platform === "polymarket"

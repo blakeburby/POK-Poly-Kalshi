@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   DashboardTerminalView,
   RiskMeter,
+  buildCombinedAccountPnlCurve,
   buildBookMetrics,
   buildBookRowViewModel,
   buildCrossVenueBookComparisons,
@@ -420,6 +421,27 @@ test("performance analytics count only exact paired live fills", () => {
   assert.doesNotMatch(markup, /dry-run-kalshi-3/);
   assert.doesNotMatch(markup, /dry-run-poly-3/);
   assert.doesNotMatch(markup, /legacy-dry-run/);
+});
+
+test("cumulative pnl curve uses combined account values instead of fill-audit pnl", () => {
+  const signals = [
+    signal({ id: 71, kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 }),
+  ];
+  const analytics = buildDashboardAnalytics(signals, generatedAt);
+  const activity = tradingActivity();
+  activity.kalshi.sparkline[0].timestamp = analytics.hourly.sinceMs;
+  activity.polymarket.sparkline[0].timestamp = analytics.hourly.sinceMs;
+  activity.polymarket.portfolio.dayChangeDollars = -2.2;
+  const curve = buildCombinedAccountPnlCurve(activity, analytics.hourly, generatedAt);
+  const markup = render({ recentSignals: signals, analytics, tradingActivity: activity });
+
+  assert.equal(curve.netPnl, 3);
+  assert.equal(curve.latestAccountValue, 213);
+  assert.match(markup, /Account P\/L Curve/);
+  assert.match(markup, /Kalshi \+ Polymarket/);
+  assert.match(markup, /Wallet Change<\/span><strong class="profit">\+\$3\.00<\/strong>/);
+  assert.match(markup, /Wallet Value<\/span><strong>\$213\.00<\/strong>/);
+  assert.doesNotMatch(markup, /Cumulative estimated PnL/);
 });
 
 test("signal tape stays compact while retaining filled, failed, partial, quarantined, and resolved details", () => {

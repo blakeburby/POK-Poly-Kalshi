@@ -46,6 +46,7 @@ export interface TradingActivityOptions {
 
 const OPEN_STATUSES = new Set(["accepted", "delayed", "live", "open", "placed", "resting", "unfilled", "working"]);
 const FILLED_STATUSES = new Set(["fill", "filled", "matched", "trade"]);
+const ACCOUNT_HISTORY_WINDOW_MS = 24 * 60 * 60_000;
 
 function toNumber(value: string | number | null | undefined): number | null {
   if (value == null) return null;
@@ -61,6 +62,10 @@ function toMs(value: string | Date | null | undefined): number | null {
 
 function roundCurrency(value: number): number {
   return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function normalizePlatform(value: Venue): TradingPlatform {
@@ -242,6 +247,10 @@ export function emptyTradingActivity(now = Date.now()): TradingActivitySnapshot 
 
 export class TradingActivityStore {
   private polymarketClientPromise: Promise<PolymarketClobLike> | null = null;
+  private readonly accountValueHistory: Record<TradingPlatform, TradingSparklinePoint[]> = {
+    kalshi: [],
+    polymarket: [],
+  };
 
   constructor(
     private readonly db: Queryable,
@@ -279,15 +288,17 @@ export class TradingActivityStore {
       history,
       sparkline: buildSparkline(history, portfolio.cashValue, now),
     };
-    if (!this.config) return fallback;
-    return accountBackedPlatformActivity(platform, fallback, {
-      config: this.config,
-      readiness: options.readiness,
-      history,
-      now,
-      fetchFn: this.fetchFn,
-      getPolymarketClient: () => this.getPolymarketClient(),
-    });
+    const activity = this.config
+      ? await accountBackedPlatformActivity(platform, fallback, {
+          config: this.config,
+          readiness: options.readiness,
+          history,
+          now,
+          fetchFn: this.fetchFn,
+          getPolymarketClient: () => this.getPolymarketClient(),
+        })
+      : fallback;
+    return this.withAccountValueHistory(activity, now);
   }
 
   async getSnapshot(options: TradingActivityOptions = {}): Promise<TradingActivitySnapshot> {
@@ -304,6 +315,29 @@ export class TradingActivityStore {
       this.polymarketClientPromise = defaultPolymarketClientFactory(this.config).then((bundle) => "client" in bundle ? bundle.client : bundle);
     }
     return this.polymarketClientPromise;
+  }
+
+  private withAccountValueHistory(activity: TradingPlatformActivity, now: number): TradingPlatformActivity {
+    const existing = this.accountValueHistory[activity.platform];
+    const since = now - ACCOUNT_HISTORY_WINDOW_MS;
+    const merged = [...existing, ...activity.sparkline]
+      .filter((point) => point.timestamp >= since && point.timestamp <= now && isFiniteNumber(point.value))
+      .sort((left, right) => left.timestamp - right.timestamp);
+    if (isFiniteNumber(activity.portfolio.portfolioValue)) {
+      merged.push({ timestamp: now, value: roundCurrency(activity.portfolio.portfolioValue) });
+    }
+
+    const deduped = new Map<number, TradingSparklinePoint>();
+    for (const point of merged) {
+      deduped.set(point.timestamp, { timestamp: point.timestamp, value: roundCurrency(point.value) });
+    }
+    const sparkline = [...deduped.values()].sort((left, right) => left.timestamp - right.timestamp);
+    this.accountValueHistory[activity.platform] = sparkline;
+
+    return {
+      ...activity,
+      sparkline: sparkline.length > 0 ? sparkline : activity.sparkline,
+    };
   }
 }
 
