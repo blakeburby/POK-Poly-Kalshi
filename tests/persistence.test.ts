@@ -323,6 +323,42 @@ test("signal persistence blocks live candidates with same-window exposure", asyn
   assert.match(legReason ?? "", /Kalshi leg kalshi already has exposure/);
 });
 
+test("signal persistence blocks submitted attempts per expiry without counting pre-submit skips", async () => {
+  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
+  const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+  const calls: { sql: string; values?: unknown[] }[] = [];
+  const db: Queryable = {
+    async query<T = Record<string, unknown>>(sql: string, values?: unknown[]) {
+      calls.push({ sql, values });
+      return { rows: [{ attempt_count: 3 } as T] };
+    },
+  };
+
+  const reason = await new SignalStore(db).liveSubmittedAttemptBlockReason(candidate, 1_799_999_999_000, 3);
+
+  assert.match(reason ?? "", /submitted attempt limit reached/);
+  assert.match(calls[0]?.sql ?? "", /execution_group_id IS NOT NULL/);
+  assert.match(calls[0]?.sql ?? "", /action IN \('filled', 'failed'\)/);
+  assert.doesNotMatch(calls[0]?.sql ?? "", /skipped/);
+  assert.deepEqual(calls[0]?.values, [candidate.expiryMs, 1_799_999_999_000]);
+});
+
+test("signal persistence allows new entries below the submitted attempt cap", async () => {
+  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
+  const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+  const db: Queryable = {
+    async query<T = Record<string, unknown>>() {
+      return { rows: [{ attempt_count: 2 } as T] };
+    },
+  };
+
+  assert.equal(await new SignalStore(db).liveSubmittedAttemptBlockReason(candidate, 1_799_999_999_000, 3), null);
+});
+
 test("live reconciliation blocks unresolved partial fills but ignores operator-resolved incidents", async () => {
   const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
   const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });

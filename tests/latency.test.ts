@@ -273,6 +273,70 @@ test("live hot-path scanner suppresses automatic lock writes when disabled", asy
   assert.equal(lockCalls, 0);
 });
 
+test("live scanner enforces submitted attempt cap even when auto-hardlocks are disabled", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
+  ]);
+
+  let inserted = 0;
+  let executed = 0;
+  let capChecks = 0;
+  const scanner = new CrossVenueArbScanner(
+    books,
+    {
+      async insertSignal() {
+        inserted += 1;
+        return inserted;
+      },
+      async updateSignal() {
+        return undefined;
+      },
+    },
+    {
+      async execute(): Promise<ExecutionResult> {
+        executed += 1;
+        return {
+          action: "filled",
+          failureReason: null,
+          kalshiFillId: "kalshi",
+          polymarketFillId: "poly",
+          kalshiFillPrice: 0.5,
+          polymarketFillPrice: 0.4,
+        };
+      },
+    },
+    new ReentryThrottle(15_000),
+    {
+      enabled: true,
+      minProfitDollars: 0.05,
+      staleBookMs: 10_000,
+      maxLiveTradesPerWindow: 3,
+      liveAutoHardlocksEnabled: false,
+      liveExposure: {
+        async liveSubmittedAttemptBlockReason(_candidate, _now, maxTradesPerWindow) {
+          capChecks += 1;
+          return `live submitted attempt limit reached for expiry ${now}: ${maxTradesPerWindow}/${maxTradesPerWindow}`;
+        },
+        async liveExposureBlockReason() {
+          throw new Error("unresolved exposure checks should stay bypassed when auto-hardlocks are disabled");
+        },
+      },
+    },
+  );
+
+  const accepted = await scanner.scan(now);
+
+  assert.equal(accepted.length, 0);
+  assert.equal(inserted, 0);
+  assert.equal(executed, 0);
+  assert.equal(capChecks, 1);
+});
+
 test("live scanner limits canary execution to one candidate per expiry window", async () => {
   const books = new BookStore();
   const now = 1_800_000_000_000;

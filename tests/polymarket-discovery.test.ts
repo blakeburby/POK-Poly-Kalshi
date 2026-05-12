@@ -63,7 +63,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderSize: 1,
     liveTakerPriceCushionCents: 2,
     liveMinExpiryMs: 30_000,
-    liveMaxTradesPerWindow: 1,
+    liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,

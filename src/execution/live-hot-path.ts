@@ -3,6 +3,7 @@ import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../db/live
 
 export interface LiveExposureSignalReader {
   listLiveExposureSignals(now: number, limit?: number): Promise<DashboardSignal[]>;
+  listLiveSubmittedAttemptSignals?(now: number, limit?: number): Promise<DashboardSignal[]>;
   unresolvedRiskQuarantineExposureDollars?(): Promise<number>;
   liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
 }
@@ -25,6 +26,10 @@ function hasLiveExposure(signal: DashboardSignal): boolean {
       || ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "")
       || ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "")
     );
+}
+
+function isSubmittedLiveAttempt(signal: DashboardSignal): boolean {
+  return Boolean(signal.executionGroupId) && (signal.action === "filled" || signal.action === "failed");
 }
 
 function riskQuarantined(signal: DashboardSignal): boolean {
@@ -131,6 +136,7 @@ export class CachedLiveExecutionLockStore implements LiveExecutionLockWriter {
 
 export class LiveExposureCache {
   private signals: DashboardSignal[] = [];
+  private submittedAttemptExpiriesBySignalId = new Map<number, number>();
   private refreshedAt: number | null = null;
   private refreshInFlight: Promise<void> | null = null;
 
@@ -144,7 +150,14 @@ export class LiveExposureCache {
   async refresh(now = this.now()): Promise<void> {
     if (this.refreshInFlight) return this.refreshInFlight;
     this.refreshInFlight = (async () => {
-      this.signals = (await this.reader.listLiveExposureSignals(now)).filter(hasLiveExposure);
+      const [signals, submittedAttempts] = await Promise.all([
+        this.reader.listLiveExposureSignals(now),
+        this.reader.listLiveSubmittedAttemptSignals?.(now) ?? Promise.resolve([]),
+      ]);
+      this.signals = signals.filter(hasLiveExposure);
+      this.submittedAttemptExpiriesBySignalId = new Map(submittedAttempts
+        .filter(isSubmittedLiveAttempt)
+        .map((signal) => [signal.id, signal.expiryMs]));
       this.refreshedAt = this.now();
     })().finally(() => {
       this.refreshInFlight = null;
@@ -155,6 +168,8 @@ export class LiveExposureCache {
   observeSignal(signal: DashboardSignal): void {
     this.signals = this.signals.filter((existing) => existing.id !== signal.id);
     if (hasLiveExposure(signal)) this.signals.unshift(signal);
+    this.submittedAttemptExpiriesBySignalId.delete(signal.id);
+    if (isSubmittedLiveAttempt(signal)) this.submittedAttemptExpiriesBySignalId.set(signal.id, signal.expiryMs);
     this.refreshedAt = this.now();
   }
 
@@ -188,6 +203,18 @@ export class LiveExposureCache {
     const status = quarantineStatus(this.signals);
     if (Number.isFinite(this.maxUnresolvedExposureDollars) && status.total > this.maxUnresolvedExposureDollars + 1e-9) {
       return `live unresolved quarantined exposure ${status.total.toFixed(2)} exceeds cap ${this.maxUnresolvedExposureDollars.toFixed(2)} across ${status.count} signals`;
+    }
+    return null;
+  }
+
+  async liveSubmittedAttemptBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
+    const staleReason = this.status().reason;
+    if (staleReason) return staleReason;
+    const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
+    const submittedAttempts = [...this.submittedAttemptExpiriesBySignalId.values()]
+      .filter((expiryMs) => expiryMs === candidate.expiryMs && expiryMs > now).length;
+    if (submittedAttempts >= maxTrades) {
+      return `live submitted attempt limit reached for expiry ${candidate.expiryMs}: ${submittedAttempts}/${maxTrades}`;
     }
     return null;
   }

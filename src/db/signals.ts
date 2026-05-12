@@ -125,6 +125,10 @@ interface QuarantineExposureRow {
   count: string | number | null;
 }
 
+interface LiveSubmittedAttemptCountRow {
+  attempt_count: string | number | null;
+}
+
 const SIGNAL_COLUMNS = `
   id, created_at, updated_at, pair_key, expiry_ms,
   kalshi_contract_id, polymarket_contract_id,
@@ -521,6 +525,27 @@ export class SignalStore {
     return null;
   }
 
+  async liveSubmittedAttemptBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    maxTradesPerWindow: number,
+  ): Promise<string | null> {
+    const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
+    const result = await this.db.query<LiveSubmittedAttemptCountRow>(`
+      SELECT COUNT(*) AS attempt_count
+      FROM cross_venue_arb_signals
+      WHERE execution_group_id IS NOT NULL
+        AND expiry_ms = $1
+        AND expiry_ms > $2
+        AND action IN ('filled', 'failed')
+    `, [candidate.expiryMs, now]);
+    const attemptCount = numberFrom(result.rows[0]?.attempt_count ?? null) ?? 0;
+    if (attemptCount >= maxTrades) {
+      return `live submitted attempt limit reached for expiry ${candidate.expiryMs}: ${attemptCount}/${maxTrades}`;
+    }
+    return null;
+  }
+
   async listLiveExposureSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
     const result = await this.db.query<DashboardSignalRow>(`
       SELECT ${SIGNAL_COLUMNS}
@@ -536,6 +561,19 @@ export class SignalStore {
           OR kalshi_status IN ('unknown', 'unexpected_fill_count')
           OR polymarket_status IN ('unknown', 'unexpected_fill_count')
         )
+      ORDER BY updated_at DESC
+      LIMIT $2
+    `, [now, limit]);
+    return result.rows.map(signalFromRow);
+  }
+
+  async listLiveSubmittedAttemptSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
+    const result = await this.db.query<DashboardSignalRow>(`
+      SELECT ${SIGNAL_COLUMNS}
+      FROM cross_venue_arb_signals
+      WHERE execution_group_id IS NOT NULL
+        AND expiry_ms > $1
+        AND action IN ('filled', 'failed')
       ORDER BY updated_at DESC
       LIMIT $2
     `, [now, limit]);

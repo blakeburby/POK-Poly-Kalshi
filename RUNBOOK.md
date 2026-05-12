@@ -28,7 +28,7 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_ORDER_SIZE=5`: venue share size.
 - `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: per-leg taker cushion included in the edge gate before entry.
 - `LIVE_MIN_EXPIRY_MS=60000`: skip entries inside the final minute.
-- `LIVE_MAX_TRADES_PER_WINDOW=1`: max live spread per 15-minute expiry window.
+- `LIVE_MAX_TRADES_PER_WINDOW=3`: max real submitted live attempts per 15-minute expiry window.
 - `LIVE_COLLATERAL_BUFFER_DOLLARS=0.25`: extra collateral required before entry.
 - `LIVE_QUOTE_MAX_AGE_MS=750`: max individual book age.
 - `LIVE_QUOTE_SYNC_MAX_SKEW_MS=250`: max cross-venue book skew.

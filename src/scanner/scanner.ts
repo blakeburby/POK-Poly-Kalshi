@@ -22,6 +22,7 @@ export interface ScannerOptions {
   maxUnresolvedExposureDollars?: number;
   liveAutoHardlocksEnabled?: boolean;
   liveExposure?: {
+    liveSubmittedAttemptBlockReason?(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null>;
     liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
     observeSignal?(signal: DashboardSignal): void;
   };
@@ -341,6 +342,8 @@ export class CrossVenueArbScanner {
     for (const key of this.liveLegKeys(candidate)) {
       if (this.activeLiveLegs.has(key)) return `live leg already reserved in this scan: ${key}`;
     }
+    const submittedAttemptReason = await this.options.liveExposure?.liveSubmittedAttemptBlockReason?.(candidate, now, maxTrades);
+    if (submittedAttemptReason) return submittedAttemptReason;
     if (this.options.liveAutoHardlocksEnabled === false) return null;
     return await this.options.liveExposure?.liveExposureBlockReason(
       candidate,

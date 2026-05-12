@@ -22,7 +22,7 @@ import {
 import { LiveExposureCache } from "../src/execution/live-hot-path";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
-import type { ArbLeg, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
+import type { ArbLeg, DashboardSignal, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "../src/execution/venue-confirmations";
 import { contract } from "./helpers";
 
@@ -85,7 +85,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderSize: 1,
     liveTakerPriceCushionCents: 2,
     liveMinExpiryMs: 30_000,
-    liveMaxTradesPerWindow: 1,
+    liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
@@ -2238,6 +2238,47 @@ test("live exposure cache reads persisted quarantine totals from the backing sto
 
   assert.equal(await cache.unresolvedRiskQuarantineExposureDollars(), 4.2);
   assert.deepEqual(await cache.liveRiskQuarantineStatus(), { total: 4.2, count: 1 });
+});
+
+test("live exposure cache enforces submitted attempt cap from warmed attempts and observed signals", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const attempt = (id: number, action: "filled" | "failed" | "skipped", executionGroupId: string | null): DashboardSignal => ({
+    id,
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+    pairKey: `pair-${id}`,
+    expiryMs: candidate.expiryMs,
+    kalshiContractId: `kalshi-${id}`,
+    polymarketContractId: `poly-${id}`,
+    lower: { venue: "polymarket", contractId: `poly-${id}`, strike: 1500, direction: "yes", ask: 0.4 },
+    higher: { venue: "kalshi", contractId: `kalshi-${id}`, strike: 1502, direction: "no", ask: 0.5 },
+    premium: 0.9,
+    guaranteedProfit: 0.1,
+    overlapProfit: 1.1,
+    threshold: 0.05,
+    action,
+    failureReason: action === "failed" ? "venue failed" : null,
+    kalshiFillId: null,
+    polymarketFillId: null,
+    kalshiFillPrice: null,
+    polymarketFillPrice: null,
+    executionGroupId,
+  });
+  const cache = new LiveExposureCache({
+    listLiveExposureSignals: async () => [],
+    listLiveSubmittedAttemptSignals: async () => [
+      attempt(1, "filled", "group-1"),
+      attempt(2, "failed", "group-2"),
+      attempt(3, "skipped", null),
+    ],
+  }, 5_000, 10, () => now);
+
+  await cache.refresh(now);
+
+  assert.equal(await cache.liveSubmittedAttemptBlockReason(candidate, now, 3), null);
+  cache.observeSignal(attempt(4, "failed", "group-4"));
+  assert.match(await cache.liveSubmittedAttemptBlockReason(candidate, now, 3) ?? "", /submitted attempt limit reached/);
 });
 
 test("live executor hard-locks quarantined fills when exposure cap would be exceeded", async () => {

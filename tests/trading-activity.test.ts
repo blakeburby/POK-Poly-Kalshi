@@ -38,7 +38,7 @@ function readiness(): LiveExecutionReadiness {
     orderSize: 5,
     orderType: "FOK",
     minExpiryMs: 60_000,
-    maxTradesPerWindow: 1,
+    maxTradesPerWindow: 3,
     collateralBufferDollars: 0.25,
     quoteMaxAgeMs: 750,
     quoteSyncMaxSkewMs: 250,

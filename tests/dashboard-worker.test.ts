@@ -46,7 +46,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveOrderSize: 1,
     liveTakerPriceCushionCents: 2,
     liveMinExpiryMs: 30_000,
-    liveMaxTradesPerWindow: 1,
+    liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
@@ -204,7 +204,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
       orderType: "FOK",
       takerPriceCushionCents: 2,
       minExpiryMs: 30_000,
-      maxTradesPerWindow: 1,
+      maxTradesPerWindow: 3,
       collateralBufferDollars: 0.25,
       partialFillLocked: false,
       circuitBreakerLocked: false,
@@ -241,7 +241,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
 
   const snapshot = await createDashboardSnapshot(runtime, now);
   assert.equal(snapshot.health.ok, true);
-  assert.equal(snapshot.health.liveMaxTradesPerWindow, 1);
+  assert.equal(snapshot.health.liveMaxTradesPerWindow, 3);
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);
   assert.equal(snapshot.liveCandidates.length, 1);

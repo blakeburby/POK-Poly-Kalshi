@@ -29,6 +29,7 @@ function candidateFrom(poly: BinaryContract, kalshi: BinaryContract) {
 
 test("config defaults the live minimum edge to one cent", () => {
   assert.equal(loadConfig({}).minProfitDollars, 0.01);
+  assert.equal(loadConfig({}).liveMaxTradesPerWindow, 3);
 });
 
 test("depthWeightedAsk computes order-size VWAP and fails when depth is insufficient", () => {
