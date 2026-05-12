@@ -346,11 +346,20 @@ test("live-only dashboard renders one live command surface", () => {
   assert.match(markup, /Value/);
   assert.match(markup, /7m ago/);
   assert.match(markup, /Live Signal Tape/);
-  assert.match(markup, /LIVE-ONLY DASHBOARD/);
-  assert.match(markup, /real-kalshi-order/);
-  assert.match(markup, /real-poly-order/);
+  assert.match(markup, /LIVE ONLY/);
   assert.match(markup, /Executed Fill-Audit PnL/);
-  assert.match(markup, /Live exchange-fill audit records only; conservative \$1\.00 payoff floor, not settlement-final PnL\./);
+  assert.match(markup, /Exchange fills only\. \$1 floor\. Not settlement PnL\./);
+  assert.match(markup, /PNL/);
+  assert.match(markup, /EDGE/);
+  assert.match(markup, /FILL/);
+  assert.match(markup, /Details/);
+  assert.doesNotMatch(markup, /Signal time/);
+  assert.doesNotMatch(markup, /Finalized time/);
+  assert.doesNotMatch(markup, /Pair Key/);
+
+  const detail = buildTradeDetailModel("signal", snapshot().recentSignals[0]);
+  assert.match(JSON.stringify(detail), /real-kalshi-order/);
+  assert.match(JSON.stringify(detail), /real-poly-order/);
 
   for (const forbidden of [
     "Current " + "Pa" + "per Trading Dashboard",
@@ -373,9 +382,10 @@ test("live-only dashboard renders one live command surface", () => {
 });
 
 test("performance analytics count only exact paired live fills", () => {
+  const exactSignal = signal({ id: 1, executionGroupId: "real-group-1", kalshiFillId: "real-kalshi-1", polymarketFillId: "real-poly-1", kalshiFillCount: 5, polymarketFillCount: 5 });
   const markup = render({
     recentSignals: [
-      signal({ id: 1, executionGroupId: "real-group-1", kalshiFillId: "real-kalshi-1", polymarketFillId: "real-poly-1", kalshiFillCount: 5, polymarketFillCount: 5 }),
+      exactSignal,
       signal({ id: 2, action: "failed", executionGroupId: "real-failed", kalshiFillId: null, polymarketFillId: null, kalshiFillCount: 0, polymarketFillCount: 0 }),
       signal({ id: 3, executionGroupId: "legacy-dry-run", kalshiFillId: "dry-run-kalshi-3", polymarketFillId: "dry-run-poly-3", kalshiFillCount: 5, polymarketFillCount: 5, kalshiFillPrice: 0.1, polymarketFillPrice: 0.1 }),
       signal({ id: 4, executionGroupId: "mismatch-group", kalshiFillId: "real-kalshi-4", polymarketFillId: "real-poly-4", kalshiFillCount: 5, polymarketFillCount: 0, partialFill: true }),
@@ -388,11 +398,38 @@ test("performance analytics count only exact paired live fills", () => {
 
   assert.match(markup, /Real Live Fills<\/span><strong>1<\/strong>/);
   assert.match(markup, /Audited Fills<\/span><strong>1<\/strong>/);
-  assert.match(markup, /real-kalshi-1/);
-  assert.match(markup, /real-poly-1/);
+  assert.match(markup, /#1/);
+  assert.match(JSON.stringify(buildTradeDetailModel("signal", exactSignal)), /real-kalshi-1/);
+  assert.match(JSON.stringify(buildTradeDetailModel("signal", exactSignal)), /real-poly-1/);
   assert.doesNotMatch(markup, /dry-run-kalshi-3/);
   assert.doesNotMatch(markup, /dry-run-poly-3/);
   assert.doesNotMatch(markup, /legacy-dry-run/);
+});
+
+test("signal tape stays compact while retaining filled, failed, partial, quarantined, and resolved details", () => {
+  const signals = [
+    signal({ id: 11, action: "filled", executionGroupId: "group-11", kalshiFillId: "real-kalshi-11", polymarketFillId: "real-poly-11" }),
+    signal({ id: 12, action: "failed", executionGroupId: "group-12", failureReason: "fok not matched", kalshiFillCount: 0, polymarketFillCount: 0, kalshiFillId: null, polymarketFillId: null }),
+    signal({ id: 13, action: "failed", executionGroupId: "group-13", partialFill: true, failureReason: "one-sided fill", kalshiFillId: "real-kalshi-13", polymarketFillId: null, kalshiFillCount: 5, polymarketFillCount: 0 }),
+    signal({ id: 14, action: "failed", executionGroupId: "group-14", partialFill: true, riskQuarantinedAt: new Date(generatedAt - 200).toISOString(), riskQuarantineReason: "under cap", riskQuarantineExposureDollars: 4.2, kalshiFillId: null, polymarketFillId: "real-poly-14", kalshiFillCount: 0, polymarketFillCount: 5 }),
+    signal({ id: 15, action: "failed", executionGroupId: "group-15", partialFill: true, reconciliationResolvedAt: new Date(generatedAt - 100).toISOString(), reconciliationResolutionReason: "operator resolved", kalshiFillId: "real-kalshi-15", polymarketFillId: null, kalshiFillCount: 5, polymarketFillCount: 0 }),
+  ];
+  const markup = render({ recentSignals: signals, analytics: buildDashboardAnalytics(signals, generatedAt) });
+
+  for (const id of [11, 12, 13, 14, 15]) {
+    assert.match(markup, new RegExp(`#${id}`));
+  }
+  assert.match(markup, /FAILED/);
+  assert.match(markup, /PARTIAL/);
+  assert.match(markup, /QUAR/);
+  assert.match(markup, /RESOLVED/);
+  assert.doesNotMatch(markup, /Signal time/);
+  assert.doesNotMatch(markup, /Loss Window/);
+  assert.doesNotMatch(markup, /Inline payoff graph/);
+
+  const detailJson = JSON.stringify(buildTradeDetailModel("signal", signals[4]));
+  assert.match(detailJson, /real-kalshi-15/);
+  assert.match(detailJson, /operator resolved/);
 });
 
 test("strict-clean live states distinguish clean, quarantined, and blocked", () => {

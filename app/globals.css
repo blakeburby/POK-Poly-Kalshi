@@ -3322,6 +3322,87 @@ tbody tr:hover {
     var(--shadow-lift);
 }
 
+.compact-signal-card {
+  gap: 0;
+  padding: 0;
+}
+
+.compact-signal-row {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 0.72fr) minmax(0, 1.8fr) auto;
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.compact-signal-main {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compact-signal-main strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.compact-signal-main > span:last-child,
+.compact-signal-open,
+.compact-signal-reason,
+.compact-signal-metrics span {
+  color: #8fa0b2;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.compact-signal-metrics {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(8, minmax(68px, 1fr));
+  min-width: 0;
+}
+
+.compact-signal-metrics > div {
+  border-left: 1px solid rgba(138, 160, 184, 0.12);
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.compact-signal-metrics strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-signal-open {
+  border: 1px solid rgba(138, 160, 184, 0.18);
+  border-radius: 999px;
+  color: #c6d4e3;
+  padding: 6px 9px;
+}
+
+.compact-signal-reason {
+  border-top: 1px solid rgba(138, 160, 184, 0.12);
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  padding: 9px 14px 11px;
+  text-transform: none;
+}
+
 @media (max-width: 1280px) {
   .institutional-topbar,
   .institutional-command-grid,
@@ -3331,6 +3412,18 @@ tbody tr:hover {
 
   .topbar-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compact-signal-row {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-signal-open {
+    justify-self: start;
+  }
+
+  .compact-signal-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -3530,6 +3623,10 @@ tbody tr:hover {
   .metric {
     min-height: 78px;
     padding: 13px;
+  }
+
+  .compact-signal-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hero-kpi strong {

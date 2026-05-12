@@ -75,6 +75,12 @@ interface TradeDetailRegion {
   isDeadZone: boolean;
 }
 
+interface TradeDetailMetadata {
+  label: string;
+  value: string;
+  tone?: "profit" | "loss" | "warn";
+}
+
 export interface TradeDetailModel {
   key: string;
   source: TradeDetailSource;
@@ -101,6 +107,7 @@ export interface TradeDetailModel {
   structureLabel: "Protected Spread" | "Flipped / Dead-Zone" | "Synthetic Binary Spread";
   classification: "True Arb" | "Probabilistic Bet" | "Dead-Zone Risk";
   regions: TradeDetailRegion[];
+  metadata: TradeDetailMetadata[];
 }
 
 interface LiveOperationalStatus {
@@ -782,6 +789,7 @@ function tradeDetailFromLegs({
   threshold,
   legA,
   legB,
+  metadata = [],
 }: {
   source: TradeDetailSource;
   key: string;
@@ -793,6 +801,7 @@ function tradeDetailFromLegs({
   threshold: number;
   legA: TradeDetailLeg;
   legB: TradeDetailLeg;
+  metadata?: TradeDetailMetadata[];
 }): TradeDetailModel {
   const roleState = assignStrikeRoles(legA, legB);
   const askPrices = [roleState.legA.ask, roleState.legB.ask];
@@ -839,12 +848,35 @@ function tradeDetailFromLegs({
     structureLabel: inferStructureLabel(roleState.legA, roleState.legB),
     classification: classifyTradeDetail(regions, guaranteedEdge, threshold),
     regions,
+    metadata,
   };
 }
 
 export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandidate | DashboardSignal): TradeDetailModel {
   if (source === "signal") {
     const signal = trade as DashboardSignal;
+    const executionTimings = signal.executionTimings as Record<string, unknown> | null | undefined;
+    const totalMs = typeof executionTimings?.totalMs === "number" ? executionTimings.totalMs : null;
+    const metadata: TradeDetailMetadata[] = [
+      { label: "Action", value: signal.action.toUpperCase(), tone: signal.action === "filled" ? "profit" : signal.action === "failed" ? "loss" : undefined },
+      { label: "Execution Group", value: signal.executionGroupId ? shortId(signal.executionGroupId) : "--" },
+      { label: "Strategy", value: signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--" },
+      { label: "Fill Counts", value: `K ${signal.kalshiFillCount ?? "--"} / P ${signal.polymarketFillCount ?? "--"}`, tone: signal.partialFill ? "loss" : "profit" },
+      { label: "Partial", value: signal.partialFill ? "YES" : "NO", tone: signal.partialFill ? "loss" : "profit" },
+      { label: "Recovery", value: signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--" },
+      { label: "Latency", value: formatLatency(signal.createdAt, signal.updatedAt) },
+      { label: "Total Timing", value: formatCompactTime(totalMs) },
+    ];
+    if (signal.failureReason) metadata.push({ label: "Failure", value: signal.failureReason, tone: "loss" });
+    if (signal.reconciliationResolvedAt) {
+      metadata.push({ label: "Resolved", value: formatTimestamp(signal.reconciliationResolvedAt), tone: "warn" });
+      metadata.push({ label: "Resolution", value: signal.reconciliationResolutionReason ?? "verified live incident" });
+    }
+    if (signal.riskQuarantinedAt) {
+      metadata.push({ label: "Quarantined", value: formatTimestamp(signal.riskQuarantinedAt), tone: "warn" });
+      metadata.push({ label: "Quarantine $", value: formatDollars(signal.riskQuarantineExposureDollars ?? 0), tone: "warn" });
+      metadata.push({ label: "Quarantine Reason", value: signal.riskQuarantineReason ?? "under cap" });
+    }
     return tradeDetailFromLegs({
       source,
       key: tradeKeyFor(source, signal),
@@ -856,6 +888,7 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
       threshold: normalizeBinaryPrice(signal.threshold) ?? 0.01,
       legA: normalizeDetailLeg("A", signal.lower, signal.lower.venue === "kalshi" ? signal.kalshiFillPrice : signal.polymarketFillPrice, signal.lower.venue === "kalshi" ? signal.kalshiFillId : signal.polymarketFillId),
       legB: normalizeDetailLeg("B", signal.higher, signal.higher.venue === "kalshi" ? signal.kalshiFillPrice : signal.polymarketFillPrice, signal.higher.venue === "kalshi" ? signal.kalshiFillId : signal.polymarketFillId),
+      metadata,
     });
   }
 
@@ -871,6 +904,12 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
     threshold: normalizeBinaryPrice(candidate.threshold) ?? 0.01,
     legA: normalizeDetailLeg("A", candidate.lower, null, null),
     legB: normalizeDetailLeg("B", candidate.higher, null, null),
+    metadata: [
+      { label: "Action", value: candidate.executable ? "EXECUTABLE" : "READ ONLY", tone: candidate.executable ? "profit" : "warn" },
+      { label: "Reason", value: candidate.reason ?? "--" },
+      { label: "Edge", value: formatSignedCents(candidate.guaranteedProfit), tone: candidate.guaranteedProfit >= 0 ? "profit" : "loss" },
+      { label: "Threshold", value: formatCents(candidate.threshold) },
+    ],
   });
 }
 
@@ -1440,37 +1479,37 @@ function GlobalStateBar({
   return (
     <header className="institutional-topbar">
       <div className="topbar-brand">
-        <p className="panel-kicker">cross-venue binary arb</p>
+        <p className="panel-kicker">live arb</p>
         <h1>{dashboardName}</h1>
-        <span>Kalshi + Polymarket BTC 15m</span>
+        <span>Kalshi / Polymarket</span>
         <div className="dashboard-mode-row">
-          <StatusPill label="LIVE-ONLY DASHBOARD" state="live" />
-          <StatusPill label="READ-ONLY OPERATOR VIEW" state="warn" />
+          <StatusPill label="LIVE ONLY" state="live" />
+          <StatusPill label="READ ONLY" state="warn" />
         </div>
       </div>
 
       <div className="topbar-kpis">
         <div className="hero-kpi">
-          <span>Executed Fill-Audit PnL</span>
+          <span>Fill-Audit PnL</span>
           <strong className={recentAuditPnl >= 0 ? "profit" : "loss"}>{formatSignedCents(recentAuditPnl)}</strong>
         </div>
-        <div className="topbar-kpi"><span>Recent Live Fills</span><strong>{recentExactFills.length}</strong></div>
-        <div className="topbar-kpi"><span>Hourly Win Rate</span><strong>{currentAnalytics ? formatPercent(currentAnalytics.winRate) : "--"}</strong></div>
-        <div className="topbar-kpi"><span>Historical Fills</span><strong>{currentAnalytics?.filledTrades ?? 0}</strong></div>
-        <div className="topbar-kpi"><span>Avg Fill Latency</span><strong>{formatCompactTime(currentAnalytics?.avgFillLatencyMs ?? avgLatency)}</strong></div>
-        <div className="topbar-kpi"><span>Kalshi Fills</span><strong>{recentExactFills.reduce((total, signal) => total + (signal.kalshiFillCount ?? 0), 0)}</strong></div>
-        <div className="topbar-kpi"><span>Polymarket Fills</span><strong>{recentExactFills.reduce((total, signal) => total + (signal.polymarketFillCount ?? 0), 0)}</strong></div>
+        <div className="topbar-kpi"><span>Fills</span><strong>{recentExactFills.length}</strong></div>
+        <div className="topbar-kpi"><span>Win</span><strong>{currentAnalytics ? formatPercent(currentAnalytics.winRate) : "--"}</strong></div>
+        <div className="topbar-kpi"><span>Hist</span><strong>{currentAnalytics?.filledTrades ?? 0}</strong></div>
+        <div className="topbar-kpi"><span>Latency</span><strong>{formatCompactTime(currentAnalytics?.avgFillLatencyMs ?? avgLatency)}</strong></div>
+        <div className="topbar-kpi"><span>K Fill</span><strong>{recentExactFills.reduce((total, signal) => total + (signal.kalshiFillCount ?? 0), 0)}</strong></div>
+        <div className="topbar-kpi"><span>P Fill</span><strong>{recentExactFills.reduce((total, signal) => total + (signal.polymarketFillCount ?? 0), 0)}</strong></div>
       </div>
 
       <div className="topbar-state">
         <div className="status-rail">
-          <StatusPill label={streamState === "live" ? "SSE LIVE" : "SSE DEGRADED"} state={streamState === "live" ? "live" : "warn"} />
-          <StatusPill label={snapshot.health.arbEnabled ? "STRATEGY ON" : "STRATEGY OFF"} state={snapshot.health.arbEnabled ? "live" : "off"} />
-          <StatusPill label="LIVE EXECUTION ENGINE" state={snapshot.health.liveTrading ? "warn" : "off"} />
-          {execution?.partialFillLocked ? <StatusPill label="PARTIAL LOCK" state="stale" /> : null}
-          {snapshot.health.liveTrading && execution ? <StatusPill label={execution.polymarket.ready && execution.kalshi.ready ? "VENUES READY" : "VENUE CHECK"} state={execution.polymarket.ready && execution.kalshi.ready ? "live" : "warn"} /> : null}
-          <StatusPill label={execution?.userStreams.ready ? "STREAMS READY" : "STREAM CHECK"} state={execution?.userStreams.ready ? "live" : "warn"} />
-          <StatusPill label={execution?.reconciliation.clean ? "RECON CLEAN" : "RECON DRIFT"} state={execution?.reconciliation.clean ? "live" : "stale"} />
+          <StatusPill label={streamState === "live" ? "SSE" : "SSE DEGRADED"} state={streamState === "live" ? "live" : "warn"} />
+          <StatusPill label={snapshot.health.arbEnabled ? "ARB" : "ARB OFF"} state={snapshot.health.arbEnabled ? "live" : "off"} />
+          <StatusPill label={snapshot.health.liveTrading ? "LIVE" : "LIVE OFF"} state={snapshot.health.liveTrading ? "warn" : "off"} />
+          {execution?.partialFillLocked ? <StatusPill label="PARTIAL" state="stale" /> : null}
+          {snapshot.health.liveTrading && execution ? <StatusPill label={execution.polymarket.ready && execution.kalshi.ready ? "VENUES" : "VENUE CHECK"} state={execution.polymarket.ready && execution.kalshi.ready ? "live" : "warn"} /> : null}
+          <StatusPill label={execution?.userStreams.ready ? "STREAMS" : "STREAM CHECK"} state={execution?.userStreams.ready ? "live" : "warn"} />
+          <StatusPill label={execution?.reconciliation.clean ? "RECON" : "RECON DRIFT"} state={execution?.reconciliation.clean ? "live" : "stale"} />
         </div>
       </div>
     </header>
@@ -1600,7 +1639,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <p className="panel-kicker">performance analytics</p>
           <h2>Executed Fill-Audit PnL</h2>
           <p className="analytics-subtitle">
-            Live exchange-fill audit records only; conservative $1.00 payoff floor, not settlement-final PnL.
+            Exchange fills only. $1 floor. Not settlement PnL.
           </p>
         </div>
         <div className="analytics-header-actions">
@@ -1652,7 +1691,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <div className="pnl-chart-header">
             <div>
               <span className="signal-label">PnL Curve</span>
-              <strong>Cumulative executed fill-audit PnL</strong>
+              <strong>Cumulative</strong>
             </div>
             <div>
               <span className="signal-label">Breakeven</span>
@@ -1664,7 +1703,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             </div>
           </div>
           {noTrades ? (
-            <div className="analytics-empty">No filled trades in the selected {current.label.toLowerCase()} window yet.</div>
+            <div className="analytics-empty">No fills</div>
           ) : (
             <PnLChart analytics={current} />
           )}
@@ -1677,13 +1716,13 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <DistributionBars
               ariaLabel="Win loss PnL distribution"
               buckets={current.pnlDistribution ?? []}
-              subtitle="Wins, losses, breakevens, and edge bands"
+              subtitle="Wins / losses"
               title="Win/Loss Distribution"
             />
             <DistributionBars
               ariaLabel="Slippage histogram"
               buckets={current.slippageDistribution ?? []}
-              subtitle="Live fill slippage vs observed asks"
+              subtitle="Fill slippage"
               title="Slippage Histogram"
             />
             <LatencySparkline analytics={current} />
@@ -2677,6 +2716,21 @@ export function TradeDetailDrawer({
           </div>
         </section>
 
+        {trade.metadata.length > 0 ? (
+          <section className="trade-detail-section trade-detail-audit-section" aria-label="Signal Audit">
+            <TradeDetailSectionHeader
+              eyebrow="audit"
+              title="Signal Audit"
+              note="Execution status, recovery state, reconciliation metadata, and timing details."
+            />
+            <div className="trade-detail-summary">
+              {trade.metadata.map((item) => (
+                <DetailMetric key={`${item.label}-${item.value}`} label={item.label} tone={item.tone} value={item.value} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <section className="trade-detail-section trade-detail-payoff-section" aria-label="2D Payoff Diagram">
           <TradeDetailSectionHeader
             eyebrow="payoff geometry"
@@ -2791,95 +2845,66 @@ function SignalTape({
       <div className="signal-list">
         {signals.slice(0, 12).map((signal) => {
           const signalKey = tradeKeyFor("signal", signal);
-          const tradeDetail = buildTradeDetailModel("signal", signal);
           const selectSignal = () => onSelectTrade(buildTradeDetailModel("signal", signal));
+          const edge = signal.projectedEdgeAfterFees ?? signal.guaranteedProfit;
+          const strategy = signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--";
+          const firstVenue = signal.executionTimings?.firstVenue
+            ? signal.executionTimings.firstVenue.toUpperCase()
+            : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest"
+              ? "BOTH"
+              : "--";
+          const riskStateLabel = isResolvedPartialSignal(signal)
+            ? "RESOLVED"
+            : signal.riskQuarantinedAt
+              ? "QUAR"
+              : signal.partialFill
+                ? "PARTIAL"
+                : signal.action === "failed"
+                  ? "FAILED"
+                  : "OK";
+          const riskStateClass = riskStateLabel === "OK"
+            ? "profit"
+            : riskStateLabel === "QUAR" || riskStateLabel === "RESOLVED"
+              ? "warn"
+              : "loss";
+          const reason = signal.failureReason
+            ?? signal.reconciliationResolutionReason
+            ?? signal.riskQuarantineReason
+            ?? null;
           return (
             <article
               aria-label={`Open payoff detail for Signal #${signal.id}`}
               aria-selected={selectedTradeKey === signalKey}
-              className={selectedTradeKey === signalKey ? "signal-card selected-trade-card" : "signal-card"}
+              className={selectedTradeKey === signalKey ? "signal-card compact-signal-card selected-trade-card" : "signal-card compact-signal-card"}
               key={signal.id}
               onClick={selectSignal}
               onKeyDown={(event) => handleTradeSelectKey(event, selectSignal)}
               role="button"
               tabIndex={0}
             >
-              <div className="signal-card-main">
-                <div className="signal-card-details">
-                  <div className="signal-card-header">
-                    <div className="signal-title">
-                      <span className={`action action-${signalActionClass(signal)}`}>{signalActionLabel(signal)}</span>
-                      <strong>Signal #{signal.id}</strong>
-                      <span>{formatCountdown(signal.expiryMs, now)} to expiry</span>
-                    </div>
-                    <div className="signal-time-grid">
-                      <div>
-                        <span className="signal-label">Signal time</span>
-                        <time dateTime={signal.createdAt}>{formatTimestamp(signal.createdAt)}</time>
-                      </div>
-                      <div>
-                        <span className="signal-label">Finalized time</span>
-                        <time dateTime={signal.updatedAt}>{formatTimestamp(signal.updatedAt)}</time>
-                      </div>
-                      <div>
-                        <span className="signal-label">Latency</span>
-                        <strong>{formatLatency(signal.createdAt, signal.updatedAt)}</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="signal-metrics">
-                    <div><span className="signal-label">Premium</span><strong>{formatCents(signal.premium)}</strong></div>
-                    <div><span className="signal-label">Guaranteed</span><strong className="profit">{formatCents(signal.guaranteedProfit)}</strong></div>
-                    <div><span className="signal-label">Overlap</span><strong>{formatCents(signal.overlapProfit)}</strong></div>
-                    <div><span className="signal-label">Gate</span><strong>{formatCents(signal.threshold)}</strong></div>
-                    <div><span className="signal-label">Pair Key</span><strong title={signal.pairKey}>{shortId(signal.pairKey)}</strong></div>
-                    <div><span className="signal-label">Strategy</span><strong>{signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</strong></div>
-	                    <div><span className="signal-label">First Venue</span><strong>{signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</strong></div>
-	                    <div><span className="signal-label">Reconciliation</span><strong className={isResolvedPartialSignal(signal) ? "warn" : signal.partialFill ? "loss" : "profit"}>{isResolvedPartialSignal(signal) ? "RESOLVED" : signal.partialFill ? "PARTIAL" : "NORMAL"}</strong></div>
-	                    <div><span className="signal-label">Recovery</span><strong>{signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</strong></div>
-	                    <div><span className="signal-label">Risk Quarantine</span><strong className={signal.riskQuarantinedAt ? "warn" : "profit"}>{signal.riskQuarantinedAt ? formatDollars(signal.riskQuarantineExposureDollars ?? 0) : "NONE"}</strong></div>
-	                  </div>
-
-                  {signal.risk ? (
-                    <>
-                      <div className="signal-risk-grid">
-                        <div><span className="signal-label">Structure</span><strong>{structureLabel(signal.risk)}</strong></div>
-                        <div><span className="signal-label">Classification</span><strong>{classificationLabel(signal.risk.classification)}</strong></div>
-                        <div><span className="signal-label">Strike Gap</span><strong>{formatDollars(signal.risk.strikeGap)}</strong></div>
-                        <div><span className="signal-label">Gap % Mid</span><strong>{formatRiskPercent(signal.risk.strikeGapPctOfMid)}</strong></div>
-                    <div><span className="signal-label">Loss Window</span><strong>{formatDollars(signal.risk.lossWindowWidth)}</strong></div>
-                    <div><span className="signal-label">Loss % Gap</span><strong>{formatRiskPercent(signal.risk.lossWindowPctOfStrikeGap)}</strong></div>
-                  </div>
-                </>
-              ) : null}
-
-                  <div className="signal-leg-grid">
-                    <SignalVenueRow signal={signal} venue="kalshi" />
-                    <SignalVenueRow signal={signal} venue="polymarket" />
-                  </div>
-
-	                  {signal.reconciliationResolvedAt ? (
-	                    <div className="signal-reconciliation">
-	                      {reconciliationResolutionLabel(signal)}: {signal.reconciliationResolutionReason ?? "verified and resolved this live incident"} at {formatTimestamp(signal.reconciliationResolvedAt)}
-	                    </div>
-	                  ) : null}
-	                  {signal.riskQuarantinedAt ? (
-	                    <div className="signal-reconciliation">
-	                      QUARANTINED RISK: {signal.riskQuarantineReason ?? "unresolved one-sided exposure accepted under cap"} at {formatTimestamp(signal.riskQuarantinedAt)}
-	                    </div>
-	                  ) : null}
-	                  {signal.failureReason ? <div className="signal-failure">Failure: {signal.failureReason}</div> : null}
+              <div className="compact-signal-row">
+                <div className="compact-signal-main">
+                  <span className={`action action-${signalActionClass(signal)}`}>{signalActionLabel(signal)}</span>
+                  <strong>#{signal.id}</strong>
+                  <span>{formatCountdown(signal.expiryMs, now)}</span>
                 </div>
-
-                <aside className="signal-inline-payoff" aria-label={`Inline payoff graph for Signal #${signal.id}`}>
-                  <InlineTradePayoffGraph trade={tradeDetail} variant="card" />
-                </aside>
+                <div className="compact-signal-metrics">
+                  <div><span>PNL</span><strong className={fillAuditPnl(signal) >= 0 ? "profit" : "loss"}>{formatSignedCents(fillAuditPnl(signal))}</strong></div>
+                  <div><span>EDGE</span><strong className={edge >= 0 ? "profit" : "loss"}>{formatSignedCents(edge)}</strong></div>
+                  <div><span>FILL</span><strong>K {signal.kalshiFillCount ?? "--"} / P {signal.polymarketFillCount ?? "--"}</strong></div>
+                  <div><span>STRAT</span><strong title={strategy}>{strategy}</strong></div>
+                  <div><span>VENUE</span><strong>{firstVenue}</strong></div>
+                  <div><span>LAT</span><strong>{formatLatency(signal.createdAt, signal.updatedAt)}</strong></div>
+                  <div><span>STATE</span><strong className={riskStateClass}>{riskStateLabel}</strong></div>
+                  <div><span>EXP</span><strong>{formatCountdown(signal.expiryMs, now)}</strong></div>
+                </div>
+                <span className="compact-signal-open">Details</span>
               </div>
+              {reason ? <div className="compact-signal-reason">{reason}</div> : null}
             </article>
           );
         })}
-        {signals.length === 0 ? <div className="empty-cell">No persisted signals yet.</div> : null}
+        {signals.length === 0 ? <div className="empty-cell">No signals</div> : null}
       </div>
     </section>
   );
@@ -2903,7 +2928,7 @@ function EventTape({ logs }: { logs: DashboardLogEntry[] }) {
             <span>{log.message}</span>
           </div>
         ))}
-        {logs.length === 0 ? <div className="empty-cell">No runtime events yet.</div> : null}
+        {logs.length === 0 ? <div className="empty-cell">No events</div> : null}
       </div>
     </section>
   );
@@ -3127,15 +3152,14 @@ function LiveOperationalPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
     <section className={`panel live-operational-panel live-operational-${status.state}`} aria-label="Strict-clean live operational status">
       <div className="live-operational-hero">
         <div>
-          <p className="panel-kicker">strict-clean live status</p>
+          <p className="panel-kicker">live state</p>
           <h2>{status.headline}</h2>
-          <p>{status.summary}</p>
         </div>
         <StatusPill label={status.headline} state={status.pillState} />
       </div>
       <div className="live-operational-grid">
         <div aria-label={`Can take real trades: ${status.canTrade ? "Yes" : "No"}`}>
-          <span>Can take real trades</span>
+          <span>Can trade</span>
           <strong className={status.canTrade ? "profit" : "loss"}>{status.canTrade ? "Yes" : "No"}</strong>
         </div>
         <div aria-label={`Clean: ${status.isClean ? "Yes" : "No"}`}>
@@ -3143,15 +3167,15 @@ function LiveOperationalPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <strong className={status.isClean ? "profit" : "warn"}>{status.isClean ? "Yes" : "No"}</strong>
         </div>
         <div>
-          <span>Active Locks</span>
+          <span>Locks</span>
           <strong className={status.activeLockLabel === "None" ? "profit" : "loss"}>{status.activeLockLabel}</strong>
         </div>
         <div>
-          <span>Auto Hardlocks</span>
+          <span>Hardlocks</span>
           <strong className={status.autoHardlocksEnabled ? "profit" : "warn"}>{status.autoHardlocksEnabled ? "Enabled" : "Disabled"}</strong>
         </div>
         <div>
-          <span>Quarantined Exposure</span>
+          <span>Quarantine</span>
           <strong className={status.quarantineExposure > 0 ? "warn" : "profit"}>{quarantineText}</strong>
         </div>
         <div>
@@ -3167,11 +3191,11 @@ function LiveOperationalPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <strong className={status.reconciliationClean ? "profit" : "loss"}>{status.reconciliationClean ? "Clean" : "Drift"}</strong>
         </div>
         <div>
-          <span>Live Flags</span>
+          <span>Flags</span>
           <strong className={status.liveArmed ? "warn" : "loss"}>{status.liveArmed ? "Armed" : "Standby"}</strong>
         </div>
       </div>
-      {status.reason ? <p className="live-operational-reason">Latest risk reason: {status.reason}</p> : null}
+      {status.reason ? <p className="live-operational-reason">Reason: {status.reason}</p> : null}
     </section>
   );
 }
@@ -3200,21 +3224,20 @@ function LiveSafetyBadgeRow({ snapshot }: { snapshot: DashboardSnapshot }) {
   return (
     <section className="panel live-safety-compact" aria-label="Live execution safety state">
       <div>
-        <p className="panel-kicker">live safety state</p>
-        <h2>Read-Only Live Audit</h2>
-        <p>Real execution history only. Arming/disarming still requires SSH and a worker restart.</p>
+        <p className="panel-kicker">risk</p>
+        <h2>Safety</h2>
       </div>
       <div className="status-rail">
-        <StatusPill label={snapshot.health.liveTrading ? "LIVE ENABLED" : "LIVE OFF"} state={snapshot.health.liveTrading ? "warn" : "off"} />
+        <StatusPill label={snapshot.health.liveTrading ? "LIVE" : "LIVE OFF"} state={snapshot.health.liveTrading ? "warn" : "off"} />
         <StatusPill label={riskStateLabel} state={riskStatePill} />
-        <StatusPill label={circuitLocked ? "CIRCUIT LOCK" : "CIRCUIT CLEAR"} state={circuitLocked ? "stale" : "live"} />
-        <StatusPill label={kalshiReady && polymarketReady ? "VENUES READY" : "VENUE CHECK"} state={kalshiReady && polymarketReady ? "live" : "warn"} />
-        <StatusPill label={streamsReady ? "STREAMS READY" : "STREAM CHECK"} state={streamsReady ? "live" : "warn"} />
-        <StatusPill label={reconciliationClean ? "RECON CLEAN" : "RECON DRIFT"} state={reconciliationClean ? "live" : "stale"} />
-        <StatusPill label={partialLocked ? "PARTIAL LOCK" : "PARTIAL CLEAR"} state={partialLocked ? "stale" : "live"} />
+        <StatusPill label={circuitLocked ? "CIRCUIT" : "NO CIRCUIT"} state={circuitLocked ? "stale" : "live"} />
+        <StatusPill label={kalshiReady && polymarketReady ? "VENUES" : "VENUE CHECK"} state={kalshiReady && polymarketReady ? "live" : "warn"} />
+        <StatusPill label={streamsReady ? "STREAMS" : "STREAM CHECK"} state={streamsReady ? "live" : "warn"} />
+        <StatusPill label={reconciliationClean ? "RECON" : "RECON DRIFT"} state={reconciliationClean ? "live" : "stale"} />
+        <StatusPill label={partialLocked ? "PARTIAL" : "NO PARTIAL"} state={partialLocked ? "stale" : "live"} />
       </div>
-      {execution?.circuitBreakerReason ? <p className="live-lock-reason">LOCK REASON: {execution.circuitBreakerReason}</p> : null}
-      {!execution?.circuitBreakerReason && execution?.riskStateReason ? <p className="live-lock-reason">RISK STATE: {execution.riskStateReason}</p> : null}
+      {execution?.circuitBreakerReason ? <p className="live-lock-reason">Lock: {execution.circuitBreakerReason}</p> : null}
+      {!execution?.circuitBreakerReason && execution?.riskStateReason ? <p className="live-lock-reason">Risk: {execution.riskStateReason}</p> : null}
     </section>
   );
 }
@@ -3225,9 +3248,8 @@ function TradingActivitySection({ snapshot }: { snapshot: DashboardSnapshot }) {
   return (
     <section className="trading-activity-section" id="trading-activity" aria-label="Trading Activity">
       <div className="panel combined-dashboard-heading trading-activity-heading">
-        <p className="panel-kicker">venue activity</p>
+        <p className="panel-kicker">venues</p>
         <h2>Trading Activity</h2>
-        <p>Live venue activity only, sourced from authenticated worker-side Kalshi and Polymarket order/fill streams.</p>
       </div>
       <div className="trading-platform-grid">
         <TradingPlatformPanel
@@ -3372,7 +3394,7 @@ function TradingHistoryTable({ activity, now }: { activity: TradingPlatformActiv
               <td>{formatActivityRelativeTime(row.timeMs, now)}</td>
             </tr>
           ))}
-          {activity.history.length === 0 ? <tr><td colSpan={4} className="empty-cell">No live fills recorded for this venue yet.</td></tr> : null}
+          {activity.history.length === 0 ? <tr><td colSpan={4} className="empty-cell">No fills</td></tr> : null}
         </tbody>
       </table>
     </div>
@@ -3400,7 +3422,7 @@ function TradingPositionsTable({ positions }: { positions: TradingPosition[] }) 
               <td>{formatActivityCurrency(position.value)}</td>
             </tr>
           ))}
-          {positions.length === 0 ? <tr><td colSpan={4} className="empty-cell">No account positions reported by this venue.</td></tr> : null}
+          {positions.length === 0 ? <tr><td colSpan={4} className="empty-cell">No positions</td></tr> : null}
         </tbody>
       </table>
     </div>
@@ -3433,7 +3455,7 @@ function TradingOpenOrdersTable({ openOrders }: { openOrders: TradingOpenOrder[]
               <td>{order.status.toUpperCase()}</td>
             </tr>
           ))}
-          {openOrders.length === 0 ? <tr><td colSpan={4} className="empty-cell">No open live orders.</td></tr> : null}
+          {openOrders.length === 0 ? <tr><td colSpan={4} className="empty-cell">No orders</td></tr> : null}
         </tbody>
       </table>
     </div>
@@ -3458,27 +3480,27 @@ function PerformanceDashboardSections({ snapshot }: { snapshot: DashboardSnapsho
         <div className="performance-summary-card">
           <span>Real Live Fills</span>
           <strong>{filled.length}</strong>
-          <small>Exact paired Kalshi/Polymarket fills only</small>
+          <small>Paired fills</small>
         </div>
         <div className="performance-summary-card">
           <span>Executed Fill-Audit PnL</span>
           <strong className={estimatedGuaranteed >= 0 ? "profit" : "loss"}>{formatSignedCents(estimatedGuaranteed)}</strong>
-          <small>Exchange-fill audit records only; not settlement-final PnL</small>
+          <small>Fill audit</small>
         </div>
         <div className="performance-summary-card">
           <span>Win Rate</span>
           <strong>{current ? formatPercent(current.winRate) : "--"}</strong>
-          <small>{current?.filledTrades ?? 0} historical live filled trades</small>
+          <small>{current?.filledTrades ?? 0} fills</small>
         </div>
         <div className="performance-summary-card">
           <span>Order / Stream Latency</span>
           <strong>{formatCompactTime(current?.avgFillLatencyMs ?? avgLatency)}</strong>
-          <small>Average fill/audit turnaround</small>
+          <small>Avg</small>
         </div>
         <div className="performance-summary-card">
           <span>Historical Live Analytics</span>
           <strong>{current ? formatSignedCents(current.netPnl) : "--"}</strong>
-          <small>Hourly net executed fill-audit PnL</small>
+          <small>Hourly</small>
         </div>
       </section>
     </section>
@@ -3489,9 +3511,8 @@ function LiveDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
   return (
     <section className="live-only-dashboard-stack" aria-label="Live trading dashboard">
       <section className="panel combined-dashboard-heading live-only-dashboard-heading">
-        <p className="panel-kicker">exchange-fill-backed audit</p>
+        <p className="panel-kicker">live</p>
         <h2>Live Trading Dashboard</h2>
-        <p>Real Kalshi and Polymarket trades only. This dashboard is fed from live execution records, venue fills, private-stream confirmations, and live risk state.</p>
       </section>
       <PerformanceDashboardSections snapshot={snapshot} />
       <TradingActivitySection snapshot={snapshot} />
