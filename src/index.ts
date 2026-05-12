@@ -258,6 +258,8 @@ async function main(): Promise<void> {
           liveTrading: true,
           arbEnabled: config.arbEnabled,
           liveOrderPlacementMode: config.liveOrderPlacementMode,
+          maxTradesPerWindow: config.liveMaxTradesPerWindow,
+          liveMaxTradesPerWindow: config.liveMaxTradesPerWindow,
           liveTakerPriceCushionCents: config.liveTakerPriceCushionCents,
           liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
         });
