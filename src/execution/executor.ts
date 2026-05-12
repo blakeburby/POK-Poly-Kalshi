@@ -451,6 +451,7 @@ export class LiveExecutor implements ArbExecutor {
           firstVenueVwap: null,
           hotGateStartedAt,
           hotGateCompletedAt,
+          venueConfirmations,
         }),
         venueConfirmations,
         executionStrategy,
@@ -577,6 +578,7 @@ export class LiveExecutor implements ArbExecutor {
         hotGateCompletedAt,
         postFillHedgeDecisionMs,
         ...firstDecision,
+        venueConfirmations,
       }),
       venueConfirmations,
       executionStrategy: "sequential_hedge",
@@ -882,7 +884,7 @@ export class LiveExecutor implements ArbExecutor {
         submittedAtMs,
         timeoutMs: this.confirmationTimeoutMs(result),
       });
-      return [result.venue, this.confirmationRecord(confirmation)] as const;
+      return [result.venue, this.confirmationRecord(confirmation, submittedAtMs)] as const;
     }));
     return Object.fromEntries(entries);
   }
@@ -893,7 +895,11 @@ export class LiveExecutor implements ArbExecutor {
     return base;
   }
 
-  private confirmationRecord(confirmation: VenueConfirmationResult): Record<string, unknown> {
+  private confirmationRecord(confirmation: VenueConfirmationResult, submittedAtMs: number): Record<string, unknown> {
+    const receivedAtMs = confirmation.receivedAtMs;
+    const confirmationMs = receivedAtMs != null && Number.isFinite(receivedAtMs) && Number.isFinite(submittedAtMs)
+      ? Math.max(0, receivedAtMs - submittedAtMs)
+      : null;
     return {
       status: confirmation.status,
       reason: confirmation.reason,
@@ -904,6 +910,7 @@ export class LiveExecutor implements ArbExecutor {
       fee: confirmation.fee,
       exchangeTimestampMs: confirmation.exchangeTimestampMs,
       receivedAtMs: confirmation.receivedAtMs,
+      confirmationMs,
       eventType: confirmation.eventType,
     };
   }
@@ -1331,6 +1338,7 @@ export class LiveExecutor implements ArbExecutor {
       firstVenueVwap?: number | null;
       hotGateStartedAt?: number;
       hotGateCompletedAt?: number;
+      venueConfirmations?: VenueConfirmations | null;
     } = {},
   ): ExecutionTimings {
     const timing = (result: VenueOrderResult | null): number | null => {
@@ -1365,10 +1373,17 @@ export class LiveExecutor implements ArbExecutor {
       : null;
     const kalshiOrderRttMs = timing(kalshi);
     const polymarketOrderRttMs = timing(polymarket);
+    const metadataNumber = (value: unknown): number | null => (
+      typeof value === "number" && Number.isFinite(value) ? value : null
+    );
+    const polymarketPostOrderMs = metadataNumber(polymarket?.metadata?.polymarketPostOrderMs);
+    const polymarketConfirmationMs = metadataNumber(metadata.venueConfirmations?.polymarket?.confirmationMs);
     return {
       candidateToSubmitMs: Math.max(0, (firstRequestedAt ?? startedAt) - startedAt),
       hotGateMs,
       polymarketSignMs: polymarket?.signMs ?? null,
+      polymarketPostOrderMs,
+      polymarketConfirmationMs,
       preflightMs,
       kalshiRttMs: kalshiOrderRttMs,
       polymarketRttMs: polymarketOrderRttMs,

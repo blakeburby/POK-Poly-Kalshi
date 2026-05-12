@@ -872,6 +872,10 @@ test("Polymarket optional pre-sign stores signed order for hot-path placement", 
   assert.equal(result.fillCount, 5);
   assert.equal(fake.createCalls, 1);
   assert.equal(result.signMs, context.preflight?.polymarketSignMs ?? 0);
+  assert.equal(result.metadata?.polymarketSignedOrderReused, true);
+  assert.equal(result.metadata?.polymarketSignedOrderFallbackReason, null);
+  assert.equal(result.metadata?.polymarketPostOrderMs != null, true);
+  assert.equal(result.metadata?.polymarketSignedOrderSalt, "1");
 });
 
 test("Polymarket expired pre-signed order falls back to live signing", async () => {
@@ -934,6 +938,221 @@ test("Polymarket expired pre-signed order falls back to live signing", async () 
 
   assert.equal(result.fillCount, 5);
   assert.equal(fake.createCalls, 2);
+  assert.equal(result.metadata?.polymarketSignedOrderReused, false);
+  assert.match(String(result.metadata?.polymarketSignedOrderFallbackReason), /expired/);
+});
+
+test("Polymarket mismatched pre-signed price falls back to live signing", async () => {
+  const now = 1_800_000_000_000;
+  class PresignFakeClob implements PolymarketClobLike {
+    createCalls = 0;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      this.createCalls += 1;
+      return { tokenId: order.tokenID, salt: this.createCalls } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2.1" };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new PresignFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveHotPathEnabled: true,
+    livePolymarketPresignEnabled: true,
+  }), async () => fake, allowedGeoblock);
+  await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.41,
+    requiredCollateral: 2.3,
+    requestedAt: now + 100,
+  };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
+
+  assert.equal(await client.preflightOrder(leg, context), null);
+  assert.equal(fake.createCalls, 1);
+  context.maxBuyPrice = 0.42;
+
+  const result = await client.placeOrder(leg, context);
+
+  assert.equal(result.fillCount, 5);
+  assert.equal(fake.createCalls, 2);
+  assert.equal(result.metadata?.polymarketSignedOrderReused, false);
+  assert.equal(result.metadata?.polymarketSignedOrderFallbackReason, "price_changed");
+});
+
+test("Polymarket timeout recovery resolves unambiguous recent FAK trade evidence", async () => {
+  const submittedAt = 1_800_000_000_000;
+  class RecoveryFakeClob implements PolymarketClobLike {
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getTrades(): Promise<unknown[]> {
+      return [{
+        id: "trade-1",
+        taker_order_id: "poly-order",
+        asset_id: "yes-token",
+        side: Side.BUY,
+        size: "5",
+        price: "0.40",
+        match_time: new Date(submittedAt + 100).toISOString(),
+        maker_orders: [],
+      }];
+    }
+
+    async getOpenOrders(): Promise<unknown[]> {
+      return [];
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const client = new PolymarketOrderClient(config({ liveFinalRecoveryTimeoutMs: 0 }), async () => new RecoveryFakeClob(), allowedGeoblock);
+  const timedOut: VenueOrderResult = {
+    venue: "polymarket",
+    clientOrderId: "client",
+    orderId: null,
+    status: "unknown",
+    fillPrice: null,
+    fillCount: null,
+    requestedAt: new Date(submittedAt).toISOString(),
+    respondedAt: new Date(submittedAt + 2_500).toISOString(),
+    error: "order response timeout after 2500ms",
+    metadata: {
+      pendingReconciliation: true,
+      polymarketSignedOrderSalt: "123",
+      polymarketSignedOrderMakerAmount: "2000000",
+      polymarketSignedOrderTakerAmount: "5000000",
+    },
+  };
+
+  const result = await client.recoverTimedOutOrder!({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.39,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.42,
+    placementMode: "parallel_fak",
+  }, timedOut);
+
+  assert.equal(result?.status, "filled");
+  assert.equal(result?.orderId, "poly-order");
+  assert.equal(result?.fillCount, 5);
+  assert.equal(result?.fillPrice, 0.4);
+  assert.equal(result?.metadata?.polymarketTimeoutRecoveryStatus, "found_unambiguous_recent_trade");
+});
+
+test("Polymarket timeout recovery leaves ambiguous recent trade evidence unknown", async () => {
+  const submittedAt = 1_800_000_000_000;
+  class RecoveryFakeClob implements PolymarketClobLike {
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getTrades(): Promise<unknown[]> {
+      return ["poly-a", "poly-b"].map((orderId, index) => ({
+        id: `trade-${index}`,
+        taker_order_id: orderId,
+        asset_id: "yes-token",
+        side: Side.BUY,
+        size: "5",
+        price: "0.40",
+        match_time: new Date(submittedAt + 100 + index).toISOString(),
+        maker_orders: [],
+      }));
+    }
+
+    async getOpenOrders(): Promise<unknown[]> {
+      return [];
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const client = new PolymarketOrderClient(config({ liveFinalRecoveryTimeoutMs: 0 }), async () => new RecoveryFakeClob(), allowedGeoblock);
+  const timedOut: VenueOrderResult = {
+    venue: "polymarket",
+    clientOrderId: "client",
+    orderId: null,
+    status: "unknown",
+    fillPrice: null,
+    fillCount: null,
+    requestedAt: new Date(submittedAt).toISOString(),
+    respondedAt: new Date(submittedAt + 2_500).toISOString(),
+    error: "order response timeout after 2500ms",
+  };
+
+  const result = await client.recoverTimedOutOrder!({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.39,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.42,
+    placementMode: "parallel_fak",
+  }, timedOut);
+
+  assert.equal(result?.status, "unknown");
+  assert.equal(result?.metadata?.polymarketTimeoutRecoveryStatus, "ambiguous_recent_trades");
+  assert.equal(result?.metadata?.polymarketTimeoutRecoveryMatchedTradeGroups, 2);
 });
 
 test("Polymarket order client cancels open orders and does not treat live status as a fill", async () => {
@@ -1579,6 +1798,7 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
         requestedAt: new Date(requestedAt).toISOString(),
         respondedAt: new Date(now).toISOString(),
         error: null,
+        metadata: this.venue === "polymarket" ? { polymarketPostOrderMs: 11 } : undefined,
       };
     }
   }
@@ -1598,6 +1818,7 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   assert.equal(result.executionTimings?.kalshiRttMs, 10);
   assert.equal(result.executionTimings?.polymarketOrderRttMs, 15);
   assert.equal(result.executionTimings?.polymarketRttMs, 15);
+  assert.equal(result.executionTimings?.polymarketPostOrderMs, 11);
 });
 
 test("live executor defaults to parallel aggressive limit and starts both venue orders concurrently after preflight", async () => {
@@ -2272,6 +2493,7 @@ test("live executor keeps immediate hedge flow and then requires private stream 
   assert.equal(polymarket.placed.length, 1);
   assert.equal(result.venueConfirmations?.kalshi?.status, "confirmed");
   assert.equal(result.venueConfirmations?.polymarket?.status, "confirmed");
+  assert.equal(typeof result.executionTimings?.polymarketConfirmationMs, "number");
 });
 
 test("live executor skips transient pre-trade user stream outage without persistent lock", async () => {

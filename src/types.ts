@@ -147,6 +147,8 @@ export interface ExecutionTimings {
   hotGateMs?: number | null;
   preSubmitDbMs?: number | null;
   polymarketSignMs?: number | null;
+  polymarketPostOrderMs?: number | null;
+  polymarketConfirmationMs?: number | null;
   kalshiRttMs?: number | null;
   polymarketRttMs?: number | null;
   preflightMs?: number | null;

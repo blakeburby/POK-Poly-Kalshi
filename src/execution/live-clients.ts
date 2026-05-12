@@ -40,6 +40,11 @@ export interface LiveOrderPreflight {
   polymarketSignedOrder?: SignedOrder;
   polymarketSignedOrderCreatedAt?: number;
   polymarketSignMs?: number;
+  polymarketSignedOrderTokenId?: string;
+  polymarketSignedOrderPrice?: number;
+  polymarketSignedOrderSpend?: number;
+  polymarketSignedOrderType?: OrderType.FOK | OrderType.FAK;
+  polymarketSignedOrderSalt?: string | null;
 }
 
 export interface VenueOrderResult {
@@ -649,6 +654,52 @@ function polymarketImmediateOrderType(configuredValue: string, context: LiveOrde
   return polymarketOrderType(configuredValue);
 }
 
+function signedOrderRecord(order: SignedOrder | null | undefined): Record<string, unknown> | null {
+  return order == null ? null : order as unknown as Record<string, unknown>;
+}
+
+function signedOrderSalt(order: SignedOrder | null | undefined): string | null {
+  const salt = signedOrderRecord(order)?.salt;
+  return salt == null || salt === "" ? null : String(salt);
+}
+
+function signedOrderMetadata(order: SignedOrder | null | undefined): Record<string, unknown> {
+  const record = signedOrderRecord(order);
+  return {
+    polymarketSignedOrderSalt: record?.salt == null || record.salt === "" ? null : String(record.salt),
+    polymarketSignedOrderMakerAmount: record?.makerAmount == null ? null : String(record.makerAmount),
+    polymarketSignedOrderTakerAmount: record?.takerAmount == null ? null : String(record.takerAmount),
+    polymarketSignedOrderTokenId: record?.tokenId == null ? null : String(record.tokenId),
+    polymarketSignedOrderSide: record?.side == null ? null : String(record.side),
+    polymarketSignedOrderMetadata: record?.metadata == null ? null : String(record.metadata),
+  };
+}
+
+function preflightSignedOrderFallbackReason(
+  preflight: LiveOrderPreflight | undefined,
+  tokenId: string,
+  price: number,
+  spend: number,
+  orderType: OrderType.FOK | OrderType.FAK,
+  requestedAt: number,
+  ttlMs: number,
+): string | null {
+  if (!preflight?.polymarketSignedOrder) return "missing";
+  const ageMs = preflight.polymarketSignedOrderCreatedAt == null
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
+  if (ageMs > ttlMs) return `expired_${ageMs}ms`;
+  if (preflight.polymarketSignedOrderTokenId !== tokenId) return "token_changed";
+  if (preflight.polymarketSignedOrderType !== orderType) return "order_type_changed";
+  if (Math.abs((preflight.polymarketSignedOrderPrice ?? Number.NaN) - price) > 0.000001) return "price_changed";
+  if (Math.abs((preflight.polymarketSignedOrderSpend ?? Number.NaN) - spend) > 0.000001) return "spend_changed";
+  return null;
+}
+
+function isTimeoutLikeError(message: string): boolean {
+  return /timeout|timed out|abort|aborted|socket hang up|network/i.test(message);
+}
+
 function metadataFromClientOrderId(clientOrderId: string): `0x${string}` {
   return `0x${createHash("sha256").update(clientOrderId).digest("hex")}` as `0x${string}`;
 }
@@ -682,6 +733,55 @@ function polymarketMarketBuySpend(context: LiveOrderContext): number {
 
 function polymarketFilledStatus(status: string): boolean {
   return ["matched", "filled"].includes(status.toLowerCase());
+}
+
+function parsePolymarketTimeMs(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value < 10_000_000_000 ? value * 1000 : value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function polymarketTradeIsRecentBuyForToken(
+  trade: Record<string, unknown>,
+  tokenId: string,
+  submittedAtMs: number,
+  maxBuyPrice: number,
+): boolean {
+  if (String(trade.asset_id ?? trade.token_id ?? "") !== tokenId) return false;
+  if (String(trade.side ?? "").toUpperCase() !== String(Side.BUY).toUpperCase()) return false;
+  const matchTimeMs = parsePolymarketTimeMs(trade.match_time ?? trade.last_update ?? trade.created_at);
+  if (matchTimeMs != null && matchTimeMs < submittedAtMs - 1_000) return false;
+  const price = finiteOrNull(trade.price);
+  if (price != null && price > maxBuyPrice + 0.000001) return false;
+  const size = finiteOrNull(trade.size);
+  return size != null && size > 0;
+}
+
+function polymarketTradeGroups(
+  trades: Array<Record<string, unknown>>,
+): Array<{ orderId: string; fillCount: number; fillPrice: number | null; tradeCount: number }> {
+  const groups = new Map<string, { fillCount: number; notional: number; tradeCount: number }>();
+  for (const trade of trades) {
+    const orderId = stringOrNull(trade.taker_order_id)
+      ?? stringOrNull(recordOrNull(Array.isArray(trade.maker_orders) ? trade.maker_orders[0] : null)?.order_id)
+      ?? `trade:${stringOrNull(trade.id) ?? randomUUID()}`;
+    const size = finiteOrNull(trade.size) ?? 0;
+    const price = finiteOrNull(trade.price) ?? 0;
+    const group = groups.get(orderId) ?? { fillCount: 0, notional: 0, tradeCount: 0 };
+    group.fillCount += size;
+    group.notional += size * price;
+    group.tradeCount += 1;
+    groups.set(orderId, group);
+  }
+  return [...groups.entries()].map(([orderId, group]) => ({
+    orderId,
+    fillCount: group.fillCount,
+    fillPrice: group.fillCount > 0 ? roundPrice(group.notional / group.fillCount) : null,
+    tradeCount: group.tradeCount,
+  }));
 }
 
 function polymarketTradeMatchesOrder(trade: Record<string, unknown>, orderId: string): boolean {
@@ -974,10 +1074,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const preflightSignedOrderAgeMs = preflight?.polymarketSignedOrderCreatedAt == null
       ? Number.POSITIVE_INFINITY
       : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
-    const preflightSignedOrder = preflight?.polymarketSignedOrder
-      && preflightSignedOrderAgeMs <= this.config.livePolymarketSignedOrderTtlMs
-      ? preflight.polymarketSignedOrder
-      : null;
+    const preflightFallbackReason = preflightSignedOrderFallbackReason(
+      preflight,
+      tokenId,
+      worstPrice,
+      requestedSpend,
+      orderType,
+      requestedAt,
+      this.config.livePolymarketSignedOrderTtlMs,
+    );
+    const preflightSignedOrder = preflightFallbackReason == null ? preflight?.polymarketSignedOrder ?? null : null;
     if (!preflightSignedOrder && !client.createMarketOrder) {
       throw new Error(`Polymarket market ${orderType} order creation is not supported by the configured CLOB client`);
     }
@@ -996,8 +1102,48 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const signMs = preflightSignedOrder
       ? preflight?.polymarketSignMs ?? 0
       : Math.max(0, Date.now() - signStartedAt);
-    const payload = await withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, orderType));
+    const postStartedAt = Date.now();
+    let payload: unknown;
+    try {
+      payload = await withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, orderType));
+    } catch (error) {
+      const respondedAt = Date.now();
+      const message = sanitizeError(error);
+      const timeoutLike = isTimeoutLikeError(message);
+      this.cachedReadiness = null;
+      return {
+        venue: this.venue,
+        clientOrderId: context.clientOrderId,
+        orderId: null,
+        status: timeoutLike ? "unknown" : "failed",
+        fillPrice: null,
+        fillCount: null,
+        requestedAt: isoFromMs(requestedAt),
+        respondedAt: isoFromMs(respondedAt),
+        error: `polymarket ${orderType} postOrder failed: ${message}`,
+        fee: null,
+        exchangeTimestampMs: null,
+        signMs,
+        metadata: {
+          orderPlacementMode: context.placementMode ?? "parallel_fok",
+          polymarketOrderType: orderType,
+          polymarketMarketOrderStatus: timeoutLike ? "unknown" : "failed",
+          polymarketFokStatus: timeoutLike ? "unknown" : "failed",
+          polymarketRequestedSpend: requestedSpend,
+          polymarketWorstPrice: worstPrice,
+          polymarketRequestedShares: context.size,
+          polymarketPostOrderMs: Math.max(0, respondedAt - postStartedAt),
+          polymarketPostOrderError: message,
+          polymarketSignedOrderReused: preflightSignedOrder != null,
+          polymarketSignedOrderAgeMs: Number.isFinite(preflightSignedOrderAgeMs) ? preflightSignedOrderAgeMs : null,
+          polymarketSignedOrderFallbackReason: preflightSignedOrder ? null : preflightFallbackReason,
+          pendingReconciliation: timeoutLike,
+          ...signedOrderMetadata(signedOrder),
+        },
+      };
+    }
     const respondedAt = Date.now();
+    const postOrderMs = Math.max(0, respondedAt - postStartedAt);
     const response = payload as Record<string, unknown>;
 
     const orderId = response.orderID == null ? null : String(response.orderID);
@@ -1058,6 +1204,11 @@ export class PolymarketOrderClient implements VenueOrderClient {
         polymarketTakingAmount: takingAmount,
         polymarketMakingAmount: makingAmount,
         polymarketSuccess: success,
+        polymarketPostOrderMs: postOrderMs,
+        polymarketSignedOrderReused: preflightSignedOrder != null,
+        polymarketSignedOrderAgeMs: Number.isFinite(preflightSignedOrderAgeMs) ? preflightSignedOrderAgeMs : null,
+        polymarketSignedOrderFallbackReason: preflightSignedOrder ? null : preflightFallbackReason,
+        ...signedOrderMetadata(signedOrder),
       },
     };
   }
@@ -1269,6 +1420,257 @@ export class PolymarketOrderClient implements VenueOrderClient {
     };
   }
 
+  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+    if (!leg.tokenId) return null;
+    const { client } = await this.client();
+    const submittedAtMs = Number.isFinite(Date.parse(timedOutResult.requestedAt))
+      ? Date.parse(timedOutResult.requestedAt)
+      : context.requestedAt ?? Date.now();
+    const deadline = Date.now() + Math.max(0, this.config.liveFinalRecoveryTimeoutMs);
+    const pollMs = Math.max(25, this.config.liveFinalRecoveryPollMs);
+    let attempts = 0;
+    let lastStatus = "not_found";
+    let lastError: string | null = null;
+
+    while (Date.now() <= deadline) {
+      attempts += 1;
+      try {
+        const recovered = timedOutResult.orderId
+          ? await this.recoverPolymarketOrderById(client, leg, context, timedOutResult, submittedAtMs, attempts)
+          : await this.recoverPolymarketOrderByEvidence(client, leg, context, timedOutResult, submittedAtMs, attempts);
+        if (recovered) return recovered;
+        lastStatus = "not_found";
+      } catch (error) {
+        lastStatus = "query_failed";
+        lastError = sanitizeError(error);
+      }
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await waitMs(Math.min(pollMs, remainingMs));
+    }
+
+    return {
+      ...timedOutResult,
+      respondedAt: isoFromMs(Date.now()),
+      metadata: {
+        ...timedOutResult.metadata,
+        polymarketTimeoutRecoveryAttempted: true,
+        polymarketTimeoutRecoveryStatus: lastStatus,
+        polymarketTimeoutRecoveryAttempts: attempts,
+        polymarketTimeoutRecoveryError: lastError,
+        finalizationMs: Math.max(0, Date.now() - submittedAtMs),
+      },
+    };
+  }
+
+  private async recoverPolymarketOrderById(
+    client: PolymarketClobLike,
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+    submittedAtMs: number,
+    attempts: number,
+  ): Promise<VenueOrderResult | null> {
+    const orderId = timedOutResult.orderId;
+    if (!orderId) return null;
+    let order: Record<string, unknown> | null = null;
+    let orderError: string | null = null;
+    if (client.getOrder) {
+      try {
+        order = recordOrNull(await withMutedPolymarketClientLogs(() => client.getOrder!(orderId)));
+      } catch (error) {
+        orderError = sanitizeError(error);
+      }
+    }
+
+    const trades = await this.fetchPolymarketTrades(client, leg.tokenId ?? undefined);
+    const openOrders = await this.fetchPolymarketOpenOrders(client, leg.tokenId ?? undefined, orderId);
+    const tradeFill = polymarketTradeFill(trades.records, orderId);
+    const orderFillCount = finiteOrNull(order?.size_matched ?? order?.takingAmount);
+    const fillCount = orderFillCount ?? tradeFill.fillCount ?? timedOutResult.fillCount;
+    const fillPrice = tradeFill.fillPrice ?? finiteOrNull(order?.price) ?? timedOutResult.fillPrice;
+    const finalStatus = String(order?.status ?? "").trim()
+      || (tradeFill.tradeCount > 0 ? "matched" : openOrders.records.length > 0 ? "live" : "unknown");
+    if (order == null && tradeFill.tradeCount === 0 && openOrders.records.length === 0) return null;
+    return this.polymarketRecoveredResult(context, timedOutResult, {
+      orderId: timedOutResult.orderId,
+      fillCount,
+      fillPrice,
+      status: finalStatus,
+      submittedAtMs,
+      attempts,
+      recoveryStatus: tradeFill.tradeCount > 0 ? "found_by_order_trades" : order ? "found_by_order_id" : "found_open_order",
+      metadata: {
+        polymarketTimeoutRecoveryOrderStatus: finalStatus,
+        polymarketTimeoutRecoveryOrderError: orderError,
+        polymarketTimeoutRecoveryOpenOrderCount: openOrders.records.length,
+        polymarketTimeoutRecoveryOpenOrdersError: openOrders.error,
+        polymarketTimeoutRecoveryTradeCount: tradeFill.tradeCount,
+        polymarketTimeoutRecoveryTradesError: trades.error,
+      },
+    });
+  }
+
+  private async recoverPolymarketOrderByEvidence(
+    client: PolymarketClobLike,
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+    submittedAtMs: number,
+    attempts: number,
+  ): Promise<VenueOrderResult | null> {
+    if (!leg.tokenId) return null;
+    const trades = await this.fetchPolymarketTrades(client, leg.tokenId);
+    const matchingTrades = trades.records.filter((trade) => polymarketTradeIsRecentBuyForToken(
+      trade,
+      leg.tokenId!,
+      submittedAtMs,
+      roundPrice(context.maxBuyPrice),
+    ));
+    const groups = polymarketTradeGroups(matchingTrades);
+    if (groups.length === 1) {
+      const group = groups[0]!;
+      return this.polymarketRecoveredResult(context, timedOutResult, {
+        orderId: group.orderId.startsWith("trade:") ? null : group.orderId,
+        fillCount: group.fillCount,
+        fillPrice: group.fillPrice,
+        status: "matched",
+        submittedAtMs,
+        attempts,
+        recoveryStatus: "found_unambiguous_recent_trade",
+        metadata: {
+          polymarketTimeoutRecoveryTradeCount: group.tradeCount,
+          polymarketTimeoutRecoveryTradesError: trades.error,
+          polymarketTimeoutRecoveryMatchedTradeGroups: groups.length,
+          polymarketTimeoutRecoverySignedOrderSalt: timedOutResult.metadata?.polymarketSignedOrderSalt ?? null,
+          polymarketTimeoutRecoverySignedOrderMakerAmount: timedOutResult.metadata?.polymarketSignedOrderMakerAmount ?? null,
+          polymarketTimeoutRecoverySignedOrderTakerAmount: timedOutResult.metadata?.polymarketSignedOrderTakerAmount ?? null,
+        },
+      });
+    }
+    if (groups.length > 1) {
+      return {
+        ...timedOutResult,
+        status: "unknown",
+        respondedAt: isoFromMs(Date.now()),
+        metadata: {
+          ...timedOutResult.metadata,
+          polymarketTimeoutRecoveryAttempted: true,
+          polymarketTimeoutRecoveryStatus: "ambiguous_recent_trades",
+          polymarketTimeoutRecoveryAttempts: attempts,
+          polymarketTimeoutRecoveryMatchedTradeGroups: groups.length,
+          polymarketTimeoutRecoveryTradeCount: matchingTrades.length,
+          polymarketTimeoutRecoveryTradesError: trades.error,
+          finalizationMs: Math.max(0, Date.now() - submittedAtMs),
+        },
+      };
+    }
+
+    const openOrders = await this.fetchPolymarketOpenOrders(client, leg.tokenId, null);
+    const matchingOpenOrders = openOrders.records.filter((order) => {
+      if (String(order.asset_id ?? "") !== leg.tokenId) return false;
+      if (String(order.side ?? "").toUpperCase() !== String(Side.BUY).toUpperCase()) return false;
+      const createdAtMs = parsePolymarketTimeMs(order.created_at);
+      return createdAtMs == null || createdAtMs >= submittedAtMs - 1_000;
+    });
+    if (matchingOpenOrders.length > 0) {
+      return {
+        ...timedOutResult,
+        orderId: matchingOpenOrders.length === 1 ? String(matchingOpenOrders[0]!.id ?? "") || null : null,
+        status: "unknown",
+        respondedAt: isoFromMs(Date.now()),
+        metadata: {
+          ...timedOutResult.metadata,
+          polymarketTimeoutRecoveryAttempted: true,
+          polymarketTimeoutRecoveryStatus: matchingOpenOrders.length === 1 ? "found_open_order" : "ambiguous_open_orders",
+          polymarketTimeoutRecoveryAttempts: attempts,
+          polymarketTimeoutRecoveryOpenOrderCount: matchingOpenOrders.length,
+          polymarketTimeoutRecoveryOpenOrdersError: openOrders.error,
+          polymarketTimeoutRecoveryTradesError: trades.error,
+          finalizationMs: Math.max(0, Date.now() - submittedAtMs),
+        },
+      };
+    }
+    return null;
+  }
+
+  private async fetchPolymarketTrades(
+    client: PolymarketClobLike,
+    tokenId: string | undefined,
+  ): Promise<{ records: Array<Record<string, unknown>>; error: string | null }> {
+    if (!client.getTrades || !tokenId) return { records: [], error: "unavailable" };
+    try {
+      const records = (await withMutedPolymarketClientLogs(() => client.getTrades!({ asset_id: tokenId }, true)))
+        .map((trade) => recordOrNull(trade))
+        .filter((trade): trade is Record<string, unknown> => trade != null);
+      return { records, error: null };
+    } catch (error) {
+      return { records: [], error: sanitizeError(error) };
+    }
+  }
+
+  private async fetchPolymarketOpenOrders(
+    client: PolymarketClobLike,
+    tokenId: string | undefined,
+    orderId: string | null,
+  ): Promise<{ records: Array<Record<string, unknown>>; error: string | null }> {
+    if (!client.getOpenOrders) return { records: [], error: "unavailable" };
+    try {
+      const params: { id?: string; asset_id?: string } = {};
+      if (orderId) params.id = orderId;
+      if (tokenId) params.asset_id = tokenId;
+      const records = (await withMutedPolymarketClientLogs(() => client.getOpenOrders!(params, true)))
+        .map((order) => recordOrNull(order))
+        .filter((order): order is Record<string, unknown> => order != null);
+      return { records, error: null };
+    } catch (error) {
+      return { records: [], error: sanitizeError(error) };
+    }
+  }
+
+  private polymarketRecoveredResult(
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+    recovery: {
+      orderId: string | null;
+      fillCount: number | null;
+      fillPrice: number | null;
+      status: string;
+      submittedAtMs: number;
+      attempts: number;
+      recoveryStatus: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): VenueOrderResult {
+    const fillError = exactFillError(this.venue, recovery.fillCount, context.size);
+    const exact = fillError == null;
+    const status = exact
+      ? "filled"
+      : (recovery.fillCount ?? 0) > 0
+        ? "unexpected_fill_count"
+        : recovery.status || "unfilled";
+    return {
+      ...timedOutResult,
+      orderId: recovery.orderId ?? timedOutResult.orderId,
+      status,
+      fillCount: recovery.fillCount,
+      fillPrice: recovery.fillPrice,
+      respondedAt: isoFromMs(Date.now()),
+      error: exact ? null : `polymarket timeout recovery found non-exact fill (${fillError ?? "no exact fill evidence"})`,
+      metadata: {
+        ...timedOutResult.metadata,
+        polymarketTimeoutRecoveryAttempted: true,
+        polymarketTimeoutRecoveryStatus: recovery.recoveryStatus,
+        polymarketTimeoutRecoveryAttempts: recovery.attempts,
+        polymarketTimeoutRecoveryFillCount: recovery.fillCount,
+        polymarketTimeoutRecoveryFillPrice: recovery.fillPrice,
+        finalizationMs: Math.max(0, Date.now() - recovery.submittedAtMs),
+        ...recovery.metadata,
+      },
+    };
+  }
+
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     if (!leg.tokenId) return "Polymarket token id is required for live trading";
     const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
@@ -1315,6 +1717,11 @@ export class PolymarketOrderClient implements VenueOrderClient {
           polymarketSignedOrder: signedOrder,
           polymarketSignedOrderCreatedAt: now,
           polymarketSignMs: signMs,
+          polymarketSignedOrderTokenId: leg.tokenId,
+          polymarketSignedOrderPrice: roundPrice(context.maxBuyPrice),
+          polymarketSignedOrderSpend: polymarketMarketBuySpend(context),
+          polymarketSignedOrderType: orderType,
+          polymarketSignedOrderSalt: signedOrderSalt(signedOrder),
         };
       } catch (error) {
         return `Polymarket signed-order warmup failed: ${sanitizeError(error)}`;
