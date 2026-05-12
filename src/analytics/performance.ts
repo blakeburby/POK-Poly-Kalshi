@@ -56,6 +56,26 @@ interface AnalyticsTrade {
   fillLatencyMs: number | null;
 }
 
+function hasRealVenueFillId(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.length > 0 && !value.toLowerCase().startsWith("dry-run");
+}
+
+function matchingPositiveFillCounts(signal: DashboardSignal): boolean {
+  const kalshiCount = signal.kalshiFillCount ?? 0;
+  const polymarketCount = signal.polymarketFillCount ?? 0;
+  return kalshiCount > 0 && polymarketCount > 0 && Math.abs(kalshiCount - polymarketCount) <= EPSILON;
+}
+
+export function isExactLiveFilledSignal(signal: DashboardSignal): boolean {
+  return signal.action === "filled"
+    && typeof signal.executionGroupId === "string"
+    && signal.executionGroupId.length > 0
+    && hasRealVenueFillId(signal.kalshiFillId)
+    && hasRealVenueFillId(signal.polymarketFillId)
+    && matchingPositiveFillCounts(signal)
+    && signal.partialFill !== true;
+}
+
 function roundMetric(value: number): number {
   return Number(value.toFixed(6));
 }
@@ -86,7 +106,7 @@ export function oldestAnalyticsSinceMs(now = Date.now()): number {
 }
 
 export function estimatedGuaranteedPnl(signal: DashboardSignal): number | null {
-  if (signal.action !== "filled") return null;
+  if (!isExactLiveFilledSignal(signal)) return null;
   const fillPremium = signal.kalshiFillPrice != null && signal.polymarketFillPrice != null
     ? signal.kalshiFillPrice + signal.polymarketFillPrice
     : signal.premium;
@@ -95,6 +115,7 @@ export function estimatedGuaranteedPnl(signal: DashboardSignal): number | null {
 }
 
 function signalTrade(signal: DashboardSignal): AnalyticsTrade | null {
+  if (!isExactLiveFilledSignal(signal)) return null;
   const timestampMs = new Date(signal.updatedAt).getTime();
   const createdAtMs = new Date(signal.createdAt).getTime();
   if (!Number.isFinite(timestampMs)) return null;

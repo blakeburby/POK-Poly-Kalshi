@@ -105,6 +105,9 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
     polymarketFillId: "poly-fill",
     kalshiFillPrice: 0.5,
     polymarketFillPrice: 0.4,
+    executionGroupId: "live-group",
+    kalshiFillCount: 5,
+    polymarketFillCount: 5,
     ...input,
   };
 }

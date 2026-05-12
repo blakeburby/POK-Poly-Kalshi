@@ -25,6 +25,9 @@ function signal(input: Partial<DashboardSignal> = {}): DashboardSignal {
     polymarketFillId: "poly-fill",
     kalshiFillPrice: 0.5,
     polymarketFillPrice: 0.4,
+    executionGroupId: "live-group",
+    kalshiFillCount: 5,
+    polymarketFillCount: 5,
     ...input,
   };
 }
@@ -37,6 +40,9 @@ test("analytics estimates guaranteed PnL from fill prices and falls back to prem
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 })), 0.08);
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillPrice: null, polymarketFillPrice: null, premium: 0.95 })), 0.05);
   assert.equal(estimatedGuaranteedPnl(signal({ action: "failed" })), null);
+  assert.equal(estimatedGuaranteedPnl(signal({ executionGroupId: null })), null);
+  assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillId: "dry-run-kalshi-1" })), null);
+  assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillCount: 5, polymarketFillCount: 0 })), null);
 });
 
 test("analytics computes win loss rates, profit factor, and cumulative buckets", () => {
@@ -110,8 +116,8 @@ test("analytics store serves hot snapshots and matches full calculator", () => {
   const hot = store.snapshot(now, { staleAfterMs: 5_000 });
   const full = buildDashboardAnalytics(signals, now);
   assert.equal(hot.hourly.netPnl, full.hourly.netPnl);
-  assert.equal(hot.hourly.opportunityCount, 2);
-  assert.equal(hot.hourly.fillRate, 0.5);
+  assert.equal(hot.hourly.opportunityCount, 1);
+  assert.equal(hot.hourly.fillRate, 1);
   assert.equal(hot.realtime?.mode, "hot_cache");
   assert.equal(hot.realtime?.lastDbReconciledAt, now - 250);
   assert.equal(hot.realtime?.sourceSignalCount, 2);

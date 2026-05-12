@@ -349,10 +349,50 @@ test("live-only dashboard renders one live command surface", () => {
   assert.match(markup, /LIVE-ONLY DASHBOARD/);
   assert.match(markup, /real-kalshi-order/);
   assert.match(markup, /real-poly-order/);
+  assert.match(markup, /Executed Fill-Audit PnL/);
+  assert.match(markup, /Live exchange-fill audit records only; conservative \$1\.00 payoff floor, not settlement-final PnL\./);
 
-  for (const forbidden of ["Current " + "Pa" + "per Trading Dashboard"]) {
+  for (const forbidden of [
+    "Current " + "Pa" + "per Trading Dashboard",
+    "Opportunity Blotter",
+    "Synthetic Strangle Map",
+    "PROBABILISTIC DEAD ZONE",
+    "Long Up Above + Long Down Below",
+    "Pair Monitor",
+    "Cross-Venue Book Compare",
+    "Polymarket Hydration",
+    "Price-To-Beat Diagnostics",
+    "Risk Intelligence",
+    "Decision Engine",
+    "Risk Meter",
+    "Estimated Edge",
+    "Active Opportunities",
+  ]) {
     assert.doesNotMatch(markup.toLowerCase(), new RegExp(forbidden.toLowerCase()));
   }
+});
+
+test("performance analytics count only exact paired live fills", () => {
+  const markup = render({
+    recentSignals: [
+      signal({ id: 1, executionGroupId: "real-group-1", kalshiFillId: "real-kalshi-1", polymarketFillId: "real-poly-1", kalshiFillCount: 5, polymarketFillCount: 5 }),
+      signal({ id: 2, action: "failed", executionGroupId: "real-failed", kalshiFillId: null, polymarketFillId: null, kalshiFillCount: 0, polymarketFillCount: 0 }),
+      signal({ id: 3, executionGroupId: "legacy-dry-run", kalshiFillId: "dry-run-kalshi-3", polymarketFillId: "dry-run-poly-3", kalshiFillCount: 5, polymarketFillCount: 5, kalshiFillPrice: 0.1, polymarketFillPrice: 0.1 }),
+      signal({ id: 4, executionGroupId: "mismatch-group", kalshiFillId: "real-kalshi-4", polymarketFillId: "real-poly-4", kalshiFillCount: 5, polymarketFillCount: 0, partialFill: true }),
+    ],
+    analytics: buildDashboardAnalytics([
+      signal({ id: 1, executionGroupId: "real-group-1", kalshiFillId: "real-kalshi-1", polymarketFillId: "real-poly-1", kalshiFillCount: 5, polymarketFillCount: 5 }),
+      signal({ id: 3, executionGroupId: "legacy-dry-run", kalshiFillId: "dry-run-kalshi-3", polymarketFillId: "dry-run-poly-3", kalshiFillCount: 5, polymarketFillCount: 5, kalshiFillPrice: 0.1, polymarketFillPrice: 0.1 }),
+    ], generatedAt),
+  });
+
+  assert.match(markup, /Real Live Fills<\/span><strong>1<\/strong>/);
+  assert.match(markup, /Audited Fills<\/span><strong>1<\/strong>/);
+  assert.match(markup, /real-kalshi-1/);
+  assert.match(markup, /real-poly-1/);
+  assert.doesNotMatch(markup, /dry-run-kalshi-3/);
+  assert.doesNotMatch(markup, /dry-run-poly-3/);
+  assert.doesNotMatch(markup, /legacy-dry-run/);
 });
 
 test("strict-clean live states distinguish clean, quarantined, and blocked", () => {

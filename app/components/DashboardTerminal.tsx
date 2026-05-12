@@ -40,6 +40,7 @@ import {
 import { formatCurrency as formatActivityCurrency, formatPercentValue as formatActivityPercent, formatRelativeTime as formatActivityRelativeTime, formatSignedCurrency as formatActivitySignedCurrency } from "../lib/formatters";
 import { useTradingData } from "../hooks/useTradingData";
 import type { RiskSurface3DProps } from "./dashboard/risk-surface-types";
+import { isExactLiveFilledSignal } from "../../src/analytics/performance";
 
 type StreamState = "connecting" | "live" | "degraded";
 type SignalVenue = "kalshi" | "polymarket";
@@ -385,13 +386,36 @@ function signalLatencyMs(signal: DashboardSignal): number | null {
 }
 
 function filledSignals(signals: DashboardSignal[]): DashboardSignal[] {
-  return signals.filter((signal) => signal.action === "filled");
+  return signals.filter(isExactLiveFilledSignal);
+}
+
+function isDryRunId(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.toLowerCase().startsWith("dry-run");
+}
+
+function liveAuditSignals(signals: DashboardSignal[]): DashboardSignal[] {
+  return signals.filter((signal) => (
+    typeof signal.executionGroupId === "string"
+    && signal.executionGroupId.length > 0
+    && !isDryRunId(signal.kalshiFillId)
+    && !isDryRunId(signal.polymarketFillId)
+    && !isDryRunId(signal.kalshiClientOrderId)
+    && !isDryRunId(signal.polymarketClientOrderId)
+  ));
 }
 
 function averageSignalLatency(signals: DashboardSignal[]): number | null {
   const latencies = signals.map(signalLatencyMs).filter((value): value is number => value != null);
   if (latencies.length === 0) return null;
   return latencies.reduce((total, value) => total + value, 0) / latencies.length;
+}
+
+function fillAuditPnl(signal: DashboardSignal): number {
+  if (signal.realizedGuaranteedProfit != null && Number.isFinite(signal.realizedGuaranteedProfit)) return signal.realizedGuaranteedProfit;
+  if (signal.kalshiFillPrice != null && signal.polymarketFillPrice != null) {
+    return 1 - signal.kalshiFillPrice - signal.polymarketFillPrice;
+  }
+  return signal.guaranteedProfit;
 }
 
 function formatSignedCents(value: number | null): string {
@@ -1407,8 +1431,10 @@ function GlobalStateBar({
   viewMode: DashboardViewMode;
   onViewModeChange: (mode: DashboardViewMode) => void;
 }) {
-  const insights = buildDashboardInsights(snapshot);
-  const viewModes: DashboardViewMode[] = ["risk", "raw", "execution"];
+  const currentAnalytics = snapshot.analytics?.hourly;
+  const recentExactFills = filledSignals(snapshot.recentSignals);
+  const recentAuditPnl = recentExactFills.reduce((total, signal) => total + fillAuditPnl(signal), 0);
+  const avgLatency = averageSignalLatency(recentExactFills);
   const execution = snapshot.execution;
 
   return (
@@ -1425,16 +1451,15 @@ function GlobalStateBar({
 
       <div className="topbar-kpis">
         <div className="hero-kpi">
-          <span>Estimated Edge</span>
-          <strong className={(insights.estimatedEdge ?? 0) >= snapshot.health.minProfitDollars ? "profit" : ""}>{formatSignedCents(insights.estimatedEdge)}</strong>
+          <span>Executed Fill-Audit PnL</span>
+          <strong className={recentAuditPnl >= 0 ? "profit" : "loss"}>{formatSignedCents(recentAuditPnl)}</strong>
         </div>
-        <div className="topbar-kpi"><span>Active Opportunities</span><strong>{insights.activeOpportunities}</strong></div>
-        <div className="topbar-kpi"><span>Feed Latency</span><strong>{formatCompactTime(insights.feedLatencyMs)}</strong></div>
-        <div className="topbar-kpi"><span>Last Scan</span><strong>{formatCompactTime(insights.lastScanAgeMs)}</strong></div>
-        <div className="topbar-kpi"><span>Kalshi Age</span><strong>{formatCompactTime(insights.kalshiLatencyMs)}</strong></div>
-        <div className="topbar-kpi"><span>Polymarket Age</span><strong>{formatCompactTime(insights.polymarketLatencyMs)}</strong></div>
-        <div className="topbar-kpi"><span>Scan p95</span><strong>{formatCompactTime(insights.scanP95Ms)}</strong></div>
-        <div className="topbar-kpi"><span>Exec p95</span><strong>{formatCompactTime(insights.executionP95Ms)}</strong></div>
+        <div className="topbar-kpi"><span>Recent Live Fills</span><strong>{recentExactFills.length}</strong></div>
+        <div className="topbar-kpi"><span>Hourly Win Rate</span><strong>{currentAnalytics ? formatPercent(currentAnalytics.winRate) : "--"}</strong></div>
+        <div className="topbar-kpi"><span>Historical Fills</span><strong>{currentAnalytics?.filledTrades ?? 0}</strong></div>
+        <div className="topbar-kpi"><span>Avg Fill Latency</span><strong>{formatCompactTime(currentAnalytics?.avgFillLatencyMs ?? avgLatency)}</strong></div>
+        <div className="topbar-kpi"><span>Kalshi Fills</span><strong>{recentExactFills.reduce((total, signal) => total + (signal.kalshiFillCount ?? 0), 0)}</strong></div>
+        <div className="topbar-kpi"><span>Polymarket Fills</span><strong>{recentExactFills.reduce((total, signal) => total + (signal.polymarketFillCount ?? 0), 0)}</strong></div>
       </div>
 
       <div className="topbar-state">
@@ -1444,22 +1469,8 @@ function GlobalStateBar({
           <StatusPill label="LIVE EXECUTION ENGINE" state={snapshot.health.liveTrading ? "warn" : "off"} />
           {execution?.partialFillLocked ? <StatusPill label="PARTIAL LOCK" state="stale" /> : null}
           {snapshot.health.liveTrading && execution ? <StatusPill label={execution.polymarket.ready && execution.kalshi.ready ? "VENUES READY" : "VENUE CHECK"} state={execution.polymarket.ready && execution.kalshi.ready ? "live" : "warn"} /> : null}
-          <StatusPill label={insights.staleBooks > 0 ? `${insights.staleBooks} STALE BOOKS` : "BOOKS FRESH"} state={insights.staleBooks > 0 ? "stale" : "live"} />
-        </div>
-        <RiskMeter insights={insights} />
-        <div className="view-mode-tabs" role="tablist" aria-label="Dashboard view mode">
-          {viewModes.map((modeName) => (
-            <button
-              aria-selected={viewMode === modeName}
-              className={viewMode === modeName ? "active" : ""}
-              key={modeName}
-              onClick={() => onViewModeChange(modeName)}
-              role="tab"
-              type="button"
-            >
-              {modeName === "risk" ? "Risk View" : modeName === "raw" ? "Raw View" : "Execution View"}
-            </button>
-          ))}
+          <StatusPill label={execution?.userStreams.ready ? "STREAMS READY" : "STREAM CHECK"} state={execution?.userStreams.ready ? "live" : "warn"} />
+          <StatusPill label={execution?.reconciliation.clean ? "RECON CLEAN" : "RECON DRIFT"} state={execution?.reconciliation.clean ? "live" : "stale"} />
         </div>
       </div>
     </header>
@@ -1468,11 +1479,11 @@ function GlobalStateBar({
 
 function MobileSectionNav() {
   const sections = [
-    ["Edge", "opportunities"],
-    ["Risk", "risk-intelligence"],
-    ["Detail", "trade-detail"],
-    ["Books", "market-books"],
+    ["Performance", "performance"],
+    ["Activity", "trading-activity"],
+    ["Analytics", "analytics"],
     ["Signals", "signals"],
+    ["Events", "events"],
   ] as const;
 
   return (
@@ -1562,7 +1573,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
 
   if (!analytics || !current) {
     return (
-      <section className="panel analytics-panel">
+      <section className="panel analytics-panel" id="analytics">
         <div className="panel-header">
           <div>
             <p className="panel-kicker">performance analytics</p>
@@ -1583,7 +1594,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
   const realtimeMode = realtime?.mode === "fallback_db" ? "Fallback DB" : "Hot-cache";
   const realtimeState = realtime?.stale ? "STALE" : "REALTIME";
   return (
-    <section className="panel analytics-panel">
+    <section className="panel analytics-panel" id="analytics">
       <div className="panel-header analytics-header">
         <div>
           <p className="panel-kicker">performance analytics</p>
@@ -1617,7 +1628,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <div><span>Last Fill Update</span><strong>{formatRealtimeAge(snapshot.generatedAt, realtime?.lastUpdatedAt)}</strong></div>
           <div><span>DB Reconcile Age</span><strong>{formatRealtimeAge(snapshot.generatedAt, realtime?.lastDbReconciledAt)}</strong></div>
           <div><span>Compute Time</span><strong>{formatCompactTime(realtime?.computeMs ?? null)}</strong></div>
-          <div><span>Source Signals</span><strong>{realtime?.sourceSignalCount ?? "--"}</strong></div>
+          <div><span>Audited Fills</span><strong>{current.filledTrades}</strong></div>
         </div>
 
         <div className="analytics-grid">
@@ -1633,8 +1644,6 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <div className="analytics-card"><span>Avg Premium</span><strong>{formatCents(current.avgPremium ?? null)}</strong></div>
           <div className="analytics-card"><span>Avg Slippage</span><strong>{formatSignedCents(current.avgSlippage ?? null)}</strong></div>
           <div className="analytics-card"><span>Avg Fill Latency</span><strong>{formatCompactTime(current.avgFillLatencyMs ?? null)}</strong></div>
-          <div className="analytics-card"><span>Opportunities</span><strong>{current.opportunityCount ?? current.filledTrades}</strong></div>
-          <div className="analytics-card"><span>Fill Rate</span><strong>{formatPercent(current.fillRate ?? 0)}</strong></div>
           <div className="analytics-card"><span>Best Trade</span><strong className="profit">{formatSignedCents(current.bestTradePnl)}</strong></div>
           <div className="analytics-card"><span>Worst Trade</span><strong className="loss">{formatSignedCents(current.worstTradePnl)}</strong></div>
         </div>
@@ -1643,7 +1652,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
           <div className="pnl-chart-header">
             <div>
               <span className="signal-label">PnL Curve</span>
-              <strong>Cumulative estimated guaranteed PnL</strong>
+              <strong>Cumulative executed fill-audit PnL</strong>
             </div>
             <div>
               <span className="signal-label">Breakeven</span>
@@ -2878,7 +2887,7 @@ function SignalTape({
 
 function EventTape({ logs }: { logs: DashboardLogEntry[] }) {
   return (
-    <section className="panel tape-panel">
+    <section className="panel tape-panel" id="events">
       <div className="panel-header">
         <div>
           <p className="panel-kicker">runtime</p>
@@ -3214,7 +3223,7 @@ function TradingActivitySection({ snapshot }: { snapshot: DashboardSnapshot }) {
   const kalshi = snapshot.tradingActivity?.kalshi ?? emptyTradingActivityForPanel("kalshi", snapshot.generatedAt);
   const polymarket = snapshot.tradingActivity?.polymarket ?? emptyTradingActivityForPanel("polymarket", snapshot.generatedAt);
   return (
-    <section className="trading-activity-section" aria-label="Trading Activity">
+    <section className="trading-activity-section" id="trading-activity" aria-label="Trading Activity">
       <div className="panel combined-dashboard-heading trading-activity-heading">
         <p className="panel-kicker">venue activity</p>
         <h2>Trading Activity</h2>
@@ -3440,22 +3449,21 @@ function PerformanceDashboardSections({ snapshot }: { snapshot: DashboardSnapsho
   const current = snapshot.analytics?.hourly;
   const filled = filledSignals(snapshot.recentSignals);
   const avgLatency = averageSignalLatency(filled);
-  const estimatedGuaranteed = filled.reduce((total, signal) => total + signal.guaranteedProfit, 0);
-  const failedAttempts = snapshot.recentSignals.filter((signal) => signal.action === "failed").length;
+  const estimatedGuaranteed = filled.reduce((total, signal) => total + fillAuditPnl(signal), 0);
   return (
-    <section className="live-dashboard-stack performance-dashboard-stack" aria-label="Live dashboard analytics">
+    <section className="live-dashboard-stack performance-dashboard-stack" id="performance" aria-label="Live dashboard analytics">
       <LiveOperationalPanel snapshot={snapshot} />
       <LiveSafetyBadgeRow snapshot={snapshot} />
       <section className="performance-summary-grid">
         <div className="performance-summary-card">
           <span>Real Live Fills</span>
           <strong>{filled.length}</strong>
-          <small>{failedAttempts} failed/skipped attempts in visible live tape</small>
+          <small>Exact paired Kalshi/Polymarket fills only</small>
         </div>
         <div className="performance-summary-card">
           <span>Executed Fill-Audit PnL</span>
           <strong className={estimatedGuaranteed >= 0 ? "profit" : "loss"}>{formatSignedCents(estimatedGuaranteed)}</strong>
-          <small>Real live records only; not settlement-final PnL</small>
+          <small>Exchange-fill audit records only; not settlement-final PnL</small>
         </div>
         <div className="performance-summary-card">
           <span>Win Rate</span>
@@ -3466,11 +3474,6 @@ function PerformanceDashboardSections({ snapshot }: { snapshot: DashboardSnapsho
           <span>Order / Stream Latency</span>
           <strong>{formatCompactTime(current?.avgFillLatencyMs ?? avgLatency)}</strong>
           <small>Average fill/audit turnaround</small>
-        </div>
-        <div className="performance-summary-card">
-          <span>Opportunities</span>
-          <strong>{current?.opportunityCount ?? snapshot.liveCandidates.length}</strong>
-          <small>{snapshot.liveCandidates.length} live opportunities now</small>
         </div>
         <div className="performance-summary-card">
           <span>Historical Live Analytics</span>
@@ -3509,6 +3512,7 @@ export function DashboardTerminalView({
   const [viewMode, setViewMode] = useState<DashboardViewMode>("risk");
   const [bookHistory, setBookHistory] = useState<BookHistory>({});
   const selectedTradeKey = selectedTrade?.key ?? null;
+  const visibleSignals = liveAuditSignals(snapshot?.recentSignals ?? []);
 
   useEffect(() => {
     if (!snapshot || !selectedTradeKey) return;
@@ -3556,32 +3560,16 @@ export function DashboardTerminalView({
 
       <LiveDashboardSections snapshot={snapshot} />
 
-      <section className="institutional-command-grid">
-        <AnalyticsPanel snapshot={snapshot} />
-        <RiskIntelligencePanel selectedTrade={selectedTrade} snapshot={snapshot} />
-      </section>
-
-      <OpportunityBlotter onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} snapshot={snapshot} />
+      <AnalyticsPanel snapshot={snapshot} />
 
       <AnimatePresence mode="wait">
         {selectedTrade ? <TradeDetailDrawer key={selectedTrade.key} now={snapshot.generatedAt} onClose={() => setSelectedTrade(null)} trade={selectedTrade} /> : null}
       </AnimatePresence>
 
-      <SyntheticStructureMap snapshot={snapshot} />
-
-      <CrossVenueBookStrip snapshot={snapshot} />
-
-      <section className="market-books-grid" id="market-books" aria-label="Live venue books">
-        <BookTable candidates={snapshot.liveCandidates} history={bookHistory} title="Kalshi BTC 15m" venue="kalshi" contracts={snapshot.books.kalshi} snapshot={snapshot} />
-        <BookTable candidates={snapshot.liveCandidates} history={bookHistory} title="Polymarket BTC 15m" venue="polymarket" contracts={snapshot.books.polymarket} snapshot={snapshot} />
-      </section>
-
       {snapshot.discovery.lastDiscoveryError ? <div className="error-banner">Discovery error: {snapshot.discovery.lastDiscoveryError}</div> : null}
 
-      <PolymarketDiagnosticsPanel snapshot={snapshot} />
-
       <section className="activity-grid" aria-label="Signal and runtime activity">
-        <SignalTape onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={snapshot.recentSignals} now={snapshot.generatedAt} />
+        <SignalTape onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={visibleSignals} now={snapshot.generatedAt} />
         <EventTape logs={snapshot.logs} />
       </section>
     </main>
