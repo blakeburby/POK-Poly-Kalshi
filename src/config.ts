@@ -118,7 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: envNumber(env, "PORT", 8080),
     databaseUrl: envString(env, "DATABASE_URL"),
     arbEnabled: envBoolean(env, "ARB_ENABLED", true),
-    minProfitDollars: envNumber(env, "ARB_MIN_PROFIT_DOLLARS", 0.05),
+    minProfitDollars: envNumber(env, "ARB_MIN_PROFIT_DOLLARS", 0.01),
     reentryIntervalMs: envNumber(env, "ARB_REENTRY_INTERVAL_MS", 15_000),
     staleBookMs: envNumber(env, "STALE_BOOK_MS", 10_000),
     marketDiscoveryIntervalMs: envNumber(env, "MARKET_DISCOVERY_INTERVAL_MS", 30_000),

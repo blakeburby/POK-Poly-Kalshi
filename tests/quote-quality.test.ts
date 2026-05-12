@@ -27,6 +27,10 @@ function candidateFrom(poly: BinaryContract, kalshi: BinaryContract) {
   return candidate;
 }
 
+test("config defaults the live minimum edge to one cent", () => {
+  assert.equal(loadConfig({}).minProfitDollars, 0.01);
+});
+
 test("depthWeightedAsk computes order-size VWAP and fails when depth is insufficient", () => {
   const vwap = depthWeightedAsk([
     { price: 0.4, size: 2 },
@@ -170,6 +174,45 @@ test("live quote quality gates on cushioned executable edge and applies cushion 
   assert.equal(rawNineCentEdge.snapshot.projectedEdgeAfterFees, 0.05);
   assert.equal(rawNineCentEdge.kalshiMaxBuyPrice, 0.53);
   assert.equal(rawNineCentEdge.polymarketMaxBuyPrice, 0.42);
+});
+
+test("live quote quality accepts one-cent cushioned edge and rejects just below it", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ minProfitDollars: 0.01, liveTakerPriceCushionCents: 2 });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.43,
+    yesAskLevels: [{ price: 0.43, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.52,
+    noAskLevels: [{ price: 0.52, size: 5 }],
+    updatedAt: now,
+  });
+  const candidate = buildGuaranteedCandidate(poly, kalshi, 0.01);
+  assert.ok(candidate);
+
+  const oneCentEdge = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(oneCentEdge.ok, true);
+  assert.equal(oneCentEdge.polymarketMaxBuyPrice, 0.45);
+  assert.equal(oneCentEdge.kalshiMaxBuyPrice, 0.54);
+  assert.equal(oneCentEdge.snapshot.projectedPremiumAtLimit, 0.99);
+  assert.equal(oneCentEdge.snapshot.projectedEdgeAfterFees, 0.01);
+
+  const belowOneCent = evaluateLiveQuoteQuality(candidate, {
+    kalshi: [kalshi],
+    polymarket: [{ ...poly, yesAsk: 0.4301, yesAskLevels: [{ price: 0.4301, size: 5 }] }],
+  }, config, now);
+  assert.equal(belowOneCent.ok, false);
+  assert.equal(belowOneCent.snapshot.projectedEdgeAfterFees, 0.0099);
+  assert.match(belowOneCent.reason ?? "", /cushioned executable edge 0.0099 below threshold 0.0100/);
 });
 
 test("incident-shaped Kalshi 30 NO versus Polymarket 5 YES cannot pass live quote gates", () => {

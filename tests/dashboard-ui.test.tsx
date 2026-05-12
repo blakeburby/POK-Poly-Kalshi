@@ -190,7 +190,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       ok: true,
       liveTrading: true,
       arbEnabled: true,
-      minProfitDollars: 0.05,
+      minProfitDollars: 0.01,
       reentryIntervalMs: 15_000,
       staleBookMs: 10_000,
       liveMaxTradesPerWindow: 1,

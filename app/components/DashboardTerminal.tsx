@@ -829,7 +829,7 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
       pairKey: signal.pairKey,
       action: signal.action,
       expiryMs: safeNumber(signal.expiryMs),
-      threshold: normalizeBinaryPrice(signal.threshold) ?? 0.05,
+      threshold: normalizeBinaryPrice(signal.threshold) ?? 0.01,
       legA: normalizeDetailLeg("A", signal.lower, signal.lower.venue === "kalshi" ? signal.kalshiFillPrice : signal.polymarketFillPrice, signal.lower.venue === "kalshi" ? signal.kalshiFillId : signal.polymarketFillId),
       legB: normalizeDetailLeg("B", signal.higher, signal.higher.venue === "kalshi" ? signal.kalshiFillPrice : signal.polymarketFillPrice, signal.higher.venue === "kalshi" ? signal.kalshiFillId : signal.polymarketFillId),
     });
@@ -844,7 +844,7 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
     pairKey: candidate.pairKey,
     action: candidate.executable ? "executable" : candidate.reason ?? "read-only",
     expiryMs: safeNumber(candidate.expiryMs),
-    threshold: normalizeBinaryPrice(candidate.threshold) ?? 0.05,
+    threshold: normalizeBinaryPrice(candidate.threshold) ?? 0.01,
     legA: normalizeDetailLeg("A", candidate.lower, null, null),
     legB: normalizeDetailLeg("B", candidate.higher, null, null),
   });
@@ -865,7 +865,7 @@ function riskLevelForScore(score: number): TradeRiskIntelligence["riskLevel"] {
 }
 
 export function buildTradeRiskIntelligence(trade: TradeDetailModel, stalePenalty = 0): TradeRiskIntelligence {
-  const threshold = trade.threshold || 0.05;
+  const threshold = trade.threshold || 0.01;
   const guaranteedEdge = trade.guaranteedEdge ?? trade.worstCasePnl ?? 0;
   const edgeMultiple = guaranteedEdge / Math.max(0.01, threshold);
   const gapPct = trade.strikeGapPct ?? 0;

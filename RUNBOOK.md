@@ -20,7 +20,7 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 ## Core Live Settings
 
 - `ARB_ENABLED=true`: allow the scanner to submit qualifying live entries.
-- `ARB_MIN_PROFIT_DOLLARS=0.05`: required minimum executable edge.
+- `ARB_MIN_PROFIT_DOLLARS=0.01`: required minimum executable edge after the taker cushion.
 - `ARB_REENTRY_INTERVAL_MS=60000`: pair/configuration cooldown.
 - `ARB_EXECUTION_CONCURRENCY=1`: first production posture for live attempts.
 - `LIVE_ORDER_PLACEMENT_MODE=parallel_fok`: immediate paired venue submission path, or `parallel_limit_rest` when intentionally testing short-rest aggressive limits.

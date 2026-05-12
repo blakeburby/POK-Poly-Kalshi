@@ -14,7 +14,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     port: 8080,
     databaseUrl: "",
     arbEnabled: true,
-    minProfitDollars: 0.05,
+    minProfitDollars: 0.01,
     reentryIntervalMs: 15_000,
     staleBookMs: 10_000,
     marketDiscoveryIntervalMs: 30_000,
