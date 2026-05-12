@@ -43,6 +43,7 @@ interface PlatformAccountData {
 }
 
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
+const KALSHI_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
@@ -71,6 +72,13 @@ function firstNumber(record: JsonRecord | null | undefined, keys: string[]): num
     if (value != null) return value;
   }
   return null;
+}
+
+function firstMoney(record: JsonRecord | null | undefined, centsKeys: string[], dollarKeys: string[]): number | null {
+  const dollarValue = firstNumber(record, dollarKeys);
+  if (dollarValue != null) return rounded(dollarValue);
+  const centsValue = firstNumber(record, centsKeys);
+  return centsToDollars(centsValue);
 }
 
 function firstString(record: JsonRecord | null | undefined, keys: string[]): string | null {
@@ -136,7 +144,13 @@ async function fetchKalshiJson(config: AppConfig, fetchFn: FetchFn, path: string
   url.pathname = `${basePath}${path}`;
   if (search) url.search = search.toString();
   const signPath = `${url.pathname}${url.search}`;
-  return fetchJson(fetchFn, url, { method: "GET", headers: getKalshiHeaders("GET", signPath) });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), KALSHI_ACCOUNT_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetchJson(fetchFn, url, { method: "GET", headers: getKalshiHeaders("GET", signPath), signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function rowsFromPayload(payload: unknown, keys: string[]): JsonRecord[] {
@@ -152,30 +166,45 @@ function rowsFromPayload(payload: unknown, keys: string[]): JsonRecord[] {
 
 function normalizeKalshiBalance(payload: unknown, platform: TradingPlatform, now: number): TradingPortfolioSummary {
   const record = asRecord(payload);
-  const cashValue = centsFieldToDollars(record, ["balance", "available_balance", "cash_balance", "cash"]);
-  const portfolioValue = centsFieldToDollars(record, ["portfolio_value", "portfolioValue", "equity", "total_value"]) ?? cashValue;
+  const breakdownCash = rowsFromPayload(record?.balance_breakdown, [])
+    .reduce((total, row) => total + (firstNumber(row, ["balance"]) ?? 0), 0);
+  const cashValue = firstMoney(
+    record,
+    ["balance", "available_balance", "available_balance_cents", "cash_balance", "cash_balance_cents", "cash"],
+    ["balance_dollars", "available_balance_dollars", "cash_balance_dollars", "cash_dollars"],
+  ) ?? (breakdownCash > 0 ? rounded(breakdownCash) : null);
+  const portfolioValue = firstMoney(
+    record,
+    ["portfolio_value", "portfolioValue", "portfolio_value_cents", "equity", "total_value"],
+    ["portfolio_value_dollars", "portfolioValueDollars", "equity_dollars", "total_value_dollars"],
+  ) ?? cashValue;
   return {
     platform,
     portfolioValue,
     cashValue,
     dayChangeDollars: null,
     dayChangePercent: null,
-    lastUpdatedAt: now,
+    lastUpdatedAt: timestampMs(record?.updated_ts) ?? now,
   };
 }
 
 function normalizeKalshiPosition(row: JsonRecord, now: number): TradingPosition | null {
   const ticker = firstString(row, ["ticker", "market_ticker", "marketTicker", "event_ticker", "eventTicker"]);
   if (!ticker) return null;
-  const rawPosition = firstNumber(row, ["position", "net_position", "netPosition", "count"]);
-  const yesCount = firstNumber(row, ["yes_count", "yesCount"]);
-  const noCount = firstNumber(row, ["no_count", "noCount"]);
+  const rawPosition = firstNumber(row, ["position", "position_fp", "net_position", "netPosition", "count"]);
+  const yesCount = firstNumber(row, ["yes_count", "yesCount", "yes_count_fp"]);
+  const noCount = firstNumber(row, ["no_count", "noCount", "no_count_fp"]);
   const signedShares = rawPosition ?? (yesCount != null && noCount != null ? yesCount - noCount : yesCount ?? (noCount == null ? null : -noCount));
   if (signedShares == null || Math.abs(signedShares) < 0.000001) return null;
   const shares = Math.abs(signedShares);
   const outcome = firstString(row, ["outcome", "side", "contract_side"]) ?? (signedShares >= 0 ? "YES" : "NO");
-  const value = centsFieldToDollars(row, ["market_value", "marketValue", "value", "exposure", "market_exposure"]);
-  const averagePrice = priceFromUnknown(firstNumber(row, ["average_price", "avg_price", "avgPrice", "price"]));
+  const value = firstMoney(
+    row,
+    ["market_value", "marketValue", "value", "exposure", "market_exposure"],
+    ["market_exposure_dollars", "event_exposure_dollars", "value_dollars", "exposure_dollars"],
+  );
+  const averagePrice = priceFromUnknown(firstNumber(row, ["average_price", "avg_price", "avgPrice", "price"]))
+    ?? (value == null || shares <= 0 ? null : rounded(Math.abs(value) / shares));
   return {
     id: ticker,
     market: ticker,
@@ -183,7 +212,7 @@ function normalizeKalshiPosition(row: JsonRecord, now: number): TradingPosition 
     shares,
     value,
     averagePrice,
-    updatedAt: timestampMs(row.updated_at ?? row.update_time ?? row.ts) ?? now,
+    updatedAt: timestampMs(row.last_updated_ts ?? row.updated_at ?? row.update_time ?? row.ts) ?? now,
   };
 }
 
@@ -191,13 +220,13 @@ function normalizeKalshiOpenOrder(row: JsonRecord, now: number): TradingOpenOrde
   const id = firstString(row, ["order_id", "orderId", "client_order_id", "clientOrderId"]);
   const market = firstString(row, ["ticker", "market_ticker", "marketTicker"]);
   if (!id || !market) return null;
-  const count = firstNumber(row, ["remaining_count", "remainingCount", "count", "original_count"]);
+  const count = firstNumber(row, ["remaining_count", "remainingCount", "remaining_count_fp", "count", "original_count", "initial_count_fp"]);
   if (count == null || count <= 0) return null;
   const action = firstString(row, ["action", "side"]) ?? "buy";
   const rawSide = action.toLowerCase();
   const yesPrice = priceFromUnknown(row.yes_price_dollars ?? row.yes_price ?? row.price);
   const noPrice = priceFromUnknown(row.no_price_dollars ?? row.no_price);
-  const outcome = firstString(row, ["contract_side", "outcome"]) ?? (rawSide === "ask" ? "NO" : "YES");
+  const outcome = firstString(row, ["outcome_side", "contract_side", "outcome"]) ?? (rawSide === "ask" ? "NO" : "YES");
   const price = outcome.toLowerCase() === "no" ? (noPrice ?? (yesPrice == null ? null : rounded(1 - yesPrice))) : yesPrice;
   return {
     id,
@@ -208,7 +237,7 @@ function normalizeKalshiOpenOrder(row: JsonRecord, now: number): TradingOpenOrde
     price,
     value: price == null ? null : rounded(count * price),
     status: firstString(row, ["status"]) ?? "open",
-    updatedAt: timestampMs(row.updated_at ?? row.created_time ?? row.created_at) ?? now,
+    updatedAt: timestampMs(row.last_update_time ?? row.updated_at ?? row.created_time ?? row.created_at) ?? now,
   };
 }
 
@@ -216,11 +245,13 @@ function normalizeKalshiFill(row: JsonRecord, now: number): TradingHistoryRow | 
   const id = firstString(row, ["trade_id", "fill_id", "order_id", "id"]) ?? `${firstString(row, ["ticker"]) ?? "kalshi"}-${now}`;
   const marketName = firstString(row, ["ticker", "market_ticker", "marketTicker"]);
   if (!marketName) return null;
-  const shares = firstNumber(row, ["count", "fill_count", "fillCount"]);
+  const shares = firstNumber(row, ["count", "count_fp", "fill_count", "fillCount", "fill_count_fp"]);
   if (shares == null || shares <= 0) return null;
   const action = (firstString(row, ["action", "side"]) ?? "buy").toLowerCase();
-  const outcome = (firstString(row, ["contract_side", "outcome"]) ?? "OUTCOME").toUpperCase();
-  const price = priceFromUnknown(row.yes_price_dollars ?? row.no_price_dollars ?? row.price);
+  const outcome = (firstString(row, ["outcome_side", "contract_side", "outcome", "side"]) ?? "OUTCOME").toUpperCase();
+  const price = outcome.toLowerCase() === "no"
+    ? priceFromUnknown(row.no_price_dollars ?? row.no_price ?? row.price)
+    : priceFromUnknown(row.yes_price_dollars ?? row.yes_price ?? row.price);
   const value = price == null ? null : rounded(shares * price);
   const activity = action.includes("sell") || action === "ask" ? "Sell" : "Buy";
   return {

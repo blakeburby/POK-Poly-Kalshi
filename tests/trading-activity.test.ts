@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "../src/trading/activity";
 import { accountBackedPlatformActivity } from "../src/trading/account-sources";
 import { loadConfig } from "../src/config";
@@ -7,6 +8,27 @@ import type { LiveExecutionReadiness } from "../src/types";
 import type { TradingPlatformActivity } from "../types/trading";
 
 const now = 1_800_000_000_000;
+const { privateKey: kalshiTestPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const kalshiTestPrivateKeyPem = kalshiTestPrivateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+async function withKalshiEnv<T>(operation: () => Promise<T>): Promise<T> {
+  const previousKeyId = process.env.KALSHI_API_KEY_ID;
+  const previousPrivateKey = process.env.KALSHI_PRIVATE_KEY;
+  const previousPrivateKeyB64 = process.env.KALSHI_PRIVATE_KEY_B64;
+  process.env.KALSHI_API_KEY_ID = "test-key";
+  process.env.KALSHI_PRIVATE_KEY = kalshiTestPrivateKeyPem;
+  delete process.env.KALSHI_PRIVATE_KEY_B64;
+  try {
+    return await operation();
+  } finally {
+    if (previousKeyId == null) delete process.env.KALSHI_API_KEY_ID;
+    else process.env.KALSHI_API_KEY_ID = previousKeyId;
+    if (previousPrivateKey == null) delete process.env.KALSHI_PRIVATE_KEY;
+    else process.env.KALSHI_PRIVATE_KEY = previousPrivateKey;
+    if (previousPrivateKeyB64 == null) delete process.env.KALSHI_PRIVATE_KEY_B64;
+    else process.env.KALSHI_PRIVATE_KEY_B64 = previousPrivateKeyB64;
+  }
+}
 
 function readiness(): LiveExecutionReadiness {
   return {
@@ -128,6 +150,95 @@ test("venue stream events normalize into safe trading activity events", () => {
   assert.equal(event.row?.value, -1.95);
   assert.equal(event.row?.venueOrderId, "order");
   assert.equal(JSON.stringify(event).includes("private"), false);
+});
+
+test("kalshi trading activity normalizes fixed-point account portfolio fields", async () => {
+  await withKalshiEnv(async () => {
+    const config = loadConfig({ KALSHI_API_BASE: "https://api.elections.kalshi.com/trade-api/v2" });
+    const fallback: TradingPlatformActivity = {
+      platform: "kalshi",
+      connectionStatus: "live",
+      lastUpdatedAt: now,
+      portfolio: { platform: "kalshi", portfolioValue: null, cashValue: null, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: now },
+      positions: [],
+      openOrders: [],
+      history: [],
+      sparkline: [{ timestamp: now - 1_000, value: 0 }, { timestamp: now, value: 0 }],
+    };
+    const fetchFn: typeof fetch = (async (input, init) => {
+      assert.ok(init?.signal, "Kalshi account requests should be abortable");
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/portfolio/balance")) {
+        return new Response(JSON.stringify({
+          balance: 1234,
+          portfolio_value: 5678,
+          updated_ts: now / 1_000,
+        }));
+      }
+      if (url.pathname.endsWith("/portfolio/positions")) {
+        return new Response(JSON.stringify({
+          market_positions: [{
+            ticker: "KXBTC15M-26MAY120015-15",
+            position_fp: "20.00",
+            market_exposure_dollars: "10.1000",
+            last_updated_ts: new Date(now - 1_000).toISOString(),
+          }],
+        }));
+      }
+      if (url.pathname.endsWith("/portfolio/orders")) {
+        return new Response(JSON.stringify({
+          orders: [{
+            order_id: "kalshi-open",
+            ticker: "KXBTC15M-26MAY120015-15",
+            action: "buy",
+            outcome_side: "no",
+            status: "resting",
+            remaining_count_fp: "3.00",
+            yes_price_dollars: "0.5800",
+            no_price_dollars: "0.4200",
+            last_update_time: new Date(now - 500).toISOString(),
+          }],
+        }));
+      }
+      if (url.pathname.endsWith("/portfolio/fills")) {
+        return new Response(JSON.stringify({
+          fills: [{
+            fill_id: "kalshi-fill",
+            order_id: "kalshi-order",
+            ticker: "KXBTC15M-26MAY120015-15",
+            action: "buy",
+            outcome_side: "no",
+            count_fp: "5.00",
+            yes_price_dollars: "0.4800",
+            no_price_dollars: "0.5200",
+            created_time: new Date(now - 2_000).toISOString(),
+          }],
+        }));
+      }
+      throw new Error(`unexpected URL ${url.toString()}`);
+    }) as typeof fetch;
+
+    const result = await accountBackedPlatformActivity("kalshi", fallback, {
+      config,
+      now,
+      fetchFn,
+      history: [],
+    });
+
+    assert.equal(result.connectionStatus, "live");
+    assert.equal(result.portfolio.cashValue, 12.34);
+    assert.equal(result.portfolio.portfolioValue, 56.78);
+    assert.equal(result.positions[0].market, "KXBTC15M-26MAY120015-15");
+    assert.equal(result.positions[0].shares, 20);
+    assert.equal(result.positions[0].value, 10.1);
+    assert.equal(result.positions[0].averagePrice, 0.505);
+    assert.equal(result.openOrders[0].outcome, "NO");
+    assert.equal(result.openOrders[0].shares, 3);
+    assert.equal(result.openOrders[0].price, 0.42);
+    assert.equal(result.history[0].outcome, "NO");
+    assert.equal(result.history[0].shares, 5);
+    assert.equal(result.history[0].value, -2.6);
+  });
 });
 
 test("polymarket trading activity uses account positions instead of inferred event positions", async () => {
