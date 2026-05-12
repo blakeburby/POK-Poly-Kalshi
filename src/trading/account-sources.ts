@@ -251,6 +251,10 @@ async function kalshiAccountActivity(options: AccountSourceOptions): Promise<Pla
     .map((row) => normalizeKalshiPosition(row, now))
     .filter((row): row is TradingPosition => row != null)
     .sort((left, right) => (right.value ?? 0) - (left.value ?? 0));
+  const positionValue = positions.reduce((total, position) => total + (position.value ?? 0), 0);
+  if ((portfolio.portfolioValue == null || portfolio.portfolioValue <= 0) && portfolio.cashValue != null) {
+    portfolio.portfolioValue = rounded(portfolio.cashValue + positionValue);
+  }
   const openOrders = rowsFromPayload(ordersPayload, ["orders"])
     .map((row) => normalizeKalshiOpenOrder(row, now))
     .filter((row): row is TradingOpenOrder => row != null);
