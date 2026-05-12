@@ -3028,7 +3028,7 @@ function SignalTape({
           const strategy = signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--";
           const firstVenue = signal.executionTimings?.firstVenue
             ? signal.executionTimings.firstVenue.toUpperCase()
-            : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest"
+            : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_fak" || signal.executionStrategy === "parallel_limit_rest"
               ? "BOTH"
               : "--";
           const riskStateLabel = isResolvedPartialSignal(signal)
@@ -3307,7 +3307,7 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <span>Edge {formatSignedCents(signal.projectedEdgeAfterFees ?? signal.guaranteedProfit)}</span>
             <span>Skew {signal.quoteSnapshot?.quoteSkewMs == null ? "--" : `${Math.round(signal.quoteSnapshot.quoteSkewMs)}ms`}</span>
             <span>Strategy {signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</span>
-            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</span>
+            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_fak" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</span>
             <span>Recovery {signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</span>
             <span>RTT K {signal.executionTimings?.kalshiRttMs == null ? "--" : `${Math.round(signal.executionTimings.kalshiRttMs)}ms`}</span>
             <span>Partial {signal.partialFill ? "YES" : "NO"}</span>

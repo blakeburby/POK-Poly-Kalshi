@@ -422,10 +422,16 @@ export class LiveExecutor implements ArbExecutor {
     const hotGateCompletedAt = this.now();
 
     if (this.config.liveParallelExecutionEnabled) {
-      const executionStrategy = placementMode === "parallel_limit_rest" ? "parallel_limit_rest" : "parallel_fok";
+      const executionStrategy = placementMode === "parallel_limit_rest"
+        ? "parallel_limit_rest"
+        : placementMode === "parallel_fak"
+          ? "parallel_fak"
+          : "parallel_fok";
       const firstVenueReason = placementMode === "parallel_limit_rest"
         ? `parallel aggressive limit orders submitted concurrently with ${limitRestMs ?? 0}ms rest`
-        : "parallel FOK orders submitted concurrently";
+        : placementMode === "parallel_fak"
+          ? "parallel Kalshi FOK and Polymarket FAK orders submitted concurrently"
+          : "parallel FOK orders submitted concurrently";
       const [kalshi, polymarket] = await Promise.all([
         this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, kalshiContext),
         this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext),

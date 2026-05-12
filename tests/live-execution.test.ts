@@ -519,6 +519,75 @@ test("Polymarket order client builds a market FOK buy for the selected token", a
   assert.equal(readiness.allowance, 10);
 });
 
+test("Polymarket order client uses FAK market order in parallel_fak mode", async () => {
+  class FakeClob implements PolymarketClobLike {
+    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    postedType: OrderType | undefined;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+      this.createdMarketOrder = order;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(_order: SignedOrder, orderType?: OrderType): Promise<unknown> {
+      this.postedType = orderType;
+      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5.128204", makingAmount: "4.00" };
+    }
+
+    async cancelOrder(): Promise<unknown> {
+      throw new Error("matched FAK should not cancel");
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new FakeClob();
+  const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
+  const result = await client.placeOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.78,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.8,
+    placementMode: "parallel_fak",
+  });
+
+  assert.equal(fake.createdMarketOrder?.tokenID, "yes-token");
+  assert.equal(fake.createdMarketOrder?.price, 0.8);
+  assert.equal(fake.createdMarketOrder?.amount, 4);
+  assert.equal(fake.createdMarketOrder?.side, Side.BUY);
+  assert.equal(fake.createdMarketOrder?.orderType, OrderType.FAK);
+  assert.equal(fake.postedType, OrderType.FAK);
+  assert.equal(result.status, "unexpected_fill_count");
+  assert.equal(result.fillPrice, 0.78);
+  assert.equal(result.fillCount, 5.128204);
+  assert.match(result.error ?? "", /requested exact size 5/);
+  assert.equal(result.metadata?.orderPlacementMode, "parallel_fak");
+  assert.equal(result.metadata?.polymarketOrderType, OrderType.FAK);
+  assert.equal(result.metadata?.polymarketMarketOrderStatus, "matched");
+  assert.equal(result.metadata?.polymarketRequestedSpend, 4);
+  assert.equal(result.metadata?.polymarketWorstPrice, 0.8);
+  assert.equal(result.metadata?.polymarketTakingAmount, 5.128204);
+  assert.equal(result.metadata?.polymarketMakingAmount, 4);
+});
+
 test("Polymarket order client builds aggressive GTC limit and cancels unfilled remainder", async () => {
   class FakeClob implements PolymarketClobLike {
     createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
@@ -1534,6 +1603,7 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
 test("live executor defaults to parallel aggressive limit and starts both venue orders concurrently after preflight", async () => {
   assert.equal(loadConfig({}).liveParallelExecutionEnabled, true);
   assert.equal(loadConfig({}).liveOrderPlacementMode, "parallel_limit_rest");
+  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_fak" }).liveOrderPlacementMode, "parallel_fak");
   assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   const now = 1_799_999_900_000;
@@ -1599,6 +1669,58 @@ test("live executor keeps parallel FOK available when configured", async () => {
   assert.equal(result.executionStrategy, "parallel_fok");
   assert.equal(result.action, "filled");
   assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_fok");
+});
+
+test("live executor uses parallel_fak and audits fractional Polymarket fills without auto-hardlock when disabled", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.16 });
+  const polymarket = new FakeVenueClient("polymarket", {
+    status: "unexpected_fill_count",
+    fillCount: 5.128204,
+    fillPrice: 0.78,
+    metadata: {
+      orderPlacementMode: "parallel_fak",
+      polymarketOrderType: OrderType.FAK,
+      polymarketRequestedSpend: 4,
+      polymarketWorstPrice: 0.8,
+      polymarketTakingAmount: 5.128204,
+      polymarketMakingAmount: 4,
+    },
+  });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveOrderPlacementMode: "parallel_fak",
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_fak");
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /venue fill mismatch/);
+  assert.equal(result.polymarketFillCount, 5.128204);
+  assert.equal(result.polymarketFillPrice, 0.78);
+  assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_fak");
+  assert.equal(polymarket.placed[0]?.context.placementMode, "parallel_fak");
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /Polymarket FAK/);
+  assert.equal(locks.engageCalls, 0);
+  const readiness = await executor.readiness(now);
+  assert.equal(readiness.riskState, "auto_hardlocks_disabled");
+  assert.equal(readiness.partialFillLocked, false);
 });
 
 test("live executor skips without submitting when preflight exceeds quote freshness window", async () => {

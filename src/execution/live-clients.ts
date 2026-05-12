@@ -643,6 +643,12 @@ function polymarketOrderType(value: string): OrderType.FOK | OrderType.FAK {
   return value === "FAK" ? OrderType.FAK : OrderType.FOK;
 }
 
+function polymarketImmediateOrderType(configuredValue: string, context: LiveOrderContext): OrderType.FOK | OrderType.FAK {
+  if (context.placementMode === "parallel_fak") return OrderType.FAK;
+  if (context.placementMode === "parallel_fok") return OrderType.FOK;
+  return polymarketOrderType(configuredValue);
+}
+
 function metadataFromClientOrderId(clientOrderId: string): `0x${string}` {
   return `0x${createHash("sha256").update(clientOrderId).digest("hex")}` as `0x${string}`;
 }
@@ -961,7 +967,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
       return this.placeLimitRestOrder(leg, context, client, book, requestedAt);
     }
 
-    const orderType = polymarketOrderType(this.config.polymarketOrderType);
+    const orderType = polymarketImmediateOrderType(this.config.polymarketOrderType, context);
     const requestedSpend = polymarketMarketBuySpend(context);
     const worstPrice = roundPrice(context.maxBuyPrice);
     const preflight = context.preflight;
@@ -973,7 +979,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
       ? preflight.polymarketSignedOrder
       : null;
     if (!preflightSignedOrder && !client.createMarketOrder) {
-      throw new Error("Polymarket market FOK order creation is not supported by the configured CLOB client");
+      throw new Error(`Polymarket market ${orderType} order creation is not supported by the configured CLOB client`);
     }
     const signStartedAt = Date.now();
     const signedOrder = preflightSignedOrder ?? await client.createMarketOrder!({
@@ -1042,7 +1048,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       exchangeTimestampMs: null,
       signMs,
       metadata: {
+        orderPlacementMode: context.placementMode ?? "parallel_fok",
         polymarketOrderType: orderType,
+        polymarketMarketOrderStatus: status || (success ? "unknown" : "rejected"),
         polymarketFokStatus: status || (success ? "unknown" : "rejected"),
         polymarketRequestedSpend: requestedSpend,
         polymarketWorstPrice: worstPrice,
@@ -1288,8 +1296,8 @@ export class PolymarketOrderClient implements VenueOrderClient {
       try {
         const signStartedAt = Date.now();
         const { client } = await this.client();
-        if (!client.createMarketOrder) return "Polymarket market FOK order creation is not supported by the configured CLOB client";
-        const orderType = polymarketOrderType(this.config.polymarketOrderType);
+        const orderType = polymarketImmediateOrderType(this.config.polymarketOrderType, context);
+        if (!client.createMarketOrder) return `Polymarket market ${orderType} order creation is not supported by the configured CLOB client`;
         const signedOrder = await client.createMarketOrder({
           tokenID: leg.tokenId,
           price: roundPrice(context.maxBuyPrice),

@@ -3,7 +3,7 @@ import type { TradingActivitySnapshot } from "../types/trading";
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
-export type LiveOrderPlacementMode = "parallel_fok" | "parallel_limit_rest";
+export type LiveOrderPlacementMode = "parallel_fok" | "parallel_fak" | "parallel_limit_rest";
 export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
   | "none"
@@ -175,7 +175,7 @@ export interface ReconciliationResolution {
   notes?: string | null;
 }
 
-export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_limit_rest";
+export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest";
 
 export interface UserStreamVenueState {
   enabled: boolean;

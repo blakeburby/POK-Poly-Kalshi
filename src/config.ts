@@ -102,8 +102,8 @@ function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]):
 
 function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMode {
   const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "parallel_limit_rest").toLowerCase();
-  if (value === "parallel_fok" || value === "parallel_limit_rest") return value;
-  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok or parallel_limit_rest");
+  if (value === "parallel_fok" || value === "parallel_fak" || value === "parallel_limit_rest") return value;
+  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok, parallel_fak, or parallel_limit_rest");
 }
 
 function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLockMode {

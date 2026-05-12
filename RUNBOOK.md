@@ -23,8 +23,8 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `ARB_MIN_PROFIT_DOLLARS=0.01`: required minimum executable edge after the taker cushion.
 - `ARB_REENTRY_INTERVAL_MS=60000`: pair/configuration cooldown.
 - `ARB_EXECUTION_CONCURRENCY=1`: first production posture for live attempts.
-- `LIVE_ORDER_PLACEMENT_MODE=parallel_fok`: immediate paired venue submission path, or `parallel_limit_rest` when intentionally testing short-rest aggressive limits.
-- `POLYMARKET_ORDER_TYPE=FOK`: Polymarket immediate order type used by `parallel_fok`.
+- `LIVE_ORDER_PLACEMENT_MODE=parallel_fak`: immediate paired venue submission path with Kalshi FOK and Polymarket FAK; use `parallel_fok` only for strict immediate-or-nothing Polymarket fills.
+- `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by `parallel_fak`.
 - `LIVE_ORDER_SIZE=5`: venue share size.
 - `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: per-leg taker cushion included in the edge gate before entry.
 - `LIVE_MIN_EXPIRY_MS=60000`: skip entries inside the final minute.

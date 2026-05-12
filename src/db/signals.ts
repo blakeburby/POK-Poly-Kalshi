@@ -253,6 +253,8 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
     executionStrategy: row.execution_strategy === "parallel_limit_rest"
       ? "parallel_limit_rest"
+      : row.execution_strategy === "parallel_fak"
+      ? "parallel_fak"
       : row.execution_strategy === "parallel_fok"
       ? "parallel_fok"
       : row.execution_strategy === "parallel_canary"
