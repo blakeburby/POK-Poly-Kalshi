@@ -381,6 +381,22 @@ test("live-only dashboard renders one live command surface", () => {
   }
 });
 
+test("dashboard sections are collapsible and trading rows are mobile-labeled", () => {
+  const markup = render();
+
+  for (const id of ["system-snapshot", "performance", "trading-activity", "analytics", "signals", "events"]) {
+    assert.match(markup, new RegExp(`<details[^>]+id="${id}"[^>]+open=""`));
+  }
+
+  assert.match(markup, /dashboard-collapsible-summary/);
+  assert.match(markup, /collapse-open/);
+  assert.match(markup, /collapse-closed/);
+  assert.match(markup, /data-label="Activity"/);
+  assert.match(markup, /data-label="Market"/);
+  assert.match(markup, /data-label="Value"/);
+  assert.match(markup, /data-label="Time"/);
+});
+
 test("performance analytics count only exact paired live fills", () => {
   const exactSignal = signal({ id: 1, executionGroupId: "real-group-1", kalshiFillId: "real-kalshi-1", polymarketFillId: "real-poly-1", kalshiFillCount: 5, polymarketFillCount: 5 });
   const markup = render({

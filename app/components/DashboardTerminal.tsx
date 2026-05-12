@@ -1518,6 +1518,7 @@ function GlobalStateBar({
 
 function MobileSectionNav() {
   const sections = [
+    ["System", "system-snapshot"],
     ["Performance", "performance"],
     ["Activity", "trading-activity"],
     ["Analytics", "analytics"],
@@ -1531,6 +1532,39 @@ function MobileSectionNav() {
         <a href={`#${id}`} key={id}>{label}</a>
       ))}
     </nav>
+  );
+}
+
+function CollapsibleDashboardSection({
+  children,
+  defaultOpen = true,
+  id,
+  kicker,
+  summary,
+  title,
+}: {
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  id: string;
+  kicker: string;
+  summary?: string;
+  title: string;
+}) {
+  return (
+    <details className="dashboard-collapsible" id={id} open={defaultOpen}>
+      <summary className="dashboard-collapsible-summary">
+        <span>
+          <span className="panel-kicker">{kicker}</span>
+          <strong>{title}</strong>
+          {summary ? <small>{summary}</small> : null}
+        </span>
+        <span className="collapse-indicator" aria-hidden="true">
+          <span className="collapse-open">Hide</span>
+          <span className="collapse-closed">Show</span>
+        </span>
+      </summary>
+      <div className="dashboard-collapsible-body">{children}</div>
+    </details>
   );
 }
 
@@ -1612,7 +1646,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
 
   if (!analytics || !current) {
     return (
-      <section className="panel analytics-panel" id="analytics">
+      <section className="panel analytics-panel">
         <div className="panel-header">
           <div>
             <p className="panel-kicker">performance analytics</p>
@@ -1633,7 +1667,7 @@ function AnalyticsPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
   const realtimeMode = realtime?.mode === "fallback_db" ? "Fallback DB" : "Hot-cache";
   const realtimeState = realtime?.stale ? "STALE" : "REALTIME";
   return (
-    <section className="panel analytics-panel" id="analytics">
+    <section className="panel analytics-panel">
       <div className="panel-header analytics-header">
         <div>
           <p className="panel-kicker">performance analytics</p>
@@ -2910,9 +2944,9 @@ function SignalTape({
   );
 }
 
-function EventTape({ logs }: { logs: DashboardLogEntry[] }) {
+function EventTape({ logs, sectionId = "events-panel" }: { logs: DashboardLogEntry[]; sectionId?: string }) {
   return (
-    <section className="panel tape-panel" id="events">
+    <section className="panel tape-panel" id={sectionId}>
       <div className="panel-header">
         <div>
           <p className="panel-kicker">runtime</p>
@@ -3246,7 +3280,7 @@ function TradingActivitySection({ snapshot }: { snapshot: DashboardSnapshot }) {
   const kalshi = snapshot.tradingActivity?.kalshi ?? emptyTradingActivityForPanel("kalshi", snapshot.generatedAt);
   const polymarket = snapshot.tradingActivity?.polymarket ?? emptyTradingActivityForPanel("polymarket", snapshot.generatedAt);
   return (
-    <section className="trading-activity-section" id="trading-activity" aria-label="Trading Activity">
+    <section className="trading-activity-section" aria-label="Trading Activity">
       <div className="panel combined-dashboard-heading trading-activity-heading">
         <p className="panel-kicker">venues</p>
         <h2>Trading Activity</h2>
@@ -3383,15 +3417,15 @@ function TradingHistoryTable({ activity, now }: { activity: TradingPlatformActiv
         <tbody>
           {activity.history.slice(0, 8).map((row) => (
             <tr key={row.id}>
-              <td><strong className={row.activity === "Buy" ? "loss" : "profit"}>{row.activity}</strong></td>
-              <td>
+              <td data-label="Activity"><strong className={row.activity === "Buy" ? "loss" : "profit"}>{row.activity}</strong></td>
+              <td data-label="Market">
                 <div className="activity-market-cell">
                   <strong>{row.marketName}</strong>
                   <span>{row.outcome} · {formatShares(row.shares)} shares</span>
                 </div>
               </td>
-              <td><strong className={(row.value ?? 0) >= 0 ? "profit" : "loss"}>{formatActivitySignedCurrency(row.value)}</strong></td>
-              <td>{formatActivityRelativeTime(row.timeMs, now)}</td>
+              <td data-label="Value"><strong className={(row.value ?? 0) >= 0 ? "profit" : "loss"}>{formatActivitySignedCurrency(row.value)}</strong></td>
+              <td data-label="Time">{formatActivityRelativeTime(row.timeMs, now)}</td>
             </tr>
           ))}
           {activity.history.length === 0 ? <tr><td colSpan={4} className="empty-cell">No fills</td></tr> : null}
@@ -3416,10 +3450,10 @@ function TradingPositionsTable({ positions }: { positions: TradingPosition[] }) 
         <tbody>
           {positions.slice(0, 8).map((position) => (
             <tr key={position.id}>
-              <td>{position.market}</td>
-              <td>{position.outcome}</td>
-              <td>{formatShares(position.shares)}</td>
-              <td>{formatActivityCurrency(position.value)}</td>
+              <td data-label="Market">{position.market}</td>
+              <td data-label="Outcome">{position.outcome}</td>
+              <td data-label="Shares">{formatShares(position.shares)}</td>
+              <td data-label="Value">{formatActivityCurrency(position.value)}</td>
             </tr>
           ))}
           {positions.length === 0 ? <tr><td colSpan={4} className="empty-cell">No positions</td></tr> : null}
@@ -3444,15 +3478,15 @@ function TradingOpenOrdersTable({ openOrders }: { openOrders: TradingOpenOrder[]
         <tbody>
           {openOrders.slice(0, 8).map((order) => (
             <tr key={order.id}>
-              <td>{order.side}</td>
-              <td>
+              <td data-label="Side">{order.side}</td>
+              <td data-label="Market">
                 <div className="activity-market-cell">
                   <strong>{order.market}</strong>
                   <span>{order.outcome} · {formatShares(order.shares)} shares</span>
                 </div>
               </td>
-              <td>{formatActivityCurrency(order.price)}</td>
-              <td>{order.status.toUpperCase()}</td>
+              <td data-label="Price">{formatActivityCurrency(order.price)}</td>
+              <td data-label="Status">{order.status.toUpperCase()}</td>
             </tr>
           ))}
           {openOrders.length === 0 ? <tr><td colSpan={4} className="empty-cell">No orders</td></tr> : null}
@@ -3473,7 +3507,7 @@ function PerformanceDashboardSections({ snapshot }: { snapshot: DashboardSnapsho
   const avgLatency = averageSignalLatency(filled);
   const estimatedGuaranteed = filled.reduce((total, signal) => total + fillAuditPnl(signal), 0);
   return (
-    <section className="live-dashboard-stack performance-dashboard-stack" id="performance" aria-label="Live dashboard analytics">
+    <section className="live-dashboard-stack performance-dashboard-stack" aria-label="Live dashboard analytics">
       <LiveOperationalPanel snapshot={snapshot} />
       <LiveSafetyBadgeRow snapshot={snapshot} />
       <section className="performance-summary-grid">
@@ -3514,8 +3548,12 @@ function LiveDashboardSections({ snapshot }: { snapshot: DashboardSnapshot }) {
         <p className="panel-kicker">live</p>
         <h2>Live Trading Dashboard</h2>
       </section>
-      <PerformanceDashboardSections snapshot={snapshot} />
-      <TradingActivitySection snapshot={snapshot} />
+      <CollapsibleDashboardSection id="performance" kicker="fills" summary="Real fills, audit PnL, locks, and execution readiness." title="Performance">
+        <PerformanceDashboardSections snapshot={snapshot} />
+      </CollapsibleDashboardSection>
+      <CollapsibleDashboardSection id="trading-activity" kicker="venues" summary="Kalshi and Polymarket account activity." title="Trading Activity">
+        <TradingActivitySection snapshot={snapshot} />
+      </CollapsibleDashboardSection>
     </section>
   );
 }
@@ -3569,19 +3607,23 @@ export function DashboardTerminalView({
       />
       <MobileSectionNav />
 
-      <section className="metric-grid institutional-metrics">
-        <div className="metric"><span>Guaranteed Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
-        <div className="metric"><span>Re-entry Cadence</span><strong>{Math.round(snapshot.health.reentryIntervalMs / 1000)}s</strong></div>
-        <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? formatCompactTime(Math.max(0, snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt)) : "--"}</strong></div>
-        <div className="metric"><span>Dashboard</span><strong>LIVE ONLY</strong></div>
-        <div className="metric"><span>Selected Mode</span><strong>{viewMode.toUpperCase()}</strong></div>
-        <div className="metric"><span>Venue Readiness</span><strong>{snapshot.execution ? `${snapshot.execution.kalshi.ready ? "K" : "K!"}/${snapshot.execution.polymarket.ready ? "P" : "P!"}` : "--"}</strong></div>
-        <div className="metric"><span>Partial Fill Lock</span><strong>{snapshot.execution?.partialFillLocked ? "LOCKED" : "CLEAR"}</strong></div>
-      </section>
+      <CollapsibleDashboardSection id="system-snapshot" kicker="system" summary="Live flags, freshness, and venue state." title="System Snapshot">
+        <section className="metric-grid institutional-metrics">
+          <div className="metric"><span>Guaranteed Gate</span><strong>{formatCents(snapshot.health.minProfitDollars)}</strong></div>
+          <div className="metric"><span>Re-entry Cadence</span><strong>{Math.round(snapshot.health.reentryIntervalMs / 1000)}s</strong></div>
+          <div className="metric"><span>Discovery Age</span><strong>{snapshot.discovery.lastDiscoveryAt ? formatCompactTime(Math.max(0, snapshot.generatedAt - snapshot.discovery.lastDiscoveryAt)) : "--"}</strong></div>
+          <div className="metric"><span>Dashboard</span><strong>LIVE ONLY</strong></div>
+          <div className="metric"><span>Selected Mode</span><strong>{viewMode.toUpperCase()}</strong></div>
+          <div className="metric"><span>Venue Readiness</span><strong>{snapshot.execution ? `${snapshot.execution.kalshi.ready ? "K" : "K!"}/${snapshot.execution.polymarket.ready ? "P" : "P!"}` : "--"}</strong></div>
+          <div className="metric"><span>Partial Fill Lock</span><strong>{snapshot.execution?.partialFillLocked ? "LOCKED" : "CLEAR"}</strong></div>
+        </section>
+      </CollapsibleDashboardSection>
 
       <LiveDashboardSections snapshot={snapshot} />
 
-      <AnalyticsPanel snapshot={snapshot} />
+      <CollapsibleDashboardSection id="analytics" kicker="analytics" summary="Historical fill-audit PnL windows." title="Analytics">
+        <AnalyticsPanel snapshot={snapshot} />
+      </CollapsibleDashboardSection>
 
       <AnimatePresence mode="wait">
         {selectedTrade ? <TradeDetailDrawer key={selectedTrade.key} now={snapshot.generatedAt} onClose={() => setSelectedTrade(null)} trade={selectedTrade} /> : null}
@@ -3590,8 +3632,12 @@ export function DashboardTerminalView({
       {snapshot.discovery.lastDiscoveryError ? <div className="error-banner">Discovery error: {snapshot.discovery.lastDiscoveryError}</div> : null}
 
       <section className="activity-grid" aria-label="Signal and runtime activity">
-        <SignalTape onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={visibleSignals} now={snapshot.generatedAt} />
-        <EventTape logs={snapshot.logs} />
+        <CollapsibleDashboardSection id="signals" kicker="audit" summary="Every live signal remains available." title="Signals">
+          <SignalTape onSelectTrade={setSelectedTrade} selectedTradeKey={selectedTradeKey} signals={visibleSignals} now={snapshot.generatedAt} sectionId="signals-panel" />
+        </CollapsibleDashboardSection>
+        <CollapsibleDashboardSection id="events" kicker="runtime" summary="Worker log stream." title="Events">
+          <EventTape logs={snapshot.logs} />
+        </CollapsibleDashboardSection>
       </section>
     </main>
   );

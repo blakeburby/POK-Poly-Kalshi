@@ -2606,6 +2606,91 @@ tbody tr:hover {
   display: none;
 }
 
+.dashboard-collapsible {
+  display: grid;
+  gap: 12px;
+  scroll-margin-top: 82px;
+}
+
+.dashboard-collapsible-summary {
+  align-items: center;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  background:
+    linear-gradient(120deg, rgba(76, 201, 240, 0.08), transparent 58%),
+    rgba(3, 7, 12, 0.58);
+  cursor: pointer;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  list-style: none;
+  min-height: 72px;
+  padding: 14px var(--panel-pad);
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.dashboard-collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-collapsible-summary:hover,
+.dashboard-collapsible-summary:focus-visible {
+  border-color: rgba(76, 201, 240, 0.48);
+}
+
+.dashboard-collapsible-summary:focus-visible {
+  outline: 2px solid rgba(76, 201, 240, 0.54);
+  outline-offset: 3px;
+}
+
+.dashboard-collapsible-summary > span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dashboard-collapsible-summary strong {
+  color: var(--text);
+  font-size: clamp(20px, 2.2vw, 34px);
+  letter-spacing: -0.052em;
+  line-height: 1;
+}
+
+.dashboard-collapsible-summary small {
+  color: #91a0b5;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.collapse-indicator {
+  border: 1px solid rgba(138, 160, 184, 0.22);
+  border-radius: 999px;
+  color: #c6d4e3;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+  text-transform: uppercase;
+}
+
+.collapse-closed,
+.dashboard-collapsible:not([open]) .collapse-open {
+  display: none;
+}
+
+.dashboard-collapsible:not([open]) .collapse-closed {
+  display: inline;
+}
+
+.dashboard-collapsible-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
 .institutional-topbar {
   border: 1px solid rgba(134, 158, 184, 0.22);
   background:
@@ -3501,6 +3586,21 @@ tbody tr:hover {
     text-decoration: none;
     text-transform: uppercase;
     backdrop-filter: blur(16px);
+  }
+
+  .dashboard-collapsible {
+    gap: 10px;
+    scroll-margin-top: 62px;
+  }
+
+  .dashboard-collapsible-summary {
+    border-radius: 20px;
+    min-height: 62px;
+    padding: 12px 14px;
+  }
+
+  .dashboard-collapsible-summary small {
+    display: none;
   }
 
   .institutional-topbar,
@@ -4580,6 +4680,10 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 
+  .trading-panel-values {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .live-operational-hero {
     display: grid;
   }
@@ -4591,6 +4695,88 @@ tbody tr:hover {
   .opportunity-ticker-row,
   .audit-tape-row {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-collapsible-summary {
+    align-items: stretch;
+  }
+
+  .collapse-indicator {
+    align-self: center;
+    padding: 7px 10px;
+  }
+
+  .trading-table-wrap {
+    overflow: visible;
+    padding: 0 12px 12px;
+  }
+
+  .trading-activity-table,
+  .trading-activity-table tbody,
+  .trading-activity-table tr,
+  .trading-activity-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .trading-activity-table thead {
+    display: none;
+  }
+
+  .trading-activity-table tr {
+    border: 1px solid rgba(138, 160, 184, 0.14);
+    border-radius: 14px;
+    background: rgba(3, 7, 12, 0.38);
+    margin-bottom: 10px;
+    padding: 8px 10px;
+  }
+
+  .trading-activity-table td {
+    align-items: start;
+    border: 0;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 82px minmax(0, 1fr);
+    min-width: 0;
+    padding: 7px 0;
+    text-align: right;
+  }
+
+  .trading-activity-table td::before {
+    color: #8fa0b2;
+    content: attr(data-label);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .trading-activity-table .empty-cell {
+    display: block;
+    padding: 12px 0;
+    text-align: left;
+  }
+
+  .trading-activity-table .empty-cell::before {
+    content: none;
+  }
+
+  .activity-market-cell {
+    justify-items: end;
+  }
+
+  .trading-tabs {
+    overflow-x: auto;
+    padding: 0 12px 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .trading-tabs button {
+    flex: 0 0 auto;
+    min-height: 40px;
   }
 }
 
@@ -4612,6 +4798,23 @@ tbody tr:hover {
 
   .topbar-brand h1 {
     font-size: clamp(28px, 12vw, 40px);
+  }
+
+  .dashboard-collapsible-summary {
+    gap: 10px;
+  }
+
+  .dashboard-collapsible-summary strong {
+    font-size: 20px;
+  }
+
+  .trading-panel-values {
+    grid-template-columns: 1fr;
+  }
+
+  .trading-panel-header,
+  .trading-summary-row {
+    padding: 12px;
   }
 
   .status-rail {
