@@ -22,6 +22,7 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `ARB_ENABLED=true`: allow the scanner to submit qualifying live entries.
 - `ARB_MIN_PROFIT_DOLLARS=0.01`: required minimum executable edge after the taker cushion.
 - `ARB_REENTRY_INTERVAL_MS=60000`: pair/configuration cooldown.
+- `ARB_SCAN_HEARTBEAT_MS=250`: fallback scan heartbeat; websocket book updates still trigger scans immediately.
 - `ARB_EXECUTION_CONCURRENCY=1`: first production posture for live attempts.
 - `LIVE_ORDER_PLACEMENT_MODE=parallel_fak`: immediate paired venue submission path with Kalshi FOK and Polymarket FAK; use `parallel_fok` only for strict immediate-or-nothing Polymarket fills.
 - `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by `parallel_fak`.

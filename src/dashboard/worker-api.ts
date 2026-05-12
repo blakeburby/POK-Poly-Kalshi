@@ -128,6 +128,7 @@ async function cachedTradingActivity(
 export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
   const snapshotStartedAt = Date.now();
   const books = runtime.books.snapshot();
+  const scannerStatus = runtime.getScannerStatus();
   const [recentSignals, analytics] = await Promise.all([
     cachedRecentSignals(runtime, now, cache),
     cachedAnalytics(runtime, now, cache),
@@ -160,6 +161,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       arbEnabled: runtime.config.arbEnabled,
       minProfitDollars: runtime.config.minProfitDollars,
       reentryIntervalMs: runtime.config.reentryIntervalMs,
+      scanHeartbeatMs: runtime.config.arbScanHeartbeatMs,
       staleBookMs: runtime.config.staleBookMs,
       liveMaxTradesPerWindow: runtime.config.liveMaxTradesPerWindow,
       liveTakerPriceCushionCents: runtime.config.liveTakerPriceCushionCents,
@@ -193,7 +195,10 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     },
     latency: runtime.getLatencySnapshot?.(now, snapshotBuildMs),
     discovery: runtime.getDiscoveryState(),
-    scanner: runtime.getScannerStatus(),
+    scanner: {
+      ...scannerStatus,
+      lastScanAgeMs: scannerStatus.lastScanAt > 0 ? Math.max(0, now - scannerStatus.lastScanAt) : null,
+    },
     books,
     diagnostics: {
       polymarket: runtime.getPolymarketDiagnostics?.(now) ?? emptyPolymarketDiagnostics(),

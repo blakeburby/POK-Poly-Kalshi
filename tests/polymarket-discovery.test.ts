@@ -33,6 +33,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     arbEnabled: true,
     minProfitDollars: 0.05,
     reentryIntervalMs: 15_000,
+    arbScanHeartbeatMs: 250,
     staleBookMs: 10_000,
     marketDiscoveryIntervalMs: 30_000,
     dashboardStreamIntervalMs: 250,

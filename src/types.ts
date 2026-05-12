@@ -617,6 +617,7 @@ export interface DashboardSnapshot {
     arbEnabled: boolean;
     minProfitDollars: number;
     reentryIntervalMs: number;
+    scanHeartbeatMs: number;
     staleBookMs: number;
     liveMaxTradesPerWindow: number;
     liveTakerPriceCushionCents?: number;
@@ -656,7 +657,10 @@ export interface DashboardSnapshot {
   scanner: {
     scanning: boolean;
     lastScanAt: number;
+    lastScanAgeMs?: number | null;
     lastCandidateCount: number;
+    queuedExecutions?: number;
+    activeExecutions?: number;
   };
   books: {
     kalshi: BinaryContract[];

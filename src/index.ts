@@ -25,7 +25,7 @@ import { PolymarketPriceToBeatService } from "./polymarket/price-to-beat";
 import { PolymarketUserStreamClient } from "./polymarket/user-stream";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
-import { CoalescedScanScheduler } from "./scanner/scheduler";
+import { CoalescedScanScheduler, createScanHeartbeat } from "./scanner/scheduler";
 import { createIdempotentShutdown } from "./shutdown";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "./trading/activity";
 import type { PolymarketDiagnostics } from "./types";
@@ -224,6 +224,12 @@ async function main(): Promise<void> {
       logEvent({ severity: "WARN", category: "BOOT", message: "hot-path warmup failed", context: { error: error instanceof Error ? error.message : String(error) } });
     });
   }, Math.max(250, config.liveHotPathWarmIntervalMs));
+  const scanHeartbeatTimer = createScanHeartbeat({
+    enabled: config.arbEnabled,
+    intervalMs: config.arbScanHeartbeatMs,
+    getLastScanAt: () => scanner.status().lastScanAt,
+    requestScan: (now) => scanScheduler.requestScan(now),
+  });
   const analyticsTimer = setInterval(() => void reconcileAnalytics().catch((error) => {
     logEvent({ severity: "ERROR", category: "DB", message: "analytics reconciliation failed", context: { error: error instanceof Error ? error.message : String(error) } });
   }), Math.max(1_000, config.dashboardAnalyticsRefreshMs));
@@ -253,11 +259,14 @@ async function main(): Promise<void> {
       if (handled) return;
 
       if (request.url === "/health") {
+        const scannerStatus = scanner.status();
         sendJson(response, 200, {
           ok: true,
           liveTrading: true,
           arbEnabled: config.arbEnabled,
           liveOrderPlacementMode: config.liveOrderPlacementMode,
+          scanHeartbeatMs: config.arbScanHeartbeatMs,
+          lastScanAgeMs: scannerStatus.lastScanAt > 0 ? Math.max(0, Date.now() - scannerStatus.lastScanAt) : null,
           maxTradesPerWindow: config.liveMaxTradesPerWindow,
           liveMaxTradesPerWindow: config.liveMaxTradesPerWindow,
           liveTakerPriceCushionCents: config.liveTakerPriceCushionCents,
@@ -293,6 +302,7 @@ async function main(): Promise<void> {
   const shutdown = createIdempotentShutdown(async (): Promise<void> => {
     clearInterval(discoveryTimer);
     clearInterval(hotPathWarmTimer);
+    if (scanHeartbeatTimer) clearInterval(scanHeartbeatTimer);
     clearInterval(analyticsTimer);
     for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();

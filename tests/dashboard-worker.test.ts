@@ -16,6 +16,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     arbEnabled: true,
     minProfitDollars: 0.01,
     reentryIntervalMs: 15_000,
+    arbScanHeartbeatMs: 250,
     staleBookMs: 10_000,
     marketDiscoveryIntervalMs: 30_000,
     dashboardStreamIntervalMs: 250,
@@ -241,7 +242,9 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
 
   const snapshot = await createDashboardSnapshot(runtime, now);
   assert.equal(snapshot.health.ok, true);
+  assert.equal(snapshot.health.scanHeartbeatMs, 250);
   assert.equal(snapshot.health.liveMaxTradesPerWindow, 3);
+  assert.equal(snapshot.scanner.lastScanAgeMs, 500);
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);
   assert.equal(snapshot.liveCandidates.length, 1);

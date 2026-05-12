@@ -193,6 +193,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       arbEnabled: true,
       minProfitDollars: 0.01,
       reentryIntervalMs: 15_000,
+      scanHeartbeatMs: 250,
       staleBookMs: 10_000,
       liveMaxTradesPerWindow: 3,
       liveTakerPriceCushionCents: 2,

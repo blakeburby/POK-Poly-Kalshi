@@ -6,6 +6,7 @@ export interface AppConfig {
   arbEnabled: boolean;
   minProfitDollars: number;
   reentryIntervalMs: number;
+  arbScanHeartbeatMs: number;
   staleBookMs: number;
   marketDiscoveryIntervalMs: number;
   dashboardStreamIntervalMs: number;
@@ -120,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     arbEnabled: envBoolean(env, "ARB_ENABLED", true),
     minProfitDollars: envNumber(env, "ARB_MIN_PROFIT_DOLLARS", 0.01),
     reentryIntervalMs: envNumber(env, "ARB_REENTRY_INTERVAL_MS", 15_000),
+    arbScanHeartbeatMs: envNumber(env, "ARB_SCAN_HEARTBEAT_MS", 250),
     staleBookMs: envNumber(env, "STALE_BOOK_MS", 10_000),
     marketDiscoveryIntervalMs: envNumber(env, "MARKET_DISCOVERY_INTERVAL_MS", 30_000),
     dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 250),

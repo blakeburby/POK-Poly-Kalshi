@@ -4,7 +4,7 @@ import { BookStore } from "../src/books/book-store";
 import { LatencyMonitor, summarizeBookAges, summarizeLatencySamples } from "../src/latency/metrics";
 import { ReentryThrottle } from "../src/scanner/reentry";
 import { CrossVenueArbScanner } from "../src/scanner/scanner";
-import { CoalescedScanScheduler } from "../src/scanner/scheduler";
+import { CoalescedScanScheduler, createScanHeartbeat } from "../src/scanner/scheduler";
 import type { ArbCandidate, ExecutionResult } from "../src/types";
 import { contract } from "./helpers";
 
@@ -63,6 +63,52 @@ test("coalesced scan scheduler runs one immediate follow-up with the newest upda
   await waitFor(() => calls.length === 2);
   assert.deepEqual(calls, [100, 102]);
   assert.deepEqual(scheduler.status(), { running: false, pending: false });
+});
+
+test("scan heartbeat requests fallback scans only after the configured interval", async () => {
+  let now = 1_000;
+  let lastScanAt = 0;
+  const calls: number[] = [];
+  const timer = createScanHeartbeat({
+    enabled: true,
+    intervalMs: 50,
+    getLastScanAt: () => lastScanAt,
+    requestScan(scanNow = 0) {
+      calls.push(scanNow);
+      lastScanAt = scanNow;
+    },
+    now: () => now,
+  });
+  assert.ok(timer);
+  try {
+    await waitFor(() => calls.length === 1);
+    assert.deepEqual(calls, [1_000]);
+
+    now = 1_049;
+    await sleep(60);
+    assert.equal(calls.length, 1);
+
+    now = 1_050;
+    await waitFor(() => calls.length === 2);
+    assert.deepEqual(calls, [1_000, 1_050]);
+  } finally {
+    clearInterval(timer);
+  }
+});
+
+test("scan heartbeat is disabled when scanner execution is disabled", async () => {
+  let calls = 0;
+  const timer = createScanHeartbeat({
+    enabled: false,
+    intervalMs: 5,
+    getLastScanAt: () => 0,
+    requestScan() {
+      calls += 1;
+    },
+  });
+  assert.equal(timer, null);
+  await sleep(8);
+  assert.equal(calls, 0);
 });
 
 test("scanner processes live candidate executions through a bounded queue without leg overfire", async () => {

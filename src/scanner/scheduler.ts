@@ -8,6 +8,25 @@ export interface ScanSchedulerLatencySink {
   recordCoalescedScan(): void;
 }
 
+export interface ScanHeartbeatOptions {
+  enabled: boolean;
+  intervalMs: number;
+  getLastScanAt(): number;
+  requestScan(now?: number): void;
+  now?(): number;
+}
+
+export function createScanHeartbeat(options: ScanHeartbeatOptions): NodeJS.Timeout | null {
+  const intervalMs = Math.max(50, Math.floor(options.intervalMs));
+  if (!options.enabled || options.intervalMs <= 0) return null;
+  return setInterval(() => {
+    const now = options.now?.() ?? Date.now();
+    const lastScanAt = options.getLastScanAt();
+    if (lastScanAt > 0 && now - lastScanAt < intervalMs) return;
+    options.requestScan(now);
+  }, intervalMs);
+}
+
 export class CoalescedScanScheduler {
   private running = false;
   private pending = false;
