@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "../src/trading/activity";
+import { accountBackedPlatformActivity } from "../src/trading/account-sources";
+import { loadConfig } from "../src/config";
 import type { LiveExecutionReadiness } from "../src/types";
+import type { TradingPlatformActivity } from "../types/trading";
 
 const now = 1_800_000_000_000;
 
@@ -125,4 +128,78 @@ test("venue stream events normalize into safe trading activity events", () => {
   assert.equal(event.row?.value, -1.95);
   assert.equal(event.row?.venueOrderId, "order");
   assert.equal(JSON.stringify(event).includes("private"), false);
+});
+
+test("polymarket trading activity uses account positions instead of inferred event positions", async () => {
+  const wallet = "0x1111111111111111111111111111111111111111";
+  const config = loadConfig({
+    POLYMARKET_FUNDER_ADDRESS: wallet,
+    POLYMARKET_PRIVATE_KEY: "",
+  });
+  const fallback: TradingPlatformActivity = {
+    platform: "polymarket",
+    connectionStatus: "live",
+    lastUpdatedAt: now,
+    portfolio: { platform: "polymarket", portfolioValue: 999, cashValue: 999, dayChangeDollars: -999, dayChangePercent: -0.9, lastUpdatedAt: now },
+    positions: [{
+      id: "bad-inferred-token",
+      market: "bad event id",
+      outcome: "BUY",
+      shares: 99,
+      value: 99,
+      averagePrice: 1,
+      updatedAt: now,
+    }],
+    openOrders: [],
+    history: [],
+    sparkline: [{ timestamp: now - 1_000, value: 999 }, { timestamp: now, value: 999 }],
+  };
+  const fetchFn: typeof fetch = (async (input) => {
+    const url = new URL(String(input));
+    assert.equal(url.searchParams.get("user"), wallet);
+    if (url.pathname === "/positions") {
+      return new Response(JSON.stringify([{
+        asset: "real-token",
+        title: "Bitcoin Up or Down",
+        outcome: "YES",
+        size: 7,
+        currentValue: 3.5,
+        avgPrice: 0.5,
+        cashPnl: 1.2,
+        realizedPnl: 0.3,
+      }]));
+    }
+    if (url.pathname === "/value") return new Response(JSON.stringify([{ user: wallet, value: 3.5 }]));
+    if (url.pathname === "/activity") return new Response(JSON.stringify([]));
+    throw new Error(`unexpected url ${url.toString()}`);
+  }) as typeof fetch;
+  const result = await accountBackedPlatformActivity("polymarket", fallback, {
+    config,
+    now,
+    fetchFn,
+    history: [],
+    getPolymarketClient: async () => ({
+      getBalanceAllowance: async () => ({ balance: "4570000", allowance: "10000000" }),
+      getOpenOrders: async () => [{
+        id: "open-real",
+        market: "real-market",
+        asset_id: "real-token",
+        side: "BUY",
+        original_size: "5",
+        size_matched: "2",
+        price: "0.4",
+        outcome: "YES",
+        status: "live",
+        created_at: Math.floor(now / 1_000),
+      }],
+    } as never),
+  });
+
+  assert.equal(result.connectionStatus, "live");
+  assert.equal(result.portfolio.cashValue, 4.57);
+  assert.equal(result.portfolio.portfolioValue, 8.07);
+  assert.equal(result.positions.length, 1);
+  assert.equal(result.positions[0].id, "real-token");
+  assert.equal(result.positions[0].market, "Bitcoin Up or Down");
+  assert.equal(result.openOrders[0].id, "open-real");
 });

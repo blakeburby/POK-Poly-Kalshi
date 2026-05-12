@@ -1,6 +1,9 @@
 import type { Queryable } from "../db/signals";
 import type { VenueOrderEventInput } from "../db/venue-order-events";
 import type { LiveExecutionReadiness, Venue } from "../types";
+import type { AppConfig } from "../config";
+import { accountBackedPlatformActivity } from "./account-sources";
+import { defaultPolymarketClientFactory, type PolymarketClobLike } from "../execution/live-clients";
 import type {
   TradingActivityEvent,
   TradingActivitySide,
@@ -238,7 +241,13 @@ export function emptyTradingActivity(now = Date.now()): TradingActivitySnapshot 
 }
 
 export class TradingActivityStore {
-  constructor(private readonly db: Queryable) {}
+  private polymarketClientPromise: Promise<PolymarketClobLike> | null = null;
+
+  constructor(
+    private readonly db: Queryable,
+    private readonly config?: AppConfig,
+    private readonly fetchFn: typeof fetch = fetch,
+  ) {}
 
   async getPlatformActivity(platform: TradingPlatform, options: TradingActivityOptions = {}): Promise<TradingPlatformActivity> {
     const now = options.now ?? Date.now();
@@ -260,7 +269,7 @@ export class TradingActivityStore {
     const openOrders = dedupeOpenOrders(result.rows.map(openOrderFromDbEvent).filter((order): order is TradingOpenOrder => order != null));
     const positions = buildPositions(history);
     const portfolio = portfolioFromReadiness(platform, options.readiness, positions, history, now);
-    return {
+    const fallback: TradingPlatformActivity = {
       platform,
       connectionStatus: "live",
       lastUpdatedAt: portfolio.lastUpdatedAt ?? history[0]?.timeMs ?? now,
@@ -270,6 +279,15 @@ export class TradingActivityStore {
       history,
       sparkline: buildSparkline(history, portfolio.cashValue, now),
     };
+    if (!this.config) return fallback;
+    return accountBackedPlatformActivity(platform, fallback, {
+      config: this.config,
+      readiness: options.readiness,
+      history,
+      now,
+      fetchFn: this.fetchFn,
+      getPolymarketClient: () => this.getPolymarketClient(),
+    });
   }
 
   async getSnapshot(options: TradingActivityOptions = {}): Promise<TradingActivitySnapshot> {
@@ -278,6 +296,14 @@ export class TradingActivityStore {
       this.getPlatformActivity("polymarket", options),
     ]);
     return { kalshi, polymarket };
+  }
+
+  private getPolymarketClient(): Promise<PolymarketClobLike> {
+    if (!this.config) throw new Error("Polymarket account client requires worker config");
+    if (!this.polymarketClientPromise) {
+      this.polymarketClientPromise = defaultPolymarketClientFactory(this.config).then((bundle) => "client" in bundle ? bundle.client : bundle);
+    }
+    return this.polymarketClientPromise;
   }
 }
 

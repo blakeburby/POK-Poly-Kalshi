@@ -3309,13 +3309,13 @@ function TradingPlatformPanel({
 
       <div className="trading-summary-row">
         <div>
-          <span>Past-day change</span>
+          <span>Account P/L</span>
           <strong className={(activity.portfolio.dayChangeDollars ?? 0) >= 0 ? "profit" : "loss"}>
             {formatActivitySignedCurrency(activity.portfolio.dayChangeDollars)}
           </strong>
           <small>{formatActivityPercent(activity.portfolio.dayChangePercent)}</small>
         </div>
-        <div className="trading-sparkline" aria-label={`${title} past-day P/L sparkline`}>
+        <div className="trading-sparkline" aria-label={`${title} account value sparkline`}>
           <AreaChart accessibilityLayer data={sparkline} height={84} margin={{ top: 8, right: 8, bottom: 0, left: 8 }} width={260}>
             <defs>
               <linearGradient id={`trading-activity-${platform}`} x1="0" x2="0" y1="0" y2="1">
@@ -3400,7 +3400,7 @@ function TradingPositionsTable({ positions }: { positions: TradingPosition[] }) 
               <td>{formatActivityCurrency(position.value)}</td>
             </tr>
           ))}
-          {positions.length === 0 ? <tr><td colSpan={4} className="empty-cell">No live positions inferred from venue fills yet.</td></tr> : null}
+          {positions.length === 0 ? <tr><td colSpan={4} className="empty-cell">No account positions reported by this venue.</td></tr> : null}
         </tbody>
       </table>
     </div>

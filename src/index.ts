@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     : null;
   const liveExposure = liveExposureCache ?? signals;
   const orderEvents = new VenueOrderEventHub(new VenueOrderEventStore(pool));
-  const tradingActivity = new TradingActivityStore(pool);
+  const tradingActivity = new TradingActivityStore(pool, config);
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
