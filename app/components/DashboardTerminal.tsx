@@ -889,6 +889,19 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
       { label: "Latency", value: formatLatency(signal.createdAt, signal.updatedAt) },
       { label: "Total Timing", value: formatCompactTime(totalMs) },
     ];
+    if (signal.fillQualitySnapshot) {
+      const fillQuality = signal.fillQualitySnapshot;
+      const expectedEdge = signal.expectedExecutableEdge ?? fillQuality.expectedExecutableEdge;
+      const fillQualityStatus = fillQuality.shadowMode ? "shadow" : fillQuality.gatePassed ? "pass" : "fail";
+      metadata.push({
+        label: "Fill Quality",
+        value: `${fillQualityStatus} · XEV ${formatSignedCents(expectedEdge)} · Pair ${formatPercent(fillQuality.pairedFillProbability)}`,
+        tone: fillQuality.gatePassed ? (fillQuality.shadowMode ? "warn" : "profit") : "loss",
+      });
+      if (fillQuality.penaltyReasons.length > 0) {
+        metadata.push({ label: "Fill Penalty", value: fillQuality.penaltyReasons.slice(0, 2).join("; "), tone: "warn" });
+      }
+    }
     if (signal.failureReason) metadata.push({ label: "Failure", value: signal.failureReason, tone: "loss" });
     if (signal.reconciliationResolvedAt) {
       metadata.push({ label: "Resolved", value: formatTimestamp(signal.reconciliationResolvedAt), tone: "warn" });

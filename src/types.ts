@@ -235,6 +235,59 @@ export interface LiveExecutionQualityStatus {
   estimatedExecutableEdge: number | null;
 }
 
+export interface FillQualityFeatures {
+  sampleCount: number;
+  minSamples: number;
+  coldStart: boolean;
+  orderSize: number;
+  placementMode: LiveOrderPlacementMode;
+  kalshiDepth: number | null;
+  polymarketDepth: number | null;
+  kalshiDepthRatio: number | null;
+  polymarketDepthRatio: number | null;
+  kalshiSpread: number | null;
+  polymarketSpread: number | null;
+  kalshiQuoteAgeMs: number | null;
+  polymarketQuoteAgeMs: number | null;
+  quoteSkewMs: number | null;
+  secondsToExpiry: number | null;
+  sameExpiryAttemptCount: number;
+  recentExactPairFillRate: number | null;
+  recentMismatchRate: number | null;
+  recentTimeoutRate: number | null;
+  kalshiRecentExactFillRate: number | null;
+  polymarketRecentExactFillRate: number | null;
+  kalshiRttP50Ms: number | null;
+  kalshiRttP95Ms: number | null;
+  polymarketRttP50Ms: number | null;
+  polymarketRttP95Ms: number | null;
+  kalshiConfirmationP95Ms: number | null;
+  polymarketConfirmationP95Ms: number | null;
+  polymarketSignedOrderReuseRate: number | null;
+  polymarketSignedOrderFallbackRate: number | null;
+  recentVenueEventCount: number;
+}
+
+export interface FillQualitySnapshot {
+  version: string;
+  scoredAt: number;
+  shadowMode: boolean;
+  gateEnabled: boolean;
+  gatePassed: boolean;
+  blockReason: string | null;
+  projectedEdgeAtLimit: number | null;
+  expectedExecutableEdge: number | null;
+  minExpectedEdge: number;
+  pairedFillProbability: number;
+  kalshiExactFillProbability: number;
+  polymarketExactFillProbability: number;
+  expectedSlippage: number;
+  expectedMismatchCost: number;
+  timeoutCost: number;
+  penaltyReasons: string[];
+  features: FillQualityFeatures;
+}
+
 export interface ExecutionResult {
   action: SignalAction;
   failureReason: string | null;
@@ -260,6 +313,8 @@ export interface ExecutionResult {
   quoteSnapshot?: QuoteSnapshot | null;
   depthVwap?: number | null;
   projectedEdgeAfterFees?: number | null;
+  fillQualitySnapshot?: FillQualitySnapshot | null;
+  expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
   executionStrategy?: ExecutionStrategy | null;
@@ -309,6 +364,8 @@ export interface SignalUpdate {
   quoteSnapshot?: QuoteSnapshot | null;
   depthVwap?: number | null;
   projectedEdgeAfterFees?: number | null;
+  fillQualitySnapshot?: FillQualitySnapshot | null;
+  expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
   executionStrategy?: ExecutionStrategy | null;
@@ -365,6 +422,8 @@ export interface DashboardSignal {
   quoteSnapshot?: QuoteSnapshot | null;
   depthVwap?: number | null;
   projectedEdgeAfterFees?: number | null;
+  fillQualitySnapshot?: FillQualitySnapshot | null;
+  expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
   executionStrategy?: ExecutionStrategy | null;
@@ -684,6 +743,13 @@ export interface DashboardSnapshot {
     liveExecutionQualitySampleLimit: number;
     liveExecutionQualityMinSamples: number;
     liveExecutionQualityMinExactFillRate: number;
+    liveFillQualityScoringEnabled: boolean;
+    liveFillQualityGateEnabled: boolean;
+    liveFillQualityMinExpectedEdge: number;
+    liveFillQualityLookbackMs: number;
+    liveFillQualitySampleLimit: number;
+    liveFillQualityMinSamples: number;
+    liveFillQualityModelVersion: string;
     livePartialFillLockMode: LivePartialFillLockMode;
     liveMaxUnresolvedExposureDollars: number;
     liveReconcileBeforeTrade: boolean;

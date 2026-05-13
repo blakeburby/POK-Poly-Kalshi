@@ -74,6 +74,13 @@ export interface AppConfig {
   liveExecutionQualitySampleLimit: number;
   liveExecutionQualityMinSamples: number;
   liveExecutionQualityMinExactFillRate: number;
+  liveFillQualityScoringEnabled: boolean;
+  liveFillQualityGateEnabled: boolean;
+  liveFillQualityMinExpectedEdge: number;
+  liveFillQualityLookbackMs: number;
+  liveFillQualitySampleLimit: number;
+  liveFillQualityMinSamples: number;
+  liveFillQualityModelVersion: string;
   livePartialFillLockMode: LivePartialFillLockMode;
   liveMaxUnresolvedExposureDollars: number;
   liveReconcileBeforeTrade: boolean;
@@ -208,6 +215,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveExecutionQualitySampleLimit: envNumber(env, "LIVE_EXECUTION_QUALITY_SAMPLE_LIMIT", 50),
     liveExecutionQualityMinSamples: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_SAMPLES", 5),
     liveExecutionQualityMinExactFillRate: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_EXACT_FILL_RATE", 0.4),
+    liveFillQualityScoringEnabled: envBoolean(env, "LIVE_FILL_QUALITY_SCORING_ENABLED", true),
+    liveFillQualityGateEnabled: envBoolean(env, "LIVE_FILL_QUALITY_GATE_ENABLED", false),
+    liveFillQualityMinExpectedEdge: envNumber(env, "LIVE_FILL_QUALITY_MIN_EXPECTED_EDGE", 0.01),
+    liveFillQualityLookbackMs: envNumber(env, "LIVE_FILL_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),
+    liveFillQualitySampleLimit: envNumber(env, "LIVE_FILL_QUALITY_SAMPLE_LIMIT", 200),
+    liveFillQualityMinSamples: envNumber(env, "LIVE_FILL_QUALITY_MIN_SAMPLES", 30),
+    liveFillQualityModelVersion: envString(env, "LIVE_FILL_QUALITY_MODEL_VERSION", "heuristic-v1"),
     livePartialFillLockMode: envLivePartialFillLockMode(env),
     liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),

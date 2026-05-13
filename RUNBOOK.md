@@ -47,6 +47,9 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_AUTO_HARDLOCKS_ENABLED=true`: normal persistent-lock policy. Temporary operator overrides must be explicit and visible on the dashboard.
 - `LIVE_EXACT_EXPOSURE_REQUIRED=false`: unresolved partial, mismatched, unknown, or quarantined exposure stays audited and visible by default but does not block new entries. Set this to `true` to restore strict exact-exposure blocking.
 - `LIVE_EXECUTION_QUALITY_GATE_ENABLED=true`: block entries when recent Polymarket exact-fill quality is too poor or estimated executable edge turns negative after mismatch cost.
+- `LIVE_FILL_QUALITY_SCORING_ENABLED=true`: score each candidate’s expected executable edge from recent fills, mismatch cost, quote quality, and latency before submit.
+- `LIVE_FILL_QUALITY_GATE_ENABLED=false`: start candidate-level fill quality in shadow mode; set to `true` only after calibration proves the gate reduces bad attempts.
+- `LIVE_FILL_QUALITY_MIN_EXPECTED_EDGE=0.01`: future enforcement threshold for expected executable edge after fill probability, slippage, mismatch, and timeout costs.
 - `LIVE_PARTIAL_FILL_LOCK_MODE=quarantine`: verified bounded one-sided exposure can be quarantined instead of globally stopping the worker.
 - `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS=10`: total quarantined exposure cap.
 

@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config";
 import { loadConfig } from "../config";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
-import type { VenueOrderEventWriter } from "../db/venue-order-events";
+import type { VenueOrderEventReader, VenueOrderEventWriter } from "../db/venue-order-events";
 import { protectedCandidateBlockReason } from "../scanner/safety";
-import type { ArbCandidate, ArbLeg, BinaryContract, ExecutionResult, ExecutionStrategy, ExecutionTimings, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
+import type { ArbCandidate, ArbLeg, BinaryContract, DashboardSignal, ExecutionResult, ExecutionStrategy, ExecutionTimings, FillQualitySnapshot, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveOrderPlacementMode, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
 import {
   failedVenueResult,
   generatedClientOrderId,
@@ -16,6 +16,7 @@ import {
 } from "./live-clients";
 import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
+import { fillQualityBlockReason, scoreFillQuality } from "./fill-quality";
 import { evaluateLiveQuoteQuality } from "./quote-quality";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
 
@@ -159,6 +160,8 @@ interface VenueExecutionPlan {
 
 interface ExecutionMetadata {
   quoteSnapshot?: QuoteSnapshot | null;
+  fillQualitySnapshot?: FillQualitySnapshot | null;
+  expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
   venueConfirmations?: VenueConfirmations | null;
   executionStrategy?: ExecutionStrategy;
@@ -186,6 +189,7 @@ export interface RiskQuarantineExposureReader {
   liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
   liveExactExposureBlockReason?(now: number): Promise<string | null>;
   liveExecutionQualityStatus?(now: number, options: LiveExecutionQualityOptions): Promise<LiveExecutionReadiness["executionQuality"]>;
+  listLiveExecutionQualitySignals?(now: number, lookbackMs: number, limit?: number): Promise<DashboardSignal[]>;
 }
 
 interface RiskQuarantineDecision {
@@ -421,6 +425,17 @@ export class LiveExecutor implements ArbExecutor {
       placementMode,
       limitRestMs,
     };
+    let fillQualitySnapshot = await this.fillQualitySnapshot(candidate, prepared.quoteSnapshot, placementMode);
+    const initialFillQualityBlock = fillQualityBlockReason(fillQualitySnapshot);
+    if (initialFillQualityBlock) {
+      const blockedAt = this.now();
+      return this.skippedWithQuoteQuality(
+        initialFillQualityBlock,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt: blockedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
+        fillQualitySnapshot,
+      );
+    }
     const preflightStartedAt = this.now();
     const preflightFailure = await this.preflightVenueOrders([
       { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
@@ -428,34 +443,41 @@ export class LiveExecutor implements ArbExecutor {
     ]);
     const preflightCompletedAt = this.now();
     if (preflightFailure) {
-      return {
-        ...skipped(preflightFailure),
-        quoteSnapshot: prepared.quoteSnapshot,
-        depthVwap: prepared.quoteSnapshot.projectedPremium,
-        projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
-        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
-      };
+      return this.skippedWithQuoteQuality(
+        preflightFailure,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
+        fillQualitySnapshot,
+      );
     }
     if (preflightCompletedAt - preflightStartedAt > this.config.liveQuoteMaxAgeMs) {
-      return {
-        ...skipped(`live preflight took ${preflightCompletedAt - preflightStartedAt}ms, exceeding quote freshness window ${this.config.liveQuoteMaxAgeMs}ms`),
-        quoteSnapshot: prepared.quoteSnapshot,
-        depthVwap: prepared.quoteSnapshot.projectedPremium,
-        projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
-        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
-      };
+      return this.skippedWithQuoteQuality(
+        `live preflight took ${preflightCompletedAt - preflightStartedAt}ms, exceeding quote freshness window ${this.config.liveQuoteMaxAgeMs}ms`,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
+        fillQualitySnapshot,
+      );
     }
     const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
     if (typeof refreshed === "string") {
-      return {
-        ...skipped(`live quote revalidation after preflight failed: ${refreshed}`),
-        quoteSnapshot: prepared.quoteSnapshot,
-        depthVwap: prepared.quoteSnapshot.projectedPremium,
-        projectedEdgeAfterFees: prepared.quoteSnapshot.projectedEdgeAfterFees,
-        executionTimings: this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
-      };
+      return this.skippedWithQuoteQuality(
+        `live quote revalidation after preflight failed: ${refreshed}`,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+        fillQualitySnapshot,
+      );
     }
     prepared = refreshed;
+    fillQualitySnapshot = await this.fillQualitySnapshot(candidate, prepared.quoteSnapshot, placementMode);
+    const refreshedFillQualityBlock = fillQualityBlockReason(fillQualitySnapshot);
+    if (refreshedFillQualityBlock) {
+      return this.skippedWithQuoteQuality(
+        refreshedFillQualityBlock,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+        fillQualitySnapshot,
+      );
+    }
     kalshiContext = { ...kalshiContext, maxBuyPrice: prepared.kalshi.maxBuyPrice };
     polymarketContext = {
       ...polymarketContext,
@@ -463,6 +485,10 @@ export class LiveExecutor implements ArbExecutor {
       requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
     };
     const hotGateCompletedAt = this.now();
+    const fillQualityMetadata = {
+      fillQualitySnapshot,
+      expectedExecutableEdge: fillQualitySnapshot?.expectedExecutableEdge ?? null,
+    };
 
     if (placementMode === "polymarket_first_exact") {
       return await this.executePolymarketFirstExact(candidate, executionGroupId, prepared, kalshiContext, polymarketContext, {
@@ -471,7 +497,7 @@ export class LiveExecutor implements ArbExecutor {
         preflightCompletedAt,
         hotGateStartedAt,
         hotGateCompletedAt,
-      });
+      }, fillQualityMetadata);
     }
 
     if (this.config.liveParallelExecutionEnabled) {
@@ -496,6 +522,7 @@ export class LiveExecutor implements ArbExecutor {
       const confirmed = this.applyVenueConfirmations(kalshi, polymarket, venueConfirmations, prepared.kalshi.leg, prepared.polymarket.leg);
       return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
+        ...fillQualityMetadata,
         executionTimings: this.executionTimings(executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
           preflightStartedAt,
           preflightCompletedAt,
@@ -543,6 +570,7 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
+        ...fillQualityMetadata,
         executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
           preflightStartedAt,
           preflightCompletedAt,
@@ -567,6 +595,7 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
+        ...fillQualityMetadata,
         executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
           preflightStartedAt,
           preflightCompletedAt,
@@ -599,6 +628,7 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: hedge.quoteSnapshot,
+        ...fillQualityMetadata,
         executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
           preflightStartedAt,
           preflightCompletedAt,
@@ -626,6 +656,7 @@ export class LiveExecutor implements ArbExecutor {
 
     return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
+      ...fillQualityMetadata,
       executionTimings: this.executionTimings(executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
         preflightStartedAt,
         preflightCompletedAt,
@@ -655,6 +686,7 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
+    fillQualityMetadata: Pick<ExecutionMetadata, "fillQualitySnapshot" | "expectedExecutableEdge">,
   ): Promise<ExecutionResult> {
     const firstVenueReason = "Polymarket FAK submitted first; Kalshi submits only after exact Polymarket fill";
     const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
@@ -686,6 +718,7 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
+        ...fillQualityMetadata,
         executionTimings: this.executionTimings(timings.executeStartedAt, kalshi, confirmedPolymarket, {
           preflightStartedAt: timings.preflightStartedAt,
           preflightCompletedAt: timings.preflightCompletedAt,
@@ -716,6 +749,7 @@ export class LiveExecutor implements ArbExecutor {
       );
       return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
+        ...fillQualityMetadata,
         executionTimings: this.executionTimings(timings.executeStartedAt, kalshi, confirmedPolymarket, {
           preflightStartedAt: timings.preflightStartedAt,
           preflightCompletedAt: timings.preflightCompletedAt,
@@ -759,6 +793,7 @@ export class LiveExecutor implements ArbExecutor {
     const confirmedKalshi = this.applyVenueConfirmation(kalshi, venueConfirmations.kalshi, hedge.leg);
     return await this.resultFromVenueOrders(executionGroupId, confirmedKalshi, finalPolymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
+      ...fillQualityMetadata,
       executionTimings: this.executionTimings(timings.executeStartedAt, confirmedKalshi, finalPolymarket, {
         preflightStartedAt: timings.preflightStartedAt,
         preflightCompletedAt: timings.preflightCompletedAt,
@@ -790,6 +825,51 @@ export class LiveExecutor implements ArbExecutor {
       sampleLimit: this.config.liveExecutionQualitySampleLimit,
       minSamples: this.config.liveExecutionQualityMinSamples,
       minExactFillRate: this.config.liveExecutionQualityMinExactFillRate,
+    };
+  }
+
+  private async fillQualitySnapshot(
+    candidate: ArbCandidate,
+    quoteSnapshot: QuoteSnapshot,
+    placementMode: LiveOrderPlacementMode,
+  ): Promise<FillQualitySnapshot | null> {
+    if (!this.config.liveFillQualityScoringEnabled) return null;
+    const now = this.now();
+    const recentSignals = await (this.quarantineExposureReader?.listLiveExecutionQualitySignals?.(
+      now,
+      this.config.liveFillQualityLookbackMs,
+      this.config.liveFillQualitySampleLimit,
+    ) ?? Promise.resolve([]));
+    const eventReader = this.orderEvents as (VenueOrderEventWriter & Partial<VenueOrderEventReader>) | undefined;
+    const recentVenueEvents = await (eventReader?.listRecentEvents?.(
+      now - Math.max(0, this.config.liveFillQualityLookbackMs),
+      this.config.liveFillQualitySampleLimit,
+    ) ?? Promise.resolve([]));
+    return scoreFillQuality({
+      candidate,
+      quoteSnapshot,
+      recentSignals,
+      recentVenueEvents,
+      config: this.config,
+      nowMs: now,
+      placementMode,
+    });
+  }
+
+  private skippedWithQuoteQuality(
+    reason: string,
+    quoteSnapshot: QuoteSnapshot,
+    executionTimings: ExecutionTimings,
+    fillQualitySnapshot: FillQualitySnapshot | null,
+  ): ExecutionResult {
+    return {
+      ...skipped(reason),
+      quoteSnapshot,
+      depthVwap: quoteSnapshot.projectedPremium,
+      projectedEdgeAfterFees: quoteSnapshot.projectedEdgeAfterFees,
+      fillQualitySnapshot,
+      expectedExecutableEdge: fillQualitySnapshot?.expectedExecutableEdge ?? null,
+      executionTimings,
     };
   }
 
@@ -1523,6 +1603,8 @@ export class LiveExecutor implements ArbExecutor {
       quoteSnapshot: metadata.quoteSnapshot ?? null,
       depthVwap: metadata.quoteSnapshot?.projectedPremium ?? null,
       projectedEdgeAfterFees: metadata.quoteSnapshot?.projectedEdgeAfterFees ?? null,
+      fillQualitySnapshot: metadata.fillQualitySnapshot ?? null,
+      expectedExecutableEdge: metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
       executionTimings: metadata.executionTimings ?? null,
       venueConfirmations,
       executionStrategy: metadata.executionStrategy ?? null,
@@ -1563,6 +1645,8 @@ export class LiveExecutor implements ArbExecutor {
           recoveryEvidence,
           finalizationMs,
           quoteSnapshot: metadata.quoteSnapshot ?? null,
+          fillQualitySnapshot: metadata.fillQualitySnapshot ?? null,
+          expectedExecutableEdge: metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
           executionTimings: metadata.executionTimings ?? null,
           kalshiRestMetadata: kalshi.metadata ?? null,
           polymarketRestMetadata: polymarket.metadata ?? null,

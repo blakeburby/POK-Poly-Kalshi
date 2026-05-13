@@ -433,6 +433,67 @@ test("performance analytics count only exact paired live fills", () => {
   assert.doesNotMatch(markup, /legacy-dry-run/);
 });
 
+test("signal details render compact fill-quality metadata", () => {
+  const detail = buildTradeDetailModel("signal", signal({
+    expectedExecutableEdge: 0.0142,
+    fillQualitySnapshot: {
+      version: "heuristic-v1",
+      scoredAt: generatedAt,
+      shadowMode: true,
+      gateEnabled: false,
+      gatePassed: true,
+      blockReason: null,
+      projectedEdgeAtLimit: 0.04,
+      expectedExecutableEdge: 0.0142,
+      minExpectedEdge: 0.01,
+      pairedFillProbability: 0.61,
+      kalshiExactFillProbability: 0.91,
+      polymarketExactFillProbability: 0.67,
+      expectedSlippage: 0.001,
+      expectedMismatchCost: 0.004,
+      timeoutCost: 0.002,
+      penaltyReasons: ["Polymarket p95 RTT is near timeout", "Recent mismatch rate is elevated"],
+      features: {
+        sampleCount: 40,
+        minSamples: 30,
+        coldStart: false,
+        orderSize: 5,
+        placementMode: "polymarket_first_exact",
+        kalshiDepth: 20,
+        polymarketDepth: 20,
+        kalshiDepthRatio: 4,
+        polymarketDepthRatio: 4,
+        kalshiSpread: 0.02,
+        polymarketSpread: 0.02,
+        kalshiQuoteAgeMs: 50,
+        polymarketQuoteAgeMs: 50,
+        quoteSkewMs: 20,
+        secondsToExpiry: 600,
+        sameExpiryAttemptCount: 1,
+        recentExactPairFillRate: 0.45,
+        recentMismatchRate: 0.3,
+        recentTimeoutRate: 0.1,
+        kalshiRecentExactFillRate: 0.91,
+        polymarketRecentExactFillRate: 0.67,
+        kalshiRttP50Ms: 100,
+        kalshiRttP95Ms: 220,
+        polymarketRttP50Ms: 900,
+        polymarketRttP95Ms: 2300,
+        kalshiConfirmationP95Ms: 180,
+        polymarketConfirmationP95Ms: 2100,
+        polymarketSignedOrderReuseRate: 0.85,
+        polymarketSignedOrderFallbackRate: 0.05,
+        recentVenueEventCount: 12,
+      },
+    },
+  }));
+  const rendered = JSON.stringify(detail);
+  assert.match(rendered, /Fill Quality/);
+  assert.match(rendered, /shadow · XEV \+1c · Pair 61\.0%/);
+  assert.match(rendered, /Fill Penalty/);
+  assert.match(rendered, /Polymarket p95 RTT is near timeout/);
+});
+
 test("cumulative pnl curve uses combined account values instead of fill-audit pnl", () => {
   const signals = [
     signal({ id: 71, kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 }),

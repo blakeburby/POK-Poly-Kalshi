@@ -123,6 +123,13 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveExecutionQualitySampleLimit: 50,
     liveExecutionQualityMinSamples: 5,
     liveExecutionQualityMinExactFillRate: 0.4,
+    liveFillQualityScoringEnabled: true,
+    liveFillQualityGateEnabled: false,
+    liveFillQualityMinExpectedEdge: 0.01,
+    liveFillQualityLookbackMs: 30 * 60 * 1_000,
+    liveFillQualitySampleLimit: 200,
+    liveFillQualityMinSamples: 30,
+    liveFillQualityModelVersion: "heuristic-v1",
     livePartialFillLockMode: "lock",
     liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,
@@ -282,6 +289,67 @@ function liveCandidate(now: number) {
   const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
   assert.ok(candidate);
   return { candidate, lower, higher };
+}
+
+function qualitySignal(now: number, input: Partial<DashboardSignal> = {}): DashboardSignal {
+  return {
+    id: input.id ?? 1,
+    createdAt: new Date(now - 60_000).toISOString(),
+    updatedAt: new Date(now - 10_000).toISOString(),
+    pairKey: "pair",
+    expiryMs: now + 900_000,
+    kalshiContractId: "kalshi",
+    polymarketContractId: "poly",
+    lower: { venue: "polymarket", contractId: "poly", direction: "yes", strike: 1500, ask: 0.4 },
+    higher: { venue: "kalshi", contractId: "kalshi", direction: "no", strike: 1502, ask: 0.5 },
+    premium: 0.9,
+    guaranteedProfit: 0.1,
+    overlapProfit: 1.1,
+    threshold: 0.01,
+    action: "filled",
+    failureReason: null,
+    kalshiFillId: "kalshi-fill",
+    polymarketFillId: "poly-fill",
+    kalshiFillPrice: 0.5,
+    polymarketFillPrice: 0.4,
+    executionGroupId: "group",
+    kalshiStatus: "filled",
+    polymarketStatus: "filled",
+    kalshiFillCount: 5,
+    polymarketFillCount: 5,
+    partialFill: false,
+    executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: 150 },
+    ...input,
+  };
+}
+
+function qualityReader(now: number, signals: DashboardSignal[]) {
+  return {
+    unresolvedRiskQuarantineExposureDollars: async () => 0,
+    listLiveExecutionQualitySignals: async () => signals,
+    liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
+    liveExactExposureBlockReason: async () => null,
+  };
+}
+
+function exactQualitySignals(now: number, count = 40): DashboardSignal[] {
+  return Array.from({ length: count }, (_, index) => qualitySignal(now, { id: index + 1, executionGroupId: `exact-${index}` }));
+}
+
+function poorQualitySignals(now: number, count = 40): DashboardSignal[] {
+  return Array.from({ length: count }, (_, index) => qualitySignal(now, {
+    id: index + 1,
+    action: "failed",
+    failureReason: "risk quarantined: Polymarket mismatch",
+    kalshiStatus: "filled",
+    polymarketStatus: index % 2 === 0 ? "unknown" : "unexpected_fill_count",
+    kalshiFillCount: 5,
+    polymarketFillCount: index % 3 === 0 ? 0 : 5.25,
+    partialFill: true,
+    polymarketError: index % 2 === 0 ? "order response timeout after 2500ms" : null,
+    executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: index % 2 === 0 ? 2500 : 1800 },
+    riskQuarantineExposureDollars: 2.5,
+  }));
 }
 
 function kalshiLowerLiveCandidate(now: number) {
@@ -1992,6 +2060,13 @@ test("live executor defaults to parallel aggressive limit and starts both venue 
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
+  assert.equal(loadConfig({}).liveFillQualityScoringEnabled, true);
+  assert.equal(loadConfig({}).liveFillQualityGateEnabled, false);
+  assert.equal(loadConfig({}).liveFillQualityMinExpectedEdge, 0.01);
+  assert.equal(loadConfig({}).liveFillQualityLookbackMs, 30 * 60 * 1_000);
+  assert.equal(loadConfig({}).liveFillQualitySampleLimit, 200);
+  assert.equal(loadConfig({}).liveFillQualityMinSamples, 30);
+  assert.equal(loadConfig({}).liveFillQualityModelVersion, "heuristic-v1");
   assert.equal(loadConfig({}).liveKalshiPrearmEnabled, true);
   assert.equal(loadConfig({}).liveKalshiPrearmMaxAgeMs, 5_000);
   assert.equal(loadConfig({}).liveKalshiPrearmPricePolicy, "patch_after_fill");
@@ -2142,6 +2217,112 @@ test("live executor uses polymarket_first_exact and submits Kalshi only after ex
   assert.match(result.executionTimings?.firstVenueReason ?? "", /Polymarket FAK submitted first/);
   assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "rest_response");
   assert.equal(typeof result.executionTimings?.polyExactToKalshiSubmitMs, "number");
+});
+
+test("live executor persists fill-quality snapshot in shadow mode without blocking submission", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveExecutionQualityGateEnabled: false,
+      liveFillQualityScoringEnabled: true,
+      liveFillQualityGateEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    undefined,
+    qualityReader(now, poorQualitySignals(now)),
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(result.fillQualitySnapshot?.shadowMode, true);
+  assert.equal(result.fillQualitySnapshot?.gateEnabled, false);
+  assert.equal(result.expectedExecutableEdge, result.fillQualitySnapshot?.expectedExecutableEdge);
+});
+
+test("live executor fill-quality gate skips before venue submit when expected edge is too low", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveExecutionQualityGateEnabled: false,
+      liveFillQualityScoringEnabled: true,
+      liveFillQualityGateEnabled: true,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    undefined,
+    qualityReader(now, poorQualitySignals(now)),
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /fill-quality expected executable edge/);
+  assert.equal(result.fillQualitySnapshot?.gatePassed, false);
+  assert.equal(polymarket.placed.length, 0);
+  assert.equal(kalshi.placed.length, 0);
+});
+
+test("live executor fill-quality gate allows candidate when expected edge clears one cent", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveExecutionQualityGateEnabled: false,
+      liveFillQualityScoringEnabled: true,
+      liveFillQualityGateEnabled: true,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    undefined,
+    qualityReader(now, exactQualitySignals(now)),
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.fillQualitySnapshot?.gatePassed, true);
+  assert.ok((result.expectedExecutableEdge ?? 0) >= 0.01);
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(kalshi.placed.length, 1);
 });
 
 test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stream confirmation", async () => {

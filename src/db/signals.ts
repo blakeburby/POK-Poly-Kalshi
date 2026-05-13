@@ -3,6 +3,7 @@ import type {
   ArbLeg,
   DashboardSignal,
   ExecutionTimings,
+  FillQualitySnapshot,
   LegDirection,
   QuoteSnapshot,
   ReconciliationResolution,
@@ -70,6 +71,8 @@ interface DashboardSignalRow {
   quote_snapshot: QuoteSnapshot | string | null;
   depth_vwap: string | number | null;
   projected_edge_after_fees: string | number | null;
+  fill_quality_snapshot: FillQualitySnapshot | string | null;
+  expected_executable_edge: string | number | null;
   execution_timings: ExecutionTimings | string | null;
   venue_confirmations: VenueConfirmations | string | null;
   execution_strategy: string | null;
@@ -141,7 +144,8 @@ const SIGNAL_COLUMNS = `
   kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
   kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
   kalshi_error, polymarket_error, partial_fill,
-  quote_snapshot, depth_vwap, projected_edge_after_fees, execution_timings, venue_confirmations,
+  quote_snapshot, depth_vwap, projected_edge_after_fees, fill_quality_snapshot, expected_executable_edge,
+  execution_timings, venue_confirmations,
   execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
   reconciliation_resolved_at, reconciliation_resolution_reason, reconciliation_resolution,
   recovery_status, recovery_attempts, recovery_evidence, finalization_ms,
@@ -254,6 +258,8 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     quoteSnapshot: jsonFromRow<QuoteSnapshot>(row.quote_snapshot),
     depthVwap: numberFrom(row.depth_vwap),
     projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
+    fillQualitySnapshot: jsonFromRow<FillQualitySnapshot>(row.fill_quality_snapshot),
+    expectedExecutableEdge: numberFrom(row.expected_executable_edge),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
     executionStrategy: row.execution_strategy === "polymarket_first_exact" ? "polymarket_first_exact"
@@ -352,23 +358,25 @@ export class SignalStore {
           quote_snapshot = CASE WHEN $22::TEXT IS NULL THEN NULL ELSE $22::JSONB END,
           depth_vwap = $23,
           projected_edge_after_fees = $24,
-          execution_timings = CASE WHEN $25::TEXT IS NULL THEN NULL ELSE $25::JSONB END,
-          venue_confirmations = CASE WHEN $26::TEXT IS NULL THEN NULL ELSE $26::JSONB END,
-          execution_strategy = $27,
-          risk_hedge = $28,
-          realized_guaranteed_profit = $29,
-          hedge_cap_price = $30,
-          reconciliation_resolved_at = CASE WHEN $31::TEXT IS NULL THEN NULL ELSE $31::TIMESTAMPTZ END,
-          reconciliation_resolution_reason = $32,
-          reconciliation_resolution = CASE WHEN $33::TEXT IS NULL THEN NULL ELSE $33::JSONB END,
-          recovery_status = $34,
-          recovery_attempts = $35,
-          recovery_evidence = CASE WHEN $36::TEXT IS NULL THEN NULL ELSE $36::JSONB END,
-          finalization_ms = $37,
-          risk_quarantined_at = CASE WHEN $38::TEXT IS NULL THEN NULL ELSE $38::TIMESTAMPTZ END,
-          risk_quarantine_reason = $39,
-          risk_quarantine_exposure_dollars = $40,
-          risk_quarantine_evidence = CASE WHEN $41::TEXT IS NULL THEN NULL ELSE $41::JSONB END,
+          fill_quality_snapshot = CASE WHEN $25::TEXT IS NULL THEN NULL ELSE $25::JSONB END,
+          expected_executable_edge = $26,
+          execution_timings = CASE WHEN $27::TEXT IS NULL THEN NULL ELSE $27::JSONB END,
+          venue_confirmations = CASE WHEN $28::TEXT IS NULL THEN NULL ELSE $28::JSONB END,
+          execution_strategy = $29,
+          risk_hedge = $30,
+          realized_guaranteed_profit = $31,
+          hedge_cap_price = $32,
+          reconciliation_resolved_at = CASE WHEN $33::TEXT IS NULL THEN NULL ELSE $33::TIMESTAMPTZ END,
+          reconciliation_resolution_reason = $34,
+          reconciliation_resolution = CASE WHEN $35::TEXT IS NULL THEN NULL ELSE $35::JSONB END,
+          recovery_status = $36,
+          recovery_attempts = $37,
+          recovery_evidence = CASE WHEN $38::TEXT IS NULL THEN NULL ELSE $38::JSONB END,
+          finalization_ms = $39,
+          risk_quarantined_at = CASE WHEN $40::TEXT IS NULL THEN NULL ELSE $40::TIMESTAMPTZ END,
+          risk_quarantine_reason = $41,
+          risk_quarantine_exposure_dollars = $42,
+          risk_quarantine_evidence = CASE WHEN $43::TEXT IS NULL THEN NULL ELSE $43::JSONB END,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -397,6 +405,8 @@ export class SignalStore {
       update.quoteSnapshot == null ? null : JSON.stringify(update.quoteSnapshot),
       update.depthVwap ?? null,
       update.projectedEdgeAfterFees ?? null,
+      update.fillQualitySnapshot == null ? null : JSON.stringify(update.fillQualitySnapshot),
+      update.expectedExecutableEdge ?? update.fillQualitySnapshot?.expectedExecutableEdge ?? null,
       update.executionTimings == null ? null : JSON.stringify(update.executionTimings),
       update.venueConfirmations == null ? null : JSON.stringify(update.venueConfirmations),
       update.executionStrategy ?? null,

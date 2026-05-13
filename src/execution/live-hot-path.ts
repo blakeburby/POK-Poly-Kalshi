@@ -284,6 +284,18 @@ export class LiveExposureCache {
     return buildLiveExecutionQualityStatus(samples, null, options);
   }
 
+  async listLiveExecutionQualitySignals(now: number, lookbackMs: number, limit = 50): Promise<DashboardSignal[]> {
+    const staleReason = this.status().reason;
+    if (staleReason) return [];
+    const since = now - Math.max(0, lookbackMs);
+    return this.executionQualitySignals
+      .filter((signal) => {
+        const updatedAt = Date.parse(signal.updatedAt);
+        return Number.isFinite(updatedAt) && updatedAt >= since;
+      })
+      .slice(0, Math.max(1, Math.floor(limit)));
+  }
+
   async liveExecutionQualityBlockReason(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null> {
     const staleReason = this.status().reason;
     if (staleReason) return staleReason;

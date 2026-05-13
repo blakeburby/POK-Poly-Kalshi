@@ -27,6 +27,10 @@ export interface VenueOrderEventWriter {
   recordVenueResult(executionGroupId: string, result: VenueOrderResult): Promise<void>;
 }
 
+export interface VenueOrderEventReader {
+  listRecentEvents(sinceMs: number, limit: number): Promise<VenueOrderEventInput[]>;
+}
+
 export type VenueOrderEventListener = (event: VenueOrderEventInput) => void;
 
 function isoFromMs(value: number | null | undefined): string | null {
@@ -34,7 +38,7 @@ function isoFromMs(value: number | null | undefined): string | null {
   return new Date(value).toISOString();
 }
 
-export class VenueOrderEventStore implements VenueOrderEventWriter {
+export class VenueOrderEventStore implements VenueOrderEventWriter, VenueOrderEventReader {
   constructor(private readonly db: Queryable) {}
 
   async recordEvent(input: VenueOrderEventInput): Promise<void> {
@@ -93,10 +97,60 @@ export class VenueOrderEventStore implements VenueOrderEventWriter {
       },
     });
   }
+
+  async listRecentEvents(sinceMs: number, limit: number): Promise<VenueOrderEventInput[]> {
+    const result = await this.db.query<{
+      execution_group_id: string | null;
+      venue: Venue;
+      client_order_id: string | null;
+      venue_order_id: string | null;
+      event_type: string | null;
+      asset_id: string | null;
+      market_id: string | null;
+      side: string | null;
+      status: string;
+      fill_count: string | number | null;
+      remaining_count: string | number | null;
+      fill_price: string | number | null;
+      fee: string | number | null;
+      exchange_ts: string | Date | null;
+      sequence: string | null;
+      received_at: string | Date | null;
+      raw: Record<string, unknown> | string | null;
+    }>(`
+      SELECT execution_group_id, venue, client_order_id, venue_order_id,
+             event_type, asset_id, market_id, side, status,
+             fill_count, remaining_count, fill_price, fee, exchange_ts, sequence, received_at, raw
+      FROM venue_order_events
+      WHERE received_at >= $1::TIMESTAMPTZ
+      ORDER BY received_at DESC
+      LIMIT $2
+    `, [isoFromMs(sinceMs), Math.max(1, Math.floor(limit))]);
+    return result.rows.map((row) => ({
+      executionGroupId: row.execution_group_id,
+      venue: row.venue,
+      clientOrderId: row.client_order_id,
+      venueOrderId: row.venue_order_id,
+      eventType: row.event_type,
+      assetId: row.asset_id,
+      marketId: row.market_id,
+      side: row.side,
+      status: row.status,
+      fillCount: row.fill_count == null ? null : Number(row.fill_count),
+      remainingCount: row.remaining_count == null ? null : Number(row.remaining_count),
+      fillPrice: row.fill_price == null ? null : Number(row.fill_price),
+      fee: row.fee == null ? null : Number(row.fee),
+      exchangeTimestampMs: row.exchange_ts == null ? null : new Date(row.exchange_ts).getTime(),
+      sequence: row.sequence,
+      receivedAtMs: row.received_at == null ? null : new Date(row.received_at).getTime(),
+      raw: typeof row.raw === "string" ? JSON.parse(row.raw) as Record<string, unknown> : row.raw ?? {},
+    }));
+  }
 }
 
-export class VenueOrderEventHub implements VenueOrderEventWriter {
+export class VenueOrderEventHub implements VenueOrderEventWriter, VenueOrderEventReader {
   private readonly listeners = new Set<VenueOrderEventListener>();
+  private readonly recentEvents: VenueOrderEventInput[] = [];
 
   constructor(private readonly store: VenueOrderEventWriter) {}
 
@@ -107,6 +161,8 @@ export class VenueOrderEventHub implements VenueOrderEventWriter {
 
   async recordEvent(input: VenueOrderEventInput): Promise<void> {
     const event = { ...input, receivedAtMs: input.receivedAtMs ?? Date.now() };
+    this.recentEvents.unshift(event);
+    if (this.recentEvents.length > 500) this.recentEvents.length = 500;
     await this.store.recordEvent(event);
     for (const listener of this.listeners) listener(event);
   }
@@ -130,5 +186,16 @@ export class VenueOrderEventHub implements VenueOrderEventWriter {
         metadata: result.metadata ?? null,
       },
     });
+  }
+
+  async listRecentEvents(sinceMs: number, limit: number): Promise<VenueOrderEventInput[]> {
+    const boundedLimit = Math.max(1, Math.floor(limit));
+    const fromHub = this.recentEvents
+      .filter((event) => (event.receivedAtMs ?? 0) >= sinceMs)
+      .slice(0, boundedLimit);
+    if (fromHub.length > 0) return fromHub;
+    const reader = this.store as VenueOrderEventWriter & Partial<VenueOrderEventReader>;
+    if (typeof reader.listRecentEvents === "function") return reader.listRecentEvents(sinceMs, boundedLimit);
+    return [];
   }
 }

@@ -289,6 +289,13 @@ async function main(): Promise<void> {
           liveExecutionQualitySampleLimit: config.liveExecutionQualitySampleLimit,
           liveExecutionQualityMinSamples: config.liveExecutionQualityMinSamples,
           liveExecutionQualityMinExactFillRate: config.liveExecutionQualityMinExactFillRate,
+          liveFillQualityScoringEnabled: config.liveFillQualityScoringEnabled,
+          liveFillQualityGateEnabled: config.liveFillQualityGateEnabled,
+          liveFillQualityMinExpectedEdge: config.liveFillQualityMinExpectedEdge,
+          liveFillQualityLookbackMs: config.liveFillQualityLookbackMs,
+          liveFillQualitySampleLimit: config.liveFillQualitySampleLimit,
+          liveFillQualityMinSamples: config.liveFillQualityMinSamples,
+          liveFillQualityModelVersion: config.liveFillQualityModelVersion,
         });
         return;
       }

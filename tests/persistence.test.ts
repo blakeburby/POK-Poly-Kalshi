@@ -58,23 +58,25 @@ class FakeDb implements Queryable {
           quote_snapshot: values?.[21] ?? null,
           depth_vwap: values?.[22] ?? null,
           projected_edge_after_fees: values?.[23] ?? null,
-          execution_timings: values?.[24] ?? null,
-          venue_confirmations: values?.[25] ?? null,
-          execution_strategy: values?.[26] ?? null,
-          risk_hedge: values?.[27] ?? false,
-          realized_guaranteed_profit: values?.[28] ?? null,
-          hedge_cap_price: values?.[29] ?? null,
-          reconciliation_resolved_at: values?.[30] ?? null,
-          reconciliation_resolution_reason: values?.[31] ?? null,
-          reconciliation_resolution: values?.[32] ?? null,
-          recovery_status: values?.[33] ?? null,
-          recovery_attempts: values?.[34] ?? null,
-          recovery_evidence: values?.[35] ?? null,
-          finalization_ms: values?.[36] ?? null,
-          risk_quarantined_at: values?.[37] ?? null,
-          risk_quarantine_reason: values?.[38] ?? null,
-          risk_quarantine_exposure_dollars: values?.[39] ?? null,
-          risk_quarantine_evidence: values?.[40] ?? null,
+          fill_quality_snapshot: values?.[24] ?? null,
+          expected_executable_edge: values?.[25] ?? null,
+          execution_timings: values?.[26] ?? null,
+          venue_confirmations: values?.[27] ?? null,
+          execution_strategy: values?.[28] ?? null,
+          risk_hedge: values?.[29] ?? false,
+          realized_guaranteed_profit: values?.[30] ?? null,
+          hedge_cap_price: values?.[31] ?? null,
+          reconciliation_resolved_at: values?.[32] ?? null,
+          reconciliation_resolution_reason: values?.[33] ?? null,
+          reconciliation_resolution: values?.[34] ?? null,
+          recovery_status: values?.[35] ?? null,
+          recovery_attempts: values?.[36] ?? null,
+          recovery_evidence: values?.[37] ?? null,
+          finalization_ms: values?.[38] ?? null,
+          risk_quarantined_at: values?.[39] ?? null,
+          risk_quarantine_reason: values?.[40] ?? null,
+          risk_quarantine_exposure_dollars: values?.[41] ?? null,
+          risk_quarantine_evidence: values?.[42] ?? null,
         } as T],
       };
     }
@@ -210,6 +212,57 @@ test("signal persistence inserts threshold-crossing candidate before execution u
     polymarketRequestedAt: "2026-04-29T20:00:00.500Z",
     polymarketRespondedAt: "2026-04-29T20:00:00.900Z",
     partialFill: false,
+    fillQualitySnapshot: {
+      version: "heuristic-v1",
+      scoredAt: 1_800_000_000_000,
+      shadowMode: true,
+      gateEnabled: false,
+      gatePassed: true,
+      blockReason: null,
+      projectedEdgeAtLimit: 0.08,
+      expectedExecutableEdge: 0.03,
+      minExpectedEdge: 0.01,
+      pairedFillProbability: 0.5,
+      kalshiExactFillProbability: 0.9,
+      polymarketExactFillProbability: 0.55,
+      expectedSlippage: 0.001,
+      expectedMismatchCost: 0.002,
+      timeoutCost: 0.003,
+      penaltyReasons: ["test penalty"],
+      features: {
+        sampleCount: 40,
+        minSamples: 30,
+        coldStart: false,
+        orderSize: 5,
+        placementMode: "polymarket_first_exact",
+        kalshiDepth: 10,
+        polymarketDepth: 10,
+        kalshiDepthRatio: 2,
+        polymarketDepthRatio: 2,
+        kalshiSpread: 0.02,
+        polymarketSpread: 0.02,
+        kalshiQuoteAgeMs: 50,
+        polymarketQuoteAgeMs: 50,
+        quoteSkewMs: 10,
+        secondsToExpiry: 600,
+        sameExpiryAttemptCount: 0,
+        recentExactPairFillRate: 0.5,
+        recentMismatchRate: 0.25,
+        recentTimeoutRate: 0.1,
+        kalshiRecentExactFillRate: 0.9,
+        polymarketRecentExactFillRate: 0.55,
+        kalshiRttP50Ms: 100,
+        kalshiRttP95Ms: 200,
+        polymarketRttP50Ms: 500,
+        polymarketRttP95Ms: 1200,
+        kalshiConfirmationP95Ms: 150,
+        polymarketConfirmationP95Ms: 1600,
+        polymarketSignedOrderReuseRate: 0.8,
+        polymarketSignedOrderFallbackRate: 0.05,
+        recentVenueEventCount: 8,
+      },
+    },
+    expectedExecutableEdge: 0.03,
     recoveryStatus: "auto_resolved_paired_fill",
     recoveryAttempts: 1,
     recoveryEvidence: { source: "test" },
@@ -224,12 +277,14 @@ test("signal persistence inserts threshold-crossing candidate before execution u
   assert.equal(db.calls[1].values?.[1], "filled");
   assert.equal(db.calls[1].values?.[7], "group");
   assert.equal(db.calls[1].values?.[20], false);
-  assert.equal(db.calls[1].values?.[33], "auto_resolved_paired_fill");
-  assert.equal(db.calls[1].values?.[34], 1);
-  assert.equal(db.calls[1].values?.[36], 3400);
-  assert.equal(db.calls[1].values?.[37], "2026-04-29T20:00:02.000Z");
-  assert.equal(db.calls[1].values?.[38], "test quarantine");
-  assert.equal(db.calls[1].values?.[39], 4.2);
+  assert.match(String(db.calls[1].values?.[24]), /heuristic-v1/);
+  assert.equal(db.calls[1].values?.[25], 0.03);
+  assert.equal(db.calls[1].values?.[35], "auto_resolved_paired_fill");
+  assert.equal(db.calls[1].values?.[36], 1);
+  assert.equal(db.calls[1].values?.[38], 3400);
+  assert.equal(db.calls[1].values?.[39], "2026-04-29T20:00:02.000Z");
+  assert.equal(db.calls[1].values?.[40], "test quarantine");
+  assert.equal(db.calls[1].values?.[41], 4.2);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -289,6 +344,13 @@ test("polymarket-first migration allows the new execution strategy", () => {
   const sql = readFileSync("src/db/migrations/017_allow_polymarket_first_exact_execution_strategy.sql", "utf8");
   assert.match(sql, /DROP CONSTRAINT IF EXISTS cross_venue_arb_signals_execution_strategy_check/);
   assert.match(sql, /polymarket_first_exact/);
+});
+
+test("fill quality migration adds candidate-level scoring columns", () => {
+  const sql = readFileSync("src/db/migrations/018_add_fill_quality_snapshot.sql", "utf8");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS fill_quality_snapshot JSONB/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS expected_executable_edge NUMERIC/);
+  assert.match(sql, /idx_cross_venue_arb_signals_expected_executable_edge/);
 });
 
 test("reconciliation resolution migration adds operator-resolved incident markers", () => {
