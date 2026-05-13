@@ -1,4 +1,4 @@
-import type { LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
+import type { LiveKalshiPrearmPricePolicy, LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
 
 export interface AppConfig {
   port: number;
@@ -53,6 +53,9 @@ export interface AppConfig {
   liveHotPathWarmIntervalMs: number;
   livePolymarketPresignEnabled: boolean;
   livePolymarketSignedOrderTtlMs: number;
+  liveKalshiPrearmEnabled: boolean;
+  liveKalshiPrearmMaxAgeMs: number;
+  liveKalshiPrearmPricePolicy: LiveKalshiPrearmPricePolicy;
   liveLowLatencyHttpEnabled: boolean;
   liveKalshiOrderGroupEnabled: boolean;
   liveKalshiOrderGroupId: string;
@@ -119,6 +122,12 @@ function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLock
   throw new Error("LIVE_PARTIAL_FILL_LOCK_MODE must be lock or quarantine");
 }
 
+function envLiveKalshiPrearmPricePolicy(env: NodeJS.ProcessEnv): LiveKalshiPrearmPricePolicy {
+  const value = envString(env, "LIVE_KALSHI_PREARM_PRICE_POLICY", "patch_after_fill").toLowerCase();
+  if (value === "patch_after_fill") return value;
+  throw new Error("LIVE_KALSHI_PREARM_PRICE_POLICY must be patch_after_fill");
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 1);
   return {
@@ -178,6 +187,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveHotPathWarmIntervalMs: envNumber(env, "LIVE_HOT_PATH_WARM_INTERVAL_MS", 1_000),
     livePolymarketPresignEnabled: envBoolean(env, "LIVE_POLYMARKET_PRESIGN_ENABLED", false),
     livePolymarketSignedOrderTtlMs: envNumber(env, "LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS", 5_000),
+    liveKalshiPrearmEnabled: envBoolean(env, "LIVE_KALSHI_PREARM_ENABLED", true),
+    liveKalshiPrearmMaxAgeMs: envNumber(env, "LIVE_KALSHI_PREARM_MAX_AGE_MS", 5_000),
+    liveKalshiPrearmPricePolicy: envLiveKalshiPrearmPricePolicy(env),
     liveLowLatencyHttpEnabled: envBoolean(env, "LIVE_LOW_LATENCY_HTTP_ENABLED", true),
     liveKalshiOrderGroupEnabled: envBoolean(env, "LIVE_KALSHI_ORDER_GROUP_ENABLED", true),
     liveKalshiOrderGroupId: envString(env, "LIVE_KALSHI_ORDER_GROUP_ID"),

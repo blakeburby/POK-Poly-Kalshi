@@ -4,6 +4,7 @@ export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 export type LiveOrderPlacementMode = "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
+export type LiveKalshiPrearmPricePolicy = "patch_after_fill";
 export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
   | "none"
@@ -146,6 +147,12 @@ export interface ExecutionTimings {
   candidateToSubmitMs?: number | null;
   hotGateMs?: number | null;
   preSubmitDbMs?: number | null;
+  kalshiPrearmMs?: number | null;
+  kalshiPrearmAgeMs?: number | null;
+  kalshiPricePatchMs?: number | null;
+  polyExactToKalshiSubmitMs?: number | null;
+  polymarketExactEvidenceSource?: string | null;
+  polymarketExactEvidenceAtMs?: number | null;
   polymarketSignMs?: number | null;
   polymarketPostOrderMs?: number | null;
   polymarketConfirmationMs?: number | null;
@@ -451,6 +458,9 @@ export interface LiveExecutionReadiness {
   hotPathEnabled?: boolean;
   hotPathCacheMaxAgeMs?: number;
   polymarketPresignEnabled?: boolean;
+  kalshiPrearmEnabled?: boolean;
+  kalshiPrearmMaxAgeMs?: number;
+  kalshiPrearmPricePolicy?: LiveKalshiPrearmPricePolicy;
   partialFillLockMode?: LivePartialFillLockMode;
   autoHardlocksEnabled?: boolean;
   maxUnresolvedExposureDollars?: number;
@@ -655,6 +665,9 @@ export interface DashboardSnapshot {
     liveHotPathWarmIntervalMs: number;
     livePolymarketPresignEnabled: boolean;
     livePolymarketSignedOrderTtlMs: number;
+    liveKalshiPrearmEnabled: boolean;
+    liveKalshiPrearmMaxAgeMs: number;
+    liveKalshiPrearmPricePolicy: LiveKalshiPrearmPricePolicy;
     liveLowLatencyHttpEnabled: boolean;
     liveUserStreamsEnabled: boolean;
     liveUserStreamPretradeGraceMs: number;

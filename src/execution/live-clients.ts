@@ -33,7 +33,26 @@ export interface LiveOrderContext {
   limitRestMs?: number;
 }
 
+export interface KalshiPreparedOrder {
+  url: string;
+  signPath: string;
+  headers: Record<string, string>;
+  bodyTemplate: Record<string, string | boolean>;
+  preparedAt: number;
+  buildMs: number;
+  signMs: number;
+  originalMaxBuyPrice: number;
+  originalYesBookPrice: number;
+  clientOrderId: string;
+  contractId: string;
+  direction: ArbLeg["direction"];
+  size: number;
+  placementMode?: LiveOrderPlacementMode;
+}
+
 export interface LiveOrderPreflight {
+  kalshiPreparedOrder?: KalshiPreparedOrder;
+  kalshiPreparedOrderFallbackReason?: string | null;
   polymarketReadiness?: VenueExecutionReadiness;
   polymarketRequiredCollateral?: number;
   polymarketOrderBook?: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">;
@@ -272,9 +291,20 @@ function requireKalshiConfigured(now: number): VenueExecutionReadiness {
   return configuredReadiness(true, null, now);
 }
 
+function kalshiOrderEndpoint(config: AppConfig): { url: URL; signPath: string } {
+  const url = new URL(config.kalshiApiBase);
+  const basePath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${basePath}/portfolio/events/orders`;
+  return { url, signPath: `${url.pathname}${url.search}` };
+}
+
+function kalshiYesBookPrice(leg: ArbLeg, context: LiveOrderContext): number {
+  return roundPrice(leg.direction === "yes" ? context.maxBuyPrice : 1 - context.maxBuyPrice);
+}
+
 export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): Record<string, string | boolean> {
   const isYes = leg.direction === "yes";
-  const yesBookPrice = isYes ? context.maxBuyPrice : 1 - context.maxBuyPrice;
+  const yesBookPrice = kalshiYesBookPrice(leg, context);
   const body: Record<string, string | boolean> = {
     ticker: leg.contractId,
     client_order_id: context.clientOrderId,
@@ -287,6 +317,48 @@ export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): 
   };
   if (context.orderGroupId) body.order_group_id = context.orderGroupId;
   return body;
+}
+
+function preparedKalshiFallbackReason(
+  prepared: KalshiPreparedOrder | undefined,
+  leg: ArbLeg,
+  context: LiveOrderContext,
+  requestedAt: number,
+  ttlMs: number,
+): string | null {
+  if (!prepared) return "missing";
+  const ageMs = Math.max(0, requestedAt - prepared.preparedAt);
+  if (ageMs > ttlMs) return `expired_${ageMs}ms`;
+  if (prepared.clientOrderId !== context.clientOrderId) return "client_order_id_changed";
+  if (prepared.contractId !== leg.contractId) return "contract_changed";
+  if (prepared.direction !== leg.direction) return "direction_changed";
+  if (Math.abs(prepared.size - context.size) > 0.000001) return "size_changed";
+  if (prepared.placementMode !== context.placementMode) return "placement_mode_changed";
+  return null;
+}
+
+function patchPreparedKalshiBody(
+  prepared: KalshiPreparedOrder,
+  leg: ArbLeg,
+  context: LiveOrderContext,
+): { body: Record<string, string | boolean>; patchMs: number; fallbackReason: string | null } {
+  const startedAt = Date.now();
+  const desired = buildKalshiV2OrderBody(leg, context);
+  const invariantFields: Array<keyof typeof desired> = ["ticker", "client_order_id", "side", "count", "time_in_force"];
+  for (const field of invariantFields) {
+    if (prepared.bodyTemplate[field] !== desired[field]) {
+      return {
+        body: desired,
+        patchMs: Math.max(0, Date.now() - startedAt),
+        fallbackReason: `${field}_changed`,
+      };
+    }
+  }
+  return {
+    body: { ...prepared.bodyTemplate, price: desired.price },
+    patchMs: Math.max(0, Date.now() - startedAt),
+    fallbackReason: null,
+  };
 }
 
 function kalshiOrderRecord(payload: Record<string, unknown>): Record<string, unknown> {
@@ -328,19 +400,81 @@ export class KalshiOrderClient implements VenueOrderClient {
     return requireKalshiConfigured(now);
   }
 
+  async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
+    const readiness = await this.readiness(context.requestedAt ?? Date.now());
+    if (!readiness.ready) return readiness.reason ?? "Kalshi execution is not configured";
+    if (!this.config.liveKalshiPrearmEnabled || context.placementMode !== "polymarket_first_exact") return null;
+
+    const buildStartedAt = Date.now();
+    try {
+      const { url, signPath } = kalshiOrderEndpoint(this.config);
+      const bodyTemplate = buildKalshiV2OrderBody(leg, context);
+      const signStartedAt = Date.now();
+      const headers = getKalshiHeaders("POST", signPath, signStartedAt.toString());
+      const signedAt = Date.now();
+      context.preflight = {
+        ...context.preflight,
+        kalshiPreparedOrder: {
+          url: url.toString(),
+          signPath,
+          headers,
+          bodyTemplate,
+          preparedAt: signStartedAt,
+          buildMs: Math.max(0, signedAt - buildStartedAt),
+          signMs: Math.max(0, signedAt - signStartedAt),
+          originalMaxBuyPrice: context.maxBuyPrice,
+          originalYesBookPrice: kalshiYesBookPrice(leg, context),
+          clientOrderId: context.clientOrderId,
+          contractId: leg.contractId,
+          direction: leg.direction,
+          size: context.size,
+          placementMode: context.placementMode,
+        },
+        kalshiPreparedOrderFallbackReason: null,
+      };
+    } catch (error) {
+      context.preflight = {
+        ...context.preflight,
+        kalshiPreparedOrderFallbackReason: sanitizeError(error),
+      };
+    }
+    return null;
+  }
+
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     const readiness = await this.readiness(context.requestedAt ?? Date.now());
     if (!readiness.ready) throw new Error(readiness.reason ?? "Kalshi execution is not configured");
 
     const requestedAt = context.requestedAt ?? Date.now();
-    const url = new URL(this.config.kalshiApiBase);
-    const basePath = url.pathname.replace(/\/$/, "");
-    url.pathname = `${basePath}/portfolio/events/orders`;
-    const signPath = `${url.pathname}${url.search}`;
-    const body = buildKalshiV2OrderBody(leg, context);
-    const response = await this.fetchFn(url, {
+    const prepared = context.preflight?.kalshiPreparedOrder;
+    const preparedAgeMs = prepared == null ? null : Math.max(0, requestedAt - prepared.preparedAt);
+    let preparedFallbackReason = prepared == null
+      ? context.preflight?.kalshiPreparedOrderFallbackReason ?? "missing"
+      : preparedKalshiFallbackReason(prepared, leg, context, requestedAt, this.config.liveKalshiPrearmMaxAgeMs);
+    const preparedUsable = prepared != null && preparedFallbackReason == null;
+    let endpoint = preparedUsable ? { url: new URL(prepared.url), signPath: prepared.signPath } : kalshiOrderEndpoint(this.config);
+    let body: Record<string, string | boolean>;
+    let headers: Record<string, string>;
+    let pricePatchMs: number | null = null;
+    if (preparedUsable) {
+      const patched = patchPreparedKalshiBody(prepared, leg, context);
+      pricePatchMs = patched.patchMs;
+      if (patched.fallbackReason == null) {
+        body = patched.body;
+        headers = prepared.headers;
+      } else {
+        preparedFallbackReason = patched.fallbackReason;
+        endpoint = kalshiOrderEndpoint(this.config);
+        body = buildKalshiV2OrderBody(leg, context);
+        headers = getKalshiHeaders("POST", endpoint.signPath);
+      }
+    } else {
+      body = buildKalshiV2OrderBody(leg, context);
+      headers = getKalshiHeaders("POST", endpoint.signPath);
+    }
+    const response = await this.fetchFn(endpoint.url, {
       method: "POST",
-      headers: { ...getKalshiHeaders("POST", signPath), "Content-Type": "application/json" },
+      headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal: context.signal,
     });
@@ -370,6 +504,16 @@ export class KalshiOrderClient implements VenueOrderClient {
         kalshiInitialStatus: String(record.status ?? initialResultStatus(fillCount, context.size)),
         kalshiInitialFillCount: fillCount,
         limitRestMs: isLimitRestMode(context) ? limitRestMs(context) : null,
+        kalshiPreparedUsed: preparedUsable && preparedFallbackReason == null,
+        kalshiPreparedFallbackReason: preparedUsable && preparedFallbackReason == null ? null : preparedFallbackReason ?? "not_prepared",
+        kalshiPrearmAgeMs: preparedAgeMs,
+        kalshiPrearmMs: prepared?.buildMs ?? null,
+        kalshiPrearmSignMs: prepared?.signMs ?? null,
+        kalshiPricePatchMs: pricePatchMs,
+        kalshiPrearmOriginalMaxBuyPrice: prepared?.originalMaxBuyPrice ?? null,
+        kalshiPrearmOriginalYesBookPrice: prepared?.originalYesBookPrice ?? null,
+        kalshiSubmittedMaxBuyPrice: context.maxBuyPrice,
+        kalshiSubmittedYesBookPrice: kalshiYesBookPrice(leg, context),
       },
     };
     if (!isLimitRestMode(context)) return initialResult;

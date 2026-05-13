@@ -141,6 +141,14 @@ interface PreparedHedge {
   quoteSnapshot: QuoteSnapshot;
 }
 
+interface PolymarketExactEvidence {
+  result: VenueOrderResult;
+  restResult: VenueOrderResult;
+  confirmation: Record<string, unknown> | null;
+  source: "rest_response" | "private_stream";
+  receivedAtMs: number;
+}
+
 interface VenueExecutionPlan {
   venue: Venue;
   client: VenueOrderClient;
@@ -312,6 +320,9 @@ export class LiveExecutor implements ArbExecutor {
       hotPathEnabled: this.config.liveHotPathEnabled,
       hotPathCacheMaxAgeMs: this.config.liveHotPathCacheMaxAgeMs,
       polymarketPresignEnabled: this.config.livePolymarketPresignEnabled,
+      kalshiPrearmEnabled: this.config.liveKalshiPrearmEnabled,
+      kalshiPrearmMaxAgeMs: this.config.liveKalshiPrearmMaxAgeMs,
+      kalshiPrearmPricePolicy: this.config.liveKalshiPrearmPricePolicy,
       partialFillLockMode: this.config.livePartialFillLockMode,
       autoHardlocksEnabled: this.config.liveAutoHardlocksEnabled,
       maxUnresolvedExposureDollars: this.config.liveMaxUnresolvedExposureDollars,
@@ -646,14 +657,28 @@ export class LiveExecutor implements ArbExecutor {
     },
   ): Promise<ExecutionResult> {
     const firstVenueReason = "Polymarket FAK submitted first; Kalshi submits only after exact Polymarket fill";
-    const polymarket = await this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext);
-    const polymarketConfirmations = await this.confirmVenueOrders(executionGroupId, [
-      { result: polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(polymarket.requestedAt) },
-    ]);
-    const confirmedPolymarket = this.applyVenueConfirmation(polymarket, polymarketConfirmations?.polymarket, prepared.polymarket.leg);
     const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
+    const polymarketSubmittedAt = this.now();
+    const pendingPolymarket = this.pendingVenueResult("polymarket", polymarketContext.clientOrderId, polymarketSubmittedAt);
+    const polymarketConfirmationPromise = this.config.liveUserStreamsEnabled && this.confirmationMonitor
+      ? this.confirmVenueOrder(executionGroupId, pendingPolymarket, prepared.polymarket.leg, polymarketSubmittedAt)
+      : Promise.resolve(null);
+    const polymarketRestPromise = this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, {
+      ...polymarketContext,
+      requestedAt: polymarketSubmittedAt,
+    });
+    const polymarketEvidence = await this.firstPolymarketExactEvidence(
+      prepared.polymarket.leg,
+      polymarketRestPromise,
+      polymarketConfirmationPromise,
+      pendingPolymarket,
+    );
 
-    if (!this.isExactVenueFill(confirmedPolymarket)) {
+    if (!polymarketEvidence.exact) {
+      const polymarket = polymarketEvidence.restResult ?? await polymarketRestPromise;
+      const polymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
+      const confirmedPolymarket = this.applyVenueConfirmation(polymarket, polymarketConfirmation, prepared.polymarket.leg);
+      const polymarketConfirmations = polymarketConfirmation ? { polymarket: polymarketConfirmation } : null;
       const kalshi = this.notSubmittedResult(
         "kalshi",
         kalshiContext.clientOrderId,
@@ -677,6 +702,8 @@ export class LiveExecutor implements ArbExecutor {
       });
     }
 
+    const evidence = polymarketEvidence.exact;
+    const confirmedPolymarket = evidence.result;
     const hedgeDecisionStartedAt = this.now();
     const hedge = this.prepareVenueHedge(candidate, prepared.polymarket.leg, prepared.kalshi.leg, confirmedPolymarket);
     const postFillHedgeDecisionMs = Math.max(0, this.now() - hedgeDecisionStartedAt);
@@ -695,12 +722,14 @@ export class LiveExecutor implements ArbExecutor {
           hotGateStartedAt: timings.hotGateStartedAt,
           hotGateCompletedAt: timings.hotGateCompletedAt,
           postFillHedgeDecisionMs,
+          polymarketExactEvidenceSource: evidence.source,
+          polymarketExactEvidenceAtMs: evidence.receivedAtMs,
           firstVenue: "polymarket",
           firstVenueReason,
           firstVenueVwap,
-          venueConfirmations: polymarketConfirmations ?? undefined,
+          venueConfirmations: evidence.confirmation ? { polymarket: evidence.confirmation } : undefined,
         }),
-        venueConfirmations: polymarketConfirmations,
+        venueConfirmations: evidence.confirmation ? { polymarket: evidence.confirmation } : null,
         executionStrategy: "polymarket_first_exact",
         riskHedge: true,
         hedgeFailureReason,
@@ -712,54 +741,32 @@ export class LiveExecutor implements ArbExecutor {
       maxBuyPrice: hedge.maxBuyPrice,
       requiredCollateral: hedge.requiredCollateral,
     };
-    const kalshiPreflight = await this.preflightVenueOrders([
-      { client: this.kalshiClient, leg: hedge.leg, context: hedgeContext },
-    ]);
-    if (kalshiPreflight) {
-      const hedgeFailureReason = `fresh Kalshi preflight failed: ${kalshiPreflight}`;
-      const kalshi = this.notSubmittedResult(
-        "kalshi",
-        kalshiContext.clientOrderId,
-        `not submitted because ${hedgeFailureReason}`,
-      );
-      return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
-        quoteSnapshot: hedge.quoteSnapshot,
-        executionTimings: this.executionTimings(timings.executeStartedAt, kalshi, confirmedPolymarket, {
-          preflightStartedAt: timings.preflightStartedAt,
-          preflightCompletedAt: timings.preflightCompletedAt,
-          hotGateStartedAt: timings.hotGateStartedAt,
-          hotGateCompletedAt: timings.hotGateCompletedAt,
-          postFillHedgeDecisionMs,
-          firstVenue: "polymarket",
-          firstVenueReason,
-          firstVenueVwap,
-          venueConfirmations: polymarketConfirmations ?? undefined,
-        }),
-        venueConfirmations: polymarketConfirmations,
-        executionStrategy: "polymarket_first_exact",
-        riskHedge: true,
-        hedgeCapPrice: hedge.hedgeCapPrice,
-        hedgeFailureReason,
-      });
-    }
-
     const kalshi = await this.placeVenueOrder(this.kalshiClient, hedge.leg, hedgeContext);
+    const finalPolymarketRest = polymarketEvidence.restResult ?? await polymarketRestPromise;
+    const finalPolymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
+    const finalPolymarket = this.applyVenueConfirmation(
+      this.mergePolymarketExactEvidence(evidence, finalPolymarketRest),
+      finalPolymarketConfirmation,
+      prepared.polymarket.leg,
+    );
     const kalshiConfirmations = await this.confirmVenueOrders(executionGroupId, [
       { result: kalshi, leg: hedge.leg, submittedAtMs: Date.parse(kalshi.requestedAt) },
     ]);
     const venueConfirmations = {
-      ...(polymarketConfirmations ?? {}),
+      ...(finalPolymarketConfirmation ? { polymarket: finalPolymarketConfirmation } : {}),
       ...(kalshiConfirmations ?? {}),
     };
     const confirmedKalshi = this.applyVenueConfirmation(kalshi, venueConfirmations.kalshi, hedge.leg);
-    return await this.resultFromVenueOrders(executionGroupId, confirmedKalshi, confirmedPolymarket, {
+    return await this.resultFromVenueOrders(executionGroupId, confirmedKalshi, finalPolymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
-      executionTimings: this.executionTimings(timings.executeStartedAt, confirmedKalshi, confirmedPolymarket, {
+      executionTimings: this.executionTimings(timings.executeStartedAt, confirmedKalshi, finalPolymarket, {
         preflightStartedAt: timings.preflightStartedAt,
         preflightCompletedAt: timings.preflightCompletedAt,
         hotGateStartedAt: timings.hotGateStartedAt,
         hotGateCompletedAt: timings.hotGateCompletedAt,
         postFillHedgeDecisionMs,
+        polymarketExactEvidenceSource: evidence.source,
+        polymarketExactEvidenceAtMs: evidence.receivedAtMs,
         firstVenue: "polymarket",
         firstVenueReason,
         firstVenueVwap,
@@ -981,7 +988,7 @@ export class LiveExecutor implements ArbExecutor {
   }
 
   private async placeVenueOrder(client: VenueOrderClient, leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
-    const submittedAt = this.now();
+    const submittedAt = context.requestedAt ?? this.now();
     const timeoutMs = Math.max(1, this.config.liveOrderTimeoutMs);
     const abortController = new AbortController();
     const submittedContext: LiveOrderContext = { ...context, requestedAt: submittedAt, signal: abortController.signal };
@@ -1070,20 +1077,169 @@ export class LiveExecutor implements ArbExecutor {
       && Math.abs((result.fillCount ?? 0) - this.config.liveOrderSize) <= 0.000001;
   }
 
+  private isExactConfirmation(record: Record<string, unknown> | null | undefined): boolean {
+    const fillCount = typeof record?.fillCount === "number" ? record.fillCount : null;
+    return record?.status === "confirmed"
+      && fillCount != null
+      && Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
+  }
+
+  private pendingVenueResult(venue: Venue, clientOrderId: string, submittedAtMs: number): VenueOrderResult {
+    return {
+      venue,
+      clientOrderId,
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      requestedAt: new Date(submittedAtMs).toISOString(),
+      respondedAt: new Date(submittedAtMs).toISOString(),
+      error: null,
+      metadata: {
+        pendingFirstExactEvidence: true,
+      },
+    };
+  }
+
+  private async confirmVenueOrder(
+    executionGroupId: string,
+    result: VenueOrderResult,
+    leg: ArbLeg,
+    submittedAtMs: number,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return null;
+    const confirmation = await this.confirmationMonitor.waitForVenueResult(result, {
+      executionGroupId,
+      expectedSize: this.config.liveOrderSize,
+      leg,
+      submittedAtMs,
+      timeoutMs: this.confirmationTimeoutMs(result),
+    });
+    return this.confirmationRecord(confirmation, submittedAtMs);
+  }
+
+  private shouldWaitForPolymarketStreamAfterRest(result: VenueOrderResult): boolean {
+    if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return false;
+    if (this.isExactVenueFill(result)) return false;
+    if (result.fillCount != null) return false;
+    const status = String(result.status ?? "").toLowerCase();
+    if (["failed", "rejected", "canceled", "cancelled", "unfilled", "unexpected_fill_count"].includes(status)) return false;
+    if (result.error && !isTimeoutOrUnknownResult(result)) return false;
+    return true;
+  }
+
+  private async firstPolymarketExactEvidence(
+    leg: ArbLeg,
+    restPromise: Promise<VenueOrderResult>,
+    confirmationPromise: Promise<Record<string, unknown> | null> | null,
+    pendingResult: VenueOrderResult,
+  ): Promise<{ exact: PolymarketExactEvidence | null; restResult?: VenueOrderResult; confirmation?: Record<string, unknown> | null }> {
+    let restResult: VenueOrderResult | undefined;
+    let confirmation: Record<string, unknown> | null | undefined;
+    let restRace: Promise<{ kind: "rest"; result: VenueOrderResult }> | null = restPromise.then((result) => ({ kind: "rest" as const, result }));
+    let confirmationRace: Promise<{ kind: "confirmation"; record: Record<string, unknown> | null }> | null = confirmationPromise
+      ? confirmationPromise.then((record) => ({ kind: "confirmation" as const, record }))
+      : null;
+
+    while (restRace || confirmationRace) {
+      const raced = [restRace, confirmationRace].filter((promise): promise is NonNullable<typeof promise> => promise != null);
+      const next = await Promise.race(raced);
+      if (next.kind === "rest") {
+        restRace = null;
+        restResult = next.result;
+        if (this.isExactVenueFill(restResult)) {
+          const respondedAtMs = Date.parse(restResult.respondedAt);
+          return {
+            exact: {
+              result: {
+                ...restResult,
+                metadata: {
+                  ...(restResult.metadata ?? {}),
+                  polymarketExactEvidenceSource: "rest_response",
+                },
+              },
+              restResult,
+              confirmation: confirmation ?? null,
+              source: "rest_response",
+              receivedAtMs: Number.isFinite(respondedAtMs) ? respondedAtMs : this.now(),
+            },
+            restResult,
+            confirmation: confirmation ?? null,
+          };
+        }
+        if (!this.shouldWaitForPolymarketStreamAfterRest(restResult)) {
+          return { exact: null, restResult, confirmation: confirmation ?? null };
+        }
+        continue;
+      }
+
+      confirmationRace = null;
+      confirmation = next.record;
+      if (this.isExactConfirmation(confirmation)) {
+        const confirmed = this.applyVenueConfirmation(pendingResult, confirmation, leg);
+        const parsedRespondedAt = Date.parse(confirmed.respondedAt);
+        const receivedAtMs = typeof confirmation?.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
+          ? confirmation.receivedAtMs
+          : Number.isFinite(parsedRespondedAt) ? parsedRespondedAt : this.now();
+        return {
+          exact: {
+            result: {
+              ...confirmed,
+              metadata: {
+                ...(confirmed.metadata ?? {}),
+                polymarketExactEvidenceSource: "private_stream",
+              },
+            },
+            restResult: restResult ?? pendingResult,
+            confirmation,
+            source: "private_stream",
+            receivedAtMs,
+          },
+          restResult,
+          confirmation,
+        };
+      }
+      if (confirmation && ["failed", "mismatch"].includes(String(confirmation.status))) {
+        return { exact: null, restResult, confirmation };
+      }
+      if (confirmation && confirmation.status !== "not_required" && restResult) {
+        return { exact: null, restResult, confirmation };
+      }
+    }
+
+    return { exact: null, restResult, confirmation: confirmation ?? null };
+  }
+
+  private mergePolymarketExactEvidence(evidence: PolymarketExactEvidence, restResult: VenueOrderResult): VenueOrderResult {
+    if (evidence.source === "rest_response") return evidence.result;
+    return {
+      ...restResult,
+      clientOrderId: evidence.result.clientOrderId || restResult.clientOrderId,
+      orderId: evidence.result.orderId ?? restResult.orderId,
+      status: evidence.result.status,
+      fillPrice: evidence.result.fillPrice,
+      fillCount: evidence.result.fillCount,
+      respondedAt: evidence.result.respondedAt,
+      error: evidence.result.error,
+      fee: evidence.result.fee ?? restResult.fee ?? null,
+      exchangeTimestampMs: evidence.result.exchangeTimestampMs ?? restResult.exchangeTimestampMs ?? null,
+      metadata: {
+        ...(restResult.metadata ?? {}),
+        ...(evidence.result.metadata ?? {}),
+        polymarketRestStatusAfterStreamTrigger: restResult.status,
+        polymarketRestErrorAfterStreamTrigger: restResult.error,
+      },
+    };
+  }
+
   private async confirmVenueOrders(
     executionGroupId: string,
     orders: Array<{ result: VenueOrderResult; leg: ArbLeg; submittedAtMs: number }>,
   ): Promise<VenueConfirmations | null> {
     if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return null;
     const entries = await Promise.all(orders.map(async ({ result, leg, submittedAtMs }) => {
-      const confirmation = await this.confirmationMonitor!.waitForVenueResult(result, {
-        executionGroupId,
-        expectedSize: this.config.liveOrderSize,
-        leg,
-        submittedAtMs,
-        timeoutMs: this.confirmationTimeoutMs(result),
-      });
-      return [result.venue, this.confirmationRecord(confirmation, submittedAtMs)] as const;
+      const confirmation = await this.confirmVenueOrder(executionGroupId, result, leg, submittedAtMs);
+      return [result.venue, confirmation] as const;
     }));
     return Object.fromEntries(entries);
   }
@@ -1536,6 +1692,8 @@ export class LiveExecutor implements ArbExecutor {
       preflightStartedAt?: number;
       preflightCompletedAt?: number;
       postFillHedgeDecisionMs?: number | null;
+      polymarketExactEvidenceSource?: string | null;
+      polymarketExactEvidenceAtMs?: number | null;
       firstVenue?: Venue | null;
       firstVenueReason?: string | null;
       firstVenueVwap?: number | null;
@@ -1581,9 +1739,22 @@ export class LiveExecutor implements ArbExecutor {
     );
     const polymarketPostOrderMs = metadataNumber(polymarket?.metadata?.polymarketPostOrderMs);
     const polymarketConfirmationMs = metadataNumber(metadata.venueConfirmations?.polymarket?.confirmationMs);
+    const kalshiPrearmAgeMs = metadataNumber(kalshi?.metadata?.kalshiPrearmAgeMs);
+    const kalshiPrearmMs = metadataNumber(kalshi?.metadata?.kalshiPrearmMs);
+    const kalshiPricePatchMs = metadataNumber(kalshi?.metadata?.kalshiPricePatchMs);
+    const polymarketExactEvidenceAtMs = metadata.polymarketExactEvidenceAtMs ?? null;
+    const polyExactToKalshiSubmitMs = polymarketExactEvidenceAtMs != null && kalshiRequestedAt != null
+      ? Math.max(0, kalshiRequestedAt - polymarketExactEvidenceAtMs)
+      : null;
     return {
       candidateToSubmitMs: Math.max(0, (firstRequestedAt ?? startedAt) - startedAt),
       hotGateMs,
+      kalshiPrearmMs,
+      kalshiPrearmAgeMs,
+      kalshiPricePatchMs,
+      polyExactToKalshiSubmitMs,
+      polymarketExactEvidenceSource: metadata.polymarketExactEvidenceSource ?? null,
+      polymarketExactEvidenceAtMs,
       polymarketSignMs: polymarket?.signMs ?? null,
       polymarketPostOrderMs,
       polymarketConfirmationMs,

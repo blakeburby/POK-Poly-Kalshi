@@ -38,6 +38,9 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_HOT_PATH_ENABLED=true`: keep readiness, metadata, locks, and exposure state warm in memory.
 - `LIVE_LOW_LATENCY_HTTP_ENABLED=true`: enable keep-alive order transports.
 - `LIVE_POLYMARKET_PRESIGN_ENABLED=true`: pre-sign fresh Polymarket market orders before the timed submit section so the Polymarket-first path mostly performs `postOrder`.
+- `LIVE_KALSHI_PREARM_ENABLED=true`: prebuild and pre-sign the Kalshi hedge request during preflight, then patch only the final price after exact Polymarket evidence.
+- `LIVE_KALSHI_PREARM_MAX_AGE_MS=5000`: discard stale pre-armed Kalshi requests and fall back to live signing.
+- `LIVE_KALSHI_PREARM_PRICE_POLICY=patch_after_fill`: keep Kalshi fully prepared while still using the actual Polymarket fill price for the final hedge cap.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated order streams.
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: private-stream confirmation wait after submit.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block entries when unresolved venue evidence requires operator review.

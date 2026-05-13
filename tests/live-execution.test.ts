@@ -102,6 +102,9 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHotPathWarmIntervalMs: 1_000,
     livePolymarketPresignEnabled: false,
     livePolymarketSignedOrderTtlMs: 5_000,
+    liveKalshiPrearmEnabled: true,
+    liveKalshiPrearmMaxAgeMs: 5_000,
+    liveKalshiPrearmPricePolicy: "patch_after_fill",
     liveLowLatencyHttpEnabled: true,
     liveKalshiOrderGroupEnabled: false,
     liveKalshiOrderGroupId: "",
@@ -332,6 +335,99 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     limitRestMs: 500,
   });
   assert.equal(limitRest.time_in_force, "good_till_canceled");
+});
+
+test("Kalshi order client pre-arms request during preflight and patches final price", async () => {
+  const calls: Array<{ body: Record<string, unknown>; headers: Record<string, string> }> = [];
+  const fetchFn = async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    calls.push({
+      body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {},
+      headers: init?.headers as Record<string, string>,
+    });
+    return new Response(JSON.stringify({
+      order: {
+        order_id: "kalshi-prearmed",
+        client_order_id: "client-prearm",
+        status: "executed",
+        fill_count: "5",
+        yes_price_dollars: "0.5300",
+      },
+    }), { status: 200 });
+  };
+  const client = new KalshiOrderClient(config({
+    liveKalshiPrearmEnabled: true,
+    liveKalshiPrearmMaxAgeMs: 5_000,
+  }), fetchFn as typeof fetch);
+  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-PREARM", direction: "yes", strike: 1500, ask: 0.5 };
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client-prearm",
+    size: 5,
+    maxBuyPrice: 0.51,
+    placementMode: "polymarket_first_exact",
+  };
+
+  const result = await withKalshiEnv(async () => {
+    assert.equal(await client.preflightOrder(leg, context), null);
+    assert.equal(calls.length, 0);
+    assert.equal(context.preflight?.kalshiPreparedOrder?.bodyTemplate.price, "0.5100");
+    return client.placeOrder(leg, { ...context, maxBuyPrice: 0.53, preflight: context.preflight });
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.body.price, "0.5300");
+  assert.equal(
+    calls[0]?.headers["KALSHI-ACCESS-TIMESTAMP"],
+    context.preflight?.kalshiPreparedOrder?.headers["KALSHI-ACCESS-TIMESTAMP"],
+  );
+  assert.equal(result.metadata?.kalshiPreparedUsed, true);
+  assert.equal(result.metadata?.kalshiPreparedFallbackReason, null);
+  assert.equal(result.metadata?.kalshiPrearmOriginalMaxBuyPrice, 0.51);
+  assert.equal(result.metadata?.kalshiSubmittedMaxBuyPrice, 0.53);
+});
+
+test("Kalshi order client falls back to live signing when pre-armed request is stale", async () => {
+  const calls: Array<{ body: Record<string, unknown> }> = [];
+  const fetchFn = async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    calls.push({ body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {} });
+    return new Response(JSON.stringify({
+      order: {
+        order_id: "kalshi-stale-prearm",
+        client_order_id: "client-stale",
+        status: "executed",
+        fill_count: "5",
+        yes_price_dollars: "0.5300",
+      },
+    }), { status: 200 });
+  };
+  const client = new KalshiOrderClient(config({
+    liveKalshiPrearmEnabled: true,
+    liveKalshiPrearmMaxAgeMs: 10,
+  }), fetchFn as typeof fetch);
+  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-STALE", direction: "yes", strike: 1500, ask: 0.5 };
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client-stale",
+    size: 5,
+    maxBuyPrice: 0.51,
+    placementMode: "polymarket_first_exact",
+  };
+
+  const result = await withKalshiEnv(async () => {
+    assert.equal(await client.preflightOrder(leg, context), null);
+    const preparedAt = context.preflight?.kalshiPreparedOrder?.preparedAt;
+    assert.equal(typeof preparedAt, "number");
+    return client.placeOrder(leg, {
+      ...context,
+      maxBuyPrice: 0.53,
+      requestedAt: preparedAt! + 50,
+      preflight: context.preflight,
+    });
+  });
+
+  assert.equal(calls[0]?.body.price, "0.5300");
+  assert.equal(result.metadata?.kalshiPreparedUsed, false);
+  assert.match(String(result.metadata?.kalshiPreparedFallbackReason), /expired_/);
 });
 
 test("Kalshi order client uses aggressive GTC limit and cancels unfilled remainder", async () => {
@@ -1895,6 +1991,9 @@ test("live executor defaults to parallel aggressive limit and starts both venue 
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   assert.equal(loadConfig({}).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
+  assert.equal(loadConfig({}).liveKalshiPrearmEnabled, true);
+  assert.equal(loadConfig({}).liveKalshiPrearmMaxAgeMs, 5_000);
+  assert.equal(loadConfig({}).liveKalshiPrearmPricePolicy, "patch_after_fill");
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -2037,8 +2136,133 @@ test("live executor uses polymarket_first_exact and submits Kalshi only after ex
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed[0]?.context.placementMode, "polymarket_first_exact");
   assert.equal(kalshi.placed[0]?.context.placementMode, "polymarket_first_exact");
+  assert.equal(kalshi.placed[0]?.context.maxBuyPrice, 0.61);
   assert.equal(result.executionTimings?.firstVenue, "polymarket");
   assert.match(result.executionTimings?.firstVenueReason ?? "", /Polymarket FAK submitted first/);
+  assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "rest_response");
+  assert.equal(typeof result.executionTimings?.polyExactToKalshiSubmitMs, "number");
+});
+
+test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stream confirmation", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  class DelayedPolymarketConfirmation extends FakeConfirmationMonitor {
+    resolvePolymarket: (() => void) | null = null;
+
+    async waitForVenueResult(result: VenueOrderResult): Promise<VenueConfirmationResult> {
+      this.waitCalls.push(result.venue);
+      if (result.venue !== "polymarket") return super.waitForVenueResult(result);
+      return await new Promise<VenueConfirmationResult>((resolve) => {
+        this.resolvePolymarket = () => resolve({
+          venue: "polymarket",
+          status: "confirmed",
+          reason: null,
+          clientOrderId: result.clientOrderId,
+          venueOrderId: result.orderId,
+          fillCount: 5,
+          fillPrice: 0.4,
+          fee: null,
+          exchangeTimestampMs: null,
+          receivedAtMs: now + 100,
+          eventType: "delayed_test",
+        });
+      });
+    }
+  }
+  const monitor = new DelayedPolymarketConfirmation();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveOrderPlacementMode: "polymarket_first_exact", liveUserStreamsEnabled: true }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    monitor,
+  );
+
+  const executing = executor.execute(candidate);
+  await waitFor(() => kalshi.placed.length === 1);
+  assert.equal(monitor.waitCalls[0], "polymarket");
+  monitor.resolvePolymarket?.();
+  const result = await executing;
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "rest_response");
+  assert.equal(kalshi.placed.length, 1);
+});
+
+test("polymarket_first_exact sends Kalshi from exact stream evidence while REST is still pending", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  class SlowUnknownPolymarketClient extends FakeVenueClient {
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      this.placed.push({ leg, context });
+      await sleep(150);
+      const requestedAt = context.requestedAt ?? now;
+      return {
+        venue: "polymarket",
+        clientOrderId: context.clientOrderId,
+        orderId: "polymarket-order",
+        status: "unknown",
+        fillPrice: null,
+        fillCount: null,
+        requestedAt: new Date(requestedAt).toISOString(),
+        respondedAt: new Date(requestedAt + 150).toISOString(),
+        error: "late ambiguous REST response",
+        metadata: { polymarketPostOrderMs: 150 },
+      };
+    }
+  }
+  class ImmediateStreamConfirmation extends FakeConfirmationMonitor {
+    async waitForVenueResult(result: VenueOrderResult): Promise<VenueConfirmationResult> {
+      this.waitCalls.push(result.venue);
+      if (result.venue !== "polymarket") return super.waitForVenueResult(result);
+      return {
+        venue: "polymarket",
+        status: "confirmed",
+        reason: null,
+        clientOrderId: result.clientOrderId,
+        venueOrderId: "polymarket-stream-order",
+        fillCount: 5,
+        fillPrice: 0.4,
+        fee: null,
+        exchangeTimestampMs: null,
+        receivedAtMs: now + 1,
+        eventType: "stream_test",
+      };
+    }
+  }
+  const polymarket = new SlowUnknownPolymarketClient("polymarket");
+  const monitor = new ImmediateStreamConfirmation();
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveOrderPlacementMode: "polymarket_first_exact", liveUserStreamsEnabled: true }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    monitor,
+  );
+
+  const executing = executor.execute(candidate);
+  await waitFor(() => kalshi.placed.length === 1);
+  const result = await executing;
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.polymarketFillId, "polymarket-stream-order");
+  assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "private_stream");
+  assert.equal(typeof result.executionTimings?.polyExactToKalshiSubmitMs, "number");
 });
 
 test("polymarket_first_exact does not submit Kalshi after fractional Polymarket fill", async () => {
