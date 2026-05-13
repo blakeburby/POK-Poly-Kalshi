@@ -53,6 +53,8 @@ export interface AppConfig {
   liveHotPathWarmIntervalMs: number;
   livePolymarketPresignEnabled: boolean;
   livePolymarketSignedOrderTtlMs: number;
+  livePolymarketFirstMinFillShares: number;
+  livePolymarketFirstMaxFillShares: number;
   liveKalshiPrearmEnabled: boolean;
   liveKalshiPrearmMaxAgeMs: number;
   liveKalshiPrearmPricePolicy: LiveKalshiPrearmPricePolicy;
@@ -137,6 +139,11 @@ function envLiveKalshiPrearmPricePolicy(env: NodeJS.ProcessEnv): LiveKalshiPrear
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 1);
+  const livePolymarketFirstMinFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES", 4);
+  const livePolymarketFirstMaxFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES", 6);
+  if (livePolymarketFirstMinFillShares <= 0 || livePolymarketFirstMaxFillShares <= 0 || livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares) {
+    throw new Error("LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES");
+  }
   return {
     port: envNumber(env, "PORT", 8080),
     databaseUrl: envString(env, "DATABASE_URL"),
@@ -194,6 +201,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveHotPathWarmIntervalMs: envNumber(env, "LIVE_HOT_PATH_WARM_INTERVAL_MS", 1_000),
     livePolymarketPresignEnabled: envBoolean(env, "LIVE_POLYMARKET_PRESIGN_ENABLED", false),
     livePolymarketSignedOrderTtlMs: envNumber(env, "LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS", 5_000),
+    livePolymarketFirstMinFillShares,
+    livePolymarketFirstMaxFillShares,
     liveKalshiPrearmEnabled: envBoolean(env, "LIVE_KALSHI_PREARM_ENABLED", true),
     liveKalshiPrearmMaxAgeMs: envNumber(env, "LIVE_KALSHI_PREARM_MAX_AGE_MS", 5_000),
     liveKalshiPrearmPricePolicy: envLiveKalshiPrearmPricePolicy(env),

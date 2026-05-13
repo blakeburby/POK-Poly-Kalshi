@@ -142,12 +142,14 @@ interface PreparedHedge {
   quoteSnapshot: QuoteSnapshot;
 }
 
-interface PolymarketExactEvidence {
+interface PolymarketHedgeTriggerEvidence {
   result: VenueOrderResult;
   restResult: VenueOrderResult;
   confirmation: Record<string, unknown> | null;
   source: "rest_response" | "private_stream";
   receivedAtMs: number;
+  fillCount: number;
+  isExact: boolean;
 }
 
 interface VenueExecutionPlan {
@@ -324,6 +326,8 @@ export class LiveExecutor implements ArbExecutor {
       hotPathEnabled: this.config.liveHotPathEnabled,
       hotPathCacheMaxAgeMs: this.config.liveHotPathCacheMaxAgeMs,
       polymarketPresignEnabled: this.config.livePolymarketPresignEnabled,
+      polymarketFirstMinFillShares: this.config.livePolymarketFirstMinFillShares,
+      polymarketFirstMaxFillShares: this.config.livePolymarketFirstMaxFillShares,
       kalshiPrearmEnabled: this.config.liveKalshiPrearmEnabled,
       kalshiPrearmMaxAgeMs: this.config.liveKalshiPrearmMaxAgeMs,
       kalshiPrearmPricePolicy: this.config.liveKalshiPrearmPricePolicy,
@@ -688,7 +692,7 @@ export class LiveExecutor implements ArbExecutor {
     },
     fillQualityMetadata: Pick<ExecutionMetadata, "fillQualitySnapshot" | "expectedExecutableEdge">,
   ): Promise<ExecutionResult> {
-    const firstVenueReason = "Polymarket FAK submitted first; Kalshi submits only after exact Polymarket fill";
+    const firstVenueReason = `Polymarket FAK submitted first; Kalshi submits after Polymarket fill count is within ${this.polymarketFirstFillRangeLabel()}`;
     const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
     const polymarketSubmittedAt = this.now();
     const pendingPolymarket = this.pendingVenueResult("polymarket", polymarketContext.clientOrderId, polymarketSubmittedAt);
@@ -699,22 +703,23 @@ export class LiveExecutor implements ArbExecutor {
       ...polymarketContext,
       requestedAt: polymarketSubmittedAt,
     });
-    const polymarketEvidence = await this.firstPolymarketExactEvidence(
+    const polymarketEvidence = await this.firstPolymarketHedgeTriggerEvidence(
       prepared.polymarket.leg,
       polymarketRestPromise,
       polymarketConfirmationPromise,
       pendingPolymarket,
     );
 
-    if (!polymarketEvidence.exact) {
+    if (!polymarketEvidence.trigger) {
       const polymarket = polymarketEvidence.restResult ?? await polymarketRestPromise;
       const polymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
       const confirmedPolymarket = this.applyVenueConfirmation(polymarket, polymarketConfirmation, prepared.polymarket.leg);
       const polymarketConfirmations = polymarketConfirmation ? { polymarket: polymarketConfirmation } : null;
+      const hedgeSkipReason = this.polymarketHedgeTriggerSkipReason(confirmedPolymarket);
       const kalshi = this.notSubmittedResult(
         "kalshi",
         kalshiContext.clientOrderId,
-        "not submitted because Polymarket leg did not fill exactly",
+        hedgeSkipReason,
       );
       return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
@@ -735,7 +740,7 @@ export class LiveExecutor implements ArbExecutor {
       });
     }
 
-    const evidence = polymarketEvidence.exact;
+    const evidence = polymarketEvidence.trigger;
     const confirmedPolymarket = evidence.result;
     const hedgeDecisionStartedAt = this.now();
     const hedge = this.prepareVenueHedge(candidate, prepared.polymarket.leg, prepared.kalshi.leg, confirmedPolymarket);
@@ -756,8 +761,7 @@ export class LiveExecutor implements ArbExecutor {
           hotGateStartedAt: timings.hotGateStartedAt,
           hotGateCompletedAt: timings.hotGateCompletedAt,
           postFillHedgeDecisionMs,
-          polymarketExactEvidenceSource: evidence.source,
-          polymarketExactEvidenceAtMs: evidence.receivedAtMs,
+          ...this.polymarketHedgeTriggerTimingMetadata(evidence),
           firstVenue: "polymarket",
           firstVenueReason,
           firstVenueVwap,
@@ -779,7 +783,7 @@ export class LiveExecutor implements ArbExecutor {
     const finalPolymarketRest = polymarketEvidence.restResult ?? await polymarketRestPromise;
     const finalPolymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
     const finalPolymarket = this.applyVenueConfirmation(
-      this.mergePolymarketExactEvidence(evidence, finalPolymarketRest),
+      this.mergePolymarketHedgeTriggerEvidence(evidence, finalPolymarketRest),
       finalPolymarketConfirmation,
       prepared.polymarket.leg,
     );
@@ -800,8 +804,7 @@ export class LiveExecutor implements ArbExecutor {
         hotGateStartedAt: timings.hotGateStartedAt,
         hotGateCompletedAt: timings.hotGateCompletedAt,
         postFillHedgeDecisionMs,
-        polymarketExactEvidenceSource: evidence.source,
-        polymarketExactEvidenceAtMs: evidence.receivedAtMs,
+        ...this.polymarketHedgeTriggerTimingMetadata(evidence),
         firstVenue: "polymarket",
         firstVenueReason,
         firstVenueVwap,
@@ -1157,11 +1160,115 @@ export class LiveExecutor implements ArbExecutor {
       && Math.abs((result.fillCount ?? 0) - this.config.liveOrderSize) <= 0.000001;
   }
 
-  private isExactConfirmation(record: Record<string, unknown> | null | undefined): boolean {
-    const fillCount = typeof record?.fillCount === "number" ? record.fillCount : null;
-    return record?.status === "confirmed"
-      && fillCount != null
-      && Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
+  private polymarketFirstFillRangeLabel(): string {
+    return `${this.config.livePolymarketFirstMinFillShares}-${this.config.livePolymarketFirstMaxFillShares} shares`;
+  }
+
+  private isPolymarketFirstFillCountInRange(fillCount: unknown): fillCount is number {
+    return typeof fillCount === "number"
+      && Number.isFinite(fillCount)
+      && fillCount + 0.000001 >= this.config.livePolymarketFirstMinFillShares
+      && fillCount - 0.000001 <= this.config.livePolymarketFirstMaxFillShares;
+  }
+
+  private isPolymarketFirstHedgeTriggerResult(result: VenueOrderResult): boolean {
+    return this.isPolymarketFirstFillCountInRange(result.fillCount)
+      && result.fillPrice != null
+      && Number.isFinite(result.fillPrice);
+  }
+
+  private isPolymarketFirstHedgeTriggerConfirmation(record: Record<string, unknown> | null | undefined): boolean {
+    const status = String(record?.status ?? "");
+    const fillPrice = typeof record?.fillPrice === "number" ? record.fillPrice : null;
+    return ["confirmed", "mismatch"].includes(status)
+      && this.isPolymarketFirstFillCountInRange(record?.fillCount)
+      && fillPrice != null
+      && Number.isFinite(fillPrice);
+  }
+
+  private polymarketHedgeTriggerMetadata(
+    source: PolymarketHedgeTriggerEvidence["source"],
+    fillCount: number,
+  ): Record<string, unknown> {
+    const isExact = Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
+    return {
+      polymarketHedgeTriggerSource: source,
+      polymarketHedgeTriggerFillCount: fillCount,
+      polymarketHedgeTriggerMinFillShares: this.config.livePolymarketFirstMinFillShares,
+      polymarketHedgeTriggerMaxFillShares: this.config.livePolymarketFirstMaxFillShares,
+      polymarketHedgeTriggerExact: isExact,
+      ...(isExact ? { polymarketExactEvidenceSource: source } : {}),
+    };
+  }
+
+  private polymarketHedgeTriggerTimingMetadata(evidence: PolymarketHedgeTriggerEvidence): {
+    polymarketExactEvidenceSource?: string | null;
+    polymarketExactEvidenceAtMs?: number | null;
+    polymarketHedgeTriggerSource: string;
+    polymarketHedgeTriggerAtMs: number;
+    polymarketHedgeTriggerFillCount: number;
+    polymarketHedgeTriggerMinFillShares: number;
+    polymarketHedgeTriggerMaxFillShares: number;
+    polymarketHedgeTriggerExact: boolean;
+  } {
+    return {
+      ...(evidence.isExact ? {
+        polymarketExactEvidenceSource: evidence.source,
+        polymarketExactEvidenceAtMs: evidence.receivedAtMs,
+      } : {}),
+      polymarketHedgeTriggerSource: evidence.source,
+      polymarketHedgeTriggerAtMs: evidence.receivedAtMs,
+      polymarketHedgeTriggerFillCount: evidence.fillCount,
+      polymarketHedgeTriggerMinFillShares: this.config.livePolymarketFirstMinFillShares,
+      polymarketHedgeTriggerMaxFillShares: this.config.livePolymarketFirstMaxFillShares,
+      polymarketHedgeTriggerExact: evidence.isExact,
+    };
+  }
+
+  private polymarketHedgeTriggerSkipReason(result: VenueOrderResult): string {
+    if (result.fillCount == null || !Number.isFinite(result.fillCount)) {
+      return `not submitted because Polymarket fill count was not available inside configured hedge range ${this.polymarketFirstFillRangeLabel()}`;
+    }
+    if (!this.isPolymarketFirstFillCountInRange(result.fillCount)) {
+      return `not submitted because Polymarket fill count ${result.fillCount} was outside configured hedge range ${this.polymarketFirstFillRangeLabel()}`;
+    }
+    return `not submitted because Polymarket fill price was unavailable for configured hedge range ${this.polymarketFirstFillRangeLabel()}`;
+  }
+
+  private polymarketResultFromHedgeTriggerConfirmation(
+    pendingResult: VenueOrderResult,
+    confirmation: Record<string, unknown>,
+    leg: ArbLeg,
+  ): VenueOrderResult {
+    const fillCount = typeof confirmation.fillCount === "number" ? confirmation.fillCount : null;
+    const fillPrice = typeof confirmation.fillPrice === "number"
+      ? economicFillPriceForLeg(pendingResult.venue, leg.direction, confirmation.fillPrice, leg.ask)
+      : null;
+    const receivedAtMs = typeof confirmation.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
+      ? confirmation.receivedAtMs
+      : null;
+    const confirmed = confirmation.status === "confirmed";
+    return {
+      ...pendingResult,
+      clientOrderId: typeof confirmation.clientOrderId === "string" && confirmation.clientOrderId
+        ? confirmation.clientOrderId
+        : pendingResult.clientOrderId,
+      orderId: typeof confirmation.venueOrderId === "string" && confirmation.venueOrderId
+        ? confirmation.venueOrderId
+        : pendingResult.orderId,
+      status: confirmed ? "filled" : "unexpected_fill_count",
+      fillCount,
+      fillPrice,
+      fee: typeof confirmation.fee === "number" ? confirmation.fee : pendingResult.fee ?? null,
+      exchangeTimestampMs: typeof confirmation.exchangeTimestampMs === "number" ? confirmation.exchangeTimestampMs : pendingResult.exchangeTimestampMs ?? null,
+      respondedAt: receivedAtMs == null ? pendingResult.respondedAt : new Date(receivedAtMs).toISOString(),
+      error: confirmed ? null : typeof confirmation.reason === "string" ? confirmation.reason : "Polymarket private stream reported fill mismatch",
+      metadata: {
+        ...(pendingResult.metadata ?? {}),
+        resolvedFromPrivateStreamConfirmation: true,
+        privateStreamEventType: confirmation.eventType ?? null,
+      },
+    };
   }
 
   private pendingVenueResult(venue: Venue, clientOrderId: string, submittedAtMs: number): VenueOrderResult {
@@ -1176,7 +1283,7 @@ export class LiveExecutor implements ArbExecutor {
       respondedAt: new Date(submittedAtMs).toISOString(),
       error: null,
       metadata: {
-        pendingFirstExactEvidence: true,
+        pendingFirstHedgeTriggerEvidence: true,
       },
     };
   }
@@ -1200,7 +1307,7 @@ export class LiveExecutor implements ArbExecutor {
 
   private shouldWaitForPolymarketStreamAfterRest(result: VenueOrderResult): boolean {
     if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return false;
-    if (this.isExactVenueFill(result)) return false;
+    if (this.isPolymarketFirstHedgeTriggerResult(result)) return false;
     if (result.fillCount != null) return false;
     const status = String(result.status ?? "").toLowerCase();
     if (["failed", "rejected", "canceled", "cancelled", "unfilled", "unexpected_fill_count"].includes(status)) return false;
@@ -1208,12 +1315,12 @@ export class LiveExecutor implements ArbExecutor {
     return true;
   }
 
-  private async firstPolymarketExactEvidence(
+  private async firstPolymarketHedgeTriggerEvidence(
     leg: ArbLeg,
     restPromise: Promise<VenueOrderResult>,
     confirmationPromise: Promise<Record<string, unknown> | null> | null,
     pendingResult: VenueOrderResult,
-  ): Promise<{ exact: PolymarketExactEvidence | null; restResult?: VenueOrderResult; confirmation?: Record<string, unknown> | null }> {
+  ): Promise<{ trigger: PolymarketHedgeTriggerEvidence | null; restResult?: VenueOrderResult; confirmation?: Record<string, unknown> | null }> {
     let restResult: VenueOrderResult | undefined;
     let confirmation: Record<string, unknown> | null | undefined;
     let restRace: Promise<{ kind: "rest"; result: VenueOrderResult }> | null = restPromise.then((result) => ({ kind: "rest" as const, result }));
@@ -1227,70 +1334,78 @@ export class LiveExecutor implements ArbExecutor {
       if (next.kind === "rest") {
         restRace = null;
         restResult = next.result;
-        if (this.isExactVenueFill(restResult)) {
+        if (this.isPolymarketFirstHedgeTriggerResult(restResult)) {
           const respondedAtMs = Date.parse(restResult.respondedAt);
+          const fillCount = restResult.fillCount ?? this.config.liveOrderSize;
+          const isExact = Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
           return {
-            exact: {
+            trigger: {
               result: {
                 ...restResult,
                 metadata: {
                   ...(restResult.metadata ?? {}),
-                  polymarketExactEvidenceSource: "rest_response",
+                  ...this.polymarketHedgeTriggerMetadata("rest_response", fillCount),
                 },
               },
               restResult,
               confirmation: confirmation ?? null,
               source: "rest_response",
               receivedAtMs: Number.isFinite(respondedAtMs) ? respondedAtMs : this.now(),
+              fillCount,
+              isExact,
             },
             restResult,
             confirmation: confirmation ?? null,
           };
         }
         if (!this.shouldWaitForPolymarketStreamAfterRest(restResult)) {
-          return { exact: null, restResult, confirmation: confirmation ?? null };
+          return { trigger: null, restResult, confirmation: confirmation ?? null };
         }
         continue;
       }
 
       confirmationRace = null;
       confirmation = next.record;
-      if (this.isExactConfirmation(confirmation)) {
-        const confirmed = this.applyVenueConfirmation(pendingResult, confirmation, leg);
+      if (confirmation && this.isPolymarketFirstHedgeTriggerConfirmation(confirmation)) {
+        const confirmed = this.polymarketResultFromHedgeTriggerConfirmation(pendingResult, confirmation, leg);
         const parsedRespondedAt = Date.parse(confirmed.respondedAt);
         const receivedAtMs = typeof confirmation?.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
           ? confirmation.receivedAtMs
           : Number.isFinite(parsedRespondedAt) ? parsedRespondedAt : this.now();
+        const fillCount = confirmed.fillCount ?? this.config.liveOrderSize;
+        const isExact = Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
         return {
-          exact: {
+          trigger: {
             result: {
               ...confirmed,
               metadata: {
                 ...(confirmed.metadata ?? {}),
-                polymarketExactEvidenceSource: "private_stream",
+                ...this.polymarketHedgeTriggerMetadata("private_stream", fillCount),
               },
             },
             restResult: restResult ?? pendingResult,
             confirmation,
             source: "private_stream",
             receivedAtMs,
+            fillCount,
+            isExact,
           },
           restResult,
           confirmation,
         };
       }
       if (confirmation && ["failed", "mismatch"].includes(String(confirmation.status))) {
-        return { exact: null, restResult, confirmation };
+        return { trigger: null, restResult, confirmation };
       }
       if (confirmation && confirmation.status !== "not_required" && restResult) {
-        return { exact: null, restResult, confirmation };
+        return { trigger: null, restResult, confirmation };
       }
     }
 
-    return { exact: null, restResult, confirmation: confirmation ?? null };
+    return { trigger: null, restResult, confirmation: confirmation ?? null };
   }
 
-  private mergePolymarketExactEvidence(evidence: PolymarketExactEvidence, restResult: VenueOrderResult): VenueOrderResult {
+  private mergePolymarketHedgeTriggerEvidence(evidence: PolymarketHedgeTriggerEvidence, restResult: VenueOrderResult): VenueOrderResult {
     if (evidence.source === "rest_response") return evidence.result;
     return {
       ...restResult,
@@ -1778,6 +1893,12 @@ export class LiveExecutor implements ArbExecutor {
       postFillHedgeDecisionMs?: number | null;
       polymarketExactEvidenceSource?: string | null;
       polymarketExactEvidenceAtMs?: number | null;
+      polymarketHedgeTriggerSource?: string | null;
+      polymarketHedgeTriggerAtMs?: number | null;
+      polymarketHedgeTriggerFillCount?: number | null;
+      polymarketHedgeTriggerMinFillShares?: number | null;
+      polymarketHedgeTriggerMaxFillShares?: number | null;
+      polymarketHedgeTriggerExact?: boolean | null;
       firstVenue?: Venue | null;
       firstVenueReason?: string | null;
       firstVenueVwap?: number | null;
@@ -1830,6 +1951,10 @@ export class LiveExecutor implements ArbExecutor {
     const polyExactToKalshiSubmitMs = polymarketExactEvidenceAtMs != null && kalshiRequestedAt != null
       ? Math.max(0, kalshiRequestedAt - polymarketExactEvidenceAtMs)
       : null;
+    const polymarketHedgeTriggerAtMs = metadata.polymarketHedgeTriggerAtMs ?? polymarketExactEvidenceAtMs;
+    const polyHedgeTriggerToKalshiSubmitMs = polymarketHedgeTriggerAtMs != null && kalshiRequestedAt != null
+      ? Math.max(0, kalshiRequestedAt - polymarketHedgeTriggerAtMs)
+      : null;
     return {
       candidateToSubmitMs: Math.max(0, (firstRequestedAt ?? startedAt) - startedAt),
       hotGateMs,
@@ -1839,6 +1964,13 @@ export class LiveExecutor implements ArbExecutor {
       polyExactToKalshiSubmitMs,
       polymarketExactEvidenceSource: metadata.polymarketExactEvidenceSource ?? null,
       polymarketExactEvidenceAtMs,
+      polyHedgeTriggerToKalshiSubmitMs,
+      polymarketHedgeTriggerSource: metadata.polymarketHedgeTriggerSource ?? metadata.polymarketExactEvidenceSource ?? null,
+      polymarketHedgeTriggerAtMs,
+      polymarketHedgeTriggerFillCount: metadata.polymarketHedgeTriggerFillCount ?? null,
+      polymarketHedgeTriggerMinFillShares: metadata.polymarketHedgeTriggerMinFillShares ?? null,
+      polymarketHedgeTriggerMaxFillShares: metadata.polymarketHedgeTriggerMaxFillShares ?? null,
+      polymarketHedgeTriggerExact: metadata.polymarketHedgeTriggerExact ?? null,
       polymarketSignMs: polymarket?.signMs ?? null,
       polymarketPostOrderMs,
       polymarketConfirmationMs,

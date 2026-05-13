@@ -902,6 +902,18 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
         metadata.push({ label: "Fill Penalty", value: fillQuality.penaltyReasons.slice(0, 2).join("; "), tone: "warn" });
       }
     }
+    if (typeof executionTimings?.polymarketHedgeTriggerFillCount === "number") {
+      const minFill = typeof executionTimings.polymarketHedgeTriggerMinFillShares === "number" ? executionTimings.polymarketHedgeTriggerMinFillShares : null;
+      const maxFill = typeof executionTimings.polymarketHedgeTriggerMaxFillShares === "number" ? executionTimings.polymarketHedgeTriggerMaxFillShares : null;
+      const sourceLabel = typeof executionTimings.polymarketHedgeTriggerSource === "string"
+        ? executionTimings.polymarketHedgeTriggerSource.replace(/_/g, " ")
+        : "--";
+      metadata.push({
+        label: "PM Hedge Trigger",
+        value: `${executionTimings.polymarketHedgeTriggerFillCount} shares · ${sourceLabel} · ${minFill ?? "--"}-${maxFill ?? "--"}`,
+        tone: executionTimings.polymarketHedgeTriggerExact === true ? "profit" : "warn",
+      });
+    }
     if (signal.failureReason) metadata.push({ label: "Failure", value: signal.failureReason, tone: "loss" });
     if (signal.reconciliationResolvedAt) {
       metadata.push({ label: "Resolved", value: formatTimestamp(signal.reconciliationResolvedAt), tone: "warn" });

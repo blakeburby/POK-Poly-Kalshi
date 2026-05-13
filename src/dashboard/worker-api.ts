@@ -179,6 +179,8 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       liveHotPathWarmIntervalMs: runtime.config.liveHotPathWarmIntervalMs,
       livePolymarketPresignEnabled: runtime.config.livePolymarketPresignEnabled,
       livePolymarketSignedOrderTtlMs: runtime.config.livePolymarketSignedOrderTtlMs,
+      livePolymarketFirstMinFillShares: runtime.config.livePolymarketFirstMinFillShares,
+      livePolymarketFirstMaxFillShares: runtime.config.livePolymarketFirstMaxFillShares,
       liveKalshiPrearmEnabled: runtime.config.liveKalshiPrearmEnabled,
       liveKalshiPrearmMaxAgeMs: runtime.config.liveKalshiPrearmMaxAgeMs,
       liveKalshiPrearmPricePolicy: runtime.config.liveKalshiPrearmPricePolicy,

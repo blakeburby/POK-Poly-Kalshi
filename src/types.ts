@@ -153,6 +153,13 @@ export interface ExecutionTimings {
   polyExactToKalshiSubmitMs?: number | null;
   polymarketExactEvidenceSource?: string | null;
   polymarketExactEvidenceAtMs?: number | null;
+  polyHedgeTriggerToKalshiSubmitMs?: number | null;
+  polymarketHedgeTriggerSource?: string | null;
+  polymarketHedgeTriggerAtMs?: number | null;
+  polymarketHedgeTriggerFillCount?: number | null;
+  polymarketHedgeTriggerMinFillShares?: number | null;
+  polymarketHedgeTriggerMaxFillShares?: number | null;
+  polymarketHedgeTriggerExact?: boolean | null;
   polymarketSignMs?: number | null;
   polymarketPostOrderMs?: number | null;
   polymarketConfirmationMs?: number | null;
@@ -517,6 +524,8 @@ export interface LiveExecutionReadiness {
   hotPathEnabled?: boolean;
   hotPathCacheMaxAgeMs?: number;
   polymarketPresignEnabled?: boolean;
+  polymarketFirstMinFillShares?: number;
+  polymarketFirstMaxFillShares?: number;
   kalshiPrearmEnabled?: boolean;
   kalshiPrearmMaxAgeMs?: number;
   kalshiPrearmPricePolicy?: LiveKalshiPrearmPricePolicy;
@@ -724,6 +733,8 @@ export interface DashboardSnapshot {
     liveHotPathWarmIntervalMs: number;
     livePolymarketPresignEnabled: boolean;
     livePolymarketSignedOrderTtlMs: number;
+    livePolymarketFirstMinFillShares?: number;
+    livePolymarketFirstMaxFillShares?: number;
     liveKalshiPrearmEnabled: boolean;
     liveKalshiPrearmMaxAgeMs: number;
     liveKalshiPrearmPricePolicy: LiveKalshiPrearmPricePolicy;

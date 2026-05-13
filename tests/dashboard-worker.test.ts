@@ -63,6 +63,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHotPathWarmIntervalMs: 1_000,
     livePolymarketPresignEnabled: false,
     livePolymarketSignedOrderTtlMs: 5_000,
+    livePolymarketFirstMinFillShares: 4,
+    livePolymarketFirstMaxFillShares: 6,
     liveKalshiPrearmEnabled: true,
     liveKalshiPrearmMaxAgeMs: 5_000,
     liveKalshiPrearmPricePolicy: "patch_after_fill",
@@ -260,6 +262,8 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.health.ok, true);
   assert.equal(snapshot.health.scanHeartbeatMs, 250);
   assert.equal(snapshot.health.liveMaxTradesPerWindow, 3);
+  assert.equal(snapshot.health.livePolymarketFirstMinFillShares, 4);
+  assert.equal(snapshot.health.livePolymarketFirstMaxFillShares, 6);
   assert.equal(snapshot.scanner.lastScanAgeMs, 500);
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);

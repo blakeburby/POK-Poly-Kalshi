@@ -211,6 +211,8 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       liveHotPathWarmIntervalMs: 1_000,
       livePolymarketPresignEnabled: false,
       livePolymarketSignedOrderTtlMs: 5_000,
+      livePolymarketFirstMinFillShares: 4,
+      livePolymarketFirstMaxFillShares: 6,
       liveLowLatencyHttpEnabled: true,
       liveUserStreamsEnabled: true,
       liveUserStreamPretradeGraceMs: 750,

@@ -80,6 +80,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHotPathWarmIntervalMs: 1_000,
     livePolymarketPresignEnabled: false,
     livePolymarketSignedOrderTtlMs: 5_000,
+    livePolymarketFirstMinFillShares: 4,
+    livePolymarketFirstMaxFillShares: 6,
     liveLowLatencyHttpEnabled: true,
     liveKalshiOrderGroupEnabled: false,
     liveKalshiOrderGroupId: "",

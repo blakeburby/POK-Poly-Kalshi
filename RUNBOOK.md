@@ -24,9 +24,10 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `ARB_REENTRY_INTERVAL_MS=60000`: pair/configuration cooldown.
 - `ARB_SCAN_HEARTBEAT_MS=250`: fallback scan heartbeat; websocket book updates still trigger scans immediately.
 - `ARB_EXECUTION_CONCURRENCY=1`: first production posture for live attempts.
-- `LIVE_ORDER_PLACEMENT_MODE=polymarket_first_exact`: submit Polymarket FAK first, then submit Kalshi only after Polymarket confirms an exact fill.
+- `LIVE_ORDER_PLACEMENT_MODE=polymarket_first_exact`: submit Polymarket FAK first, then submit Kalshi only after Polymarket confirms a fill inside the configured hedge-trigger range.
 - `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by the first leg.
 - `LIVE_ORDER_SIZE=5`: venue share size.
+- `LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES=4` and `LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES=6`: inclusive Polymarket fill range that triggers the fixed 5-contract Kalshi hedge; non-5 Polymarket fills remain partial/mismatch audit records.
 - `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: per-leg taker cushion included in the edge gate before entry.
 - `LIVE_MIN_EXPIRY_MS=60000`: skip entries inside the final minute.
 - `LIVE_MAX_TRADES_PER_WINDOW=3`: max real submitted live attempts per 15-minute expiry window.
@@ -38,7 +39,7 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_HOT_PATH_ENABLED=true`: keep readiness, metadata, locks, and exposure state warm in memory.
 - `LIVE_LOW_LATENCY_HTTP_ENABLED=true`: enable keep-alive order transports.
 - `LIVE_POLYMARKET_PRESIGN_ENABLED=true`: pre-sign fresh Polymarket market orders before the timed submit section so the Polymarket-first path mostly performs `postOrder`.
-- `LIVE_KALSHI_PREARM_ENABLED=true`: prebuild and pre-sign the Kalshi hedge request during preflight, then patch only the final price after exact Polymarket evidence.
+- `LIVE_KALSHI_PREARM_ENABLED=true`: prebuild and pre-sign the Kalshi hedge request during preflight, then patch only the final price after qualifying Polymarket hedge-trigger evidence.
 - `LIVE_KALSHI_PREARM_MAX_AGE_MS=5000`: discard stale pre-armed Kalshi requests and fall back to live signing.
 - `LIVE_KALSHI_PREARM_PRICE_POLICY=patch_after_fill`: keep Kalshi fully prepared while still using the actual Polymarket fill price for the final hedge cap.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated order streams.

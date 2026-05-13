@@ -282,6 +282,8 @@ async function main(): Promise<void> {
           liveKalshiPrearmEnabled: config.liveKalshiPrearmEnabled,
           liveKalshiPrearmMaxAgeMs: config.liveKalshiPrearmMaxAgeMs,
           liveKalshiPrearmPricePolicy: config.liveKalshiPrearmPricePolicy,
+          livePolymarketFirstMinFillShares: config.livePolymarketFirstMinFillShares,
+          livePolymarketFirstMaxFillShares: config.livePolymarketFirstMaxFillShares,
           liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
           liveExactExposureRequired: config.liveExactExposureRequired,
           liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,

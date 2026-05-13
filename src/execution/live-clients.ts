@@ -1302,8 +1302,8 @@ export class PolymarketOrderClient implements VenueOrderClient {
           await client.cancelOrder?.({ orderID: orderId });
           canceledOpenRemainder = true;
         } catch {
-          // The executor will lock on non-exact fills; cancellation errors are
-          // less useful than preserving the actual fill response.
+          // The executor audits non-exact fills; cancellation errors are less
+          // useful than preserving the actual fill response.
         }
       });
     }
