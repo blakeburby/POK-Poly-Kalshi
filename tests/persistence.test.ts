@@ -285,6 +285,12 @@ test("orphan execution cleanup migration removes execution-looking rows without 
   assert.match(sql, /polymarket_fill_id IS NOT NULL/);
 });
 
+test("polymarket-first migration allows the new execution strategy", () => {
+  const sql = readFileSync("src/db/migrations/017_allow_polymarket_first_exact_execution_strategy.sql", "utf8");
+  assert.match(sql, /DROP CONSTRAINT IF EXISTS cross_venue_arb_signals_execution_strategy_check/);
+  assert.match(sql, /polymarket_first_exact/);
+});
+
 test("reconciliation resolution migration adds operator-resolved incident markers", () => {
   const sql = readFileSync("src/db/migrations/011_add_live_reconciliation_resolution.sql", "utf8");
   assert.match(sql, /ADD COLUMN IF NOT EXISTS reconciliation_resolved_at TIMESTAMPTZ/);

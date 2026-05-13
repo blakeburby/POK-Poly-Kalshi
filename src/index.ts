@@ -95,6 +95,15 @@ async function main(): Promise<void> {
     maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+    liveExactExposureRequired: config.liveExactExposureRequired,
+    liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,
+    liveExecutionQualityOptions: {
+      enabled: config.liveExecutionQualityGateEnabled,
+      lookbackMs: config.liveExecutionQualityLookbackMs,
+      sampleLimit: config.liveExecutionQualitySampleLimit,
+      minSamples: config.liveExecutionQualityMinSamples,
+      minExactFillRate: config.liveExecutionQualityMinExactFillRate,
+    },
     liveExposure,
     liveLocks,
     deferLivePersistence: config.liveHotPathEnabled,
@@ -271,6 +280,12 @@ async function main(): Promise<void> {
           liveMaxTradesPerWindow: config.liveMaxTradesPerWindow,
           liveTakerPriceCushionCents: config.liveTakerPriceCushionCents,
           liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+          liveExactExposureRequired: config.liveExactExposureRequired,
+          liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,
+          liveExecutionQualityLookbackMs: config.liveExecutionQualityLookbackMs,
+          liveExecutionQualitySampleLimit: config.liveExecutionQualitySampleLimit,
+          liveExecutionQualityMinSamples: config.liveExecutionQualityMinSamples,
+          liveExecutionQualityMinExactFillRate: config.liveExecutionQualityMinExactFillRate,
         });
         return;
       }

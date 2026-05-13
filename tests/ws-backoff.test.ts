@@ -214,6 +214,24 @@ test("authenticated user stream parsers normalize venue order events", () => {
   assert.equal(kalshiOrder?.fillCount, 5);
   assert.equal(kalshiOrder?.fillPrice, 0.35);
 
+  const kalshiNoAskOrder = parseKalshiUserStreamMessage({
+    type: "user_order",
+    sid: 24,
+    msg: {
+      order_id: "kalshi-no-order",
+      client_order_id: "kalshi-no-client",
+      ticker: "KXBTC15M",
+      status: "executed",
+      side: "ask",
+      is_yes: false,
+      yes_price_dollars: "0.5400",
+      fill_count_fp: "5.00",
+      remaining_count_fp: "0.00",
+      created_ts_ms: 1_800_000_000_223,
+    },
+  }, 1_800_000_000_250);
+  assert.equal(kalshiNoAskOrder?.fillPrice, 0.46);
+
   const kalshiFill = parseKalshiUserStreamMessage({
     type: "fill",
     sid: 23,

@@ -3,7 +3,7 @@ import type { TradingActivitySnapshot } from "../types/trading";
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
-export type LiveOrderPlacementMode = "parallel_fok" | "parallel_fak" | "parallel_limit_rest";
+export type LiveOrderPlacementMode = "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
 export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
   | "none"
@@ -177,7 +177,7 @@ export interface ReconciliationResolution {
   notes?: string | null;
 }
 
-export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest";
+export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
 
 export interface UserStreamVenueState {
   enabled: boolean;
@@ -209,6 +209,23 @@ export interface ReconciliationReadiness {
   quarantinedExposureDollars?: number | null;
   quarantinedSignalCount?: number | null;
   quarantineCapDollars?: number | null;
+}
+
+export interface LiveExecutionQualityStatus {
+  enabled: boolean;
+  ok: boolean;
+  reason: string | null;
+  sampleCount: number;
+  lookbackMs: number;
+  sampleLimit: number;
+  minSamples: number;
+  minExactFillRate: number;
+  exactPairFillRate: number | null;
+  polymarketTimeoutRate: number | null;
+  mismatchRate: number | null;
+  avgPolymarketRttMs: number | null;
+  avgMismatchCostDollars: number | null;
+  estimatedExecutableEdge: number | null;
 }
 
 export interface ExecutionResult {
@@ -437,6 +454,9 @@ export interface LiveExecutionReadiness {
   partialFillLockMode?: LivePartialFillLockMode;
   autoHardlocksEnabled?: boolean;
   maxUnresolvedExposureDollars?: number;
+  exactExposureRequired?: boolean;
+  executionQualityGateEnabled?: boolean;
+  executionQuality?: LiveExecutionQualityStatus;
   orderTimeoutMs: number;
   kalshiOrderGroupEnabled: boolean;
   userStreams: UserStreamReadiness;
@@ -645,6 +665,12 @@ export interface DashboardSnapshot {
     liveFinalRecoveryPollMs: number;
     liveAutoResolveVerifiedIncidents: boolean;
     liveAutoHardlocksEnabled: boolean;
+    liveExactExposureRequired: boolean;
+    liveExecutionQualityGateEnabled: boolean;
+    liveExecutionQualityLookbackMs: number;
+    liveExecutionQualitySampleLimit: number;
+    liveExecutionQualityMinSamples: number;
+    liveExecutionQualityMinExactFillRate: number;
     livePartialFillLockMode: LivePartialFillLockMode;
     liveMaxUnresolvedExposureDollars: number;
     liveReconcileBeforeTrade: boolean;

@@ -24,8 +24,8 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `ARB_REENTRY_INTERVAL_MS=60000`: pair/configuration cooldown.
 - `ARB_SCAN_HEARTBEAT_MS=250`: fallback scan heartbeat; websocket book updates still trigger scans immediately.
 - `ARB_EXECUTION_CONCURRENCY=1`: first production posture for live attempts.
-- `LIVE_ORDER_PLACEMENT_MODE=parallel_fak`: immediate paired venue submission path with Kalshi FOK and Polymarket FAK; use `parallel_fok` only for strict immediate-or-nothing Polymarket fills.
-- `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by `parallel_fak`.
+- `LIVE_ORDER_PLACEMENT_MODE=polymarket_first_exact`: submit Polymarket FAK first, then submit Kalshi only after Polymarket confirms an exact fill.
+- `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by the first leg.
 - `LIVE_ORDER_SIZE=5`: venue share size.
 - `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: per-leg taker cushion included in the edge gate before entry.
 - `LIVE_MIN_EXPIRY_MS=60000`: skip entries inside the final minute.
@@ -37,11 +37,13 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_ORDER_TIMEOUT_MS=2500`: REST order timeout.
 - `LIVE_HOT_PATH_ENABLED=true`: keep readiness, metadata, locks, and exposure state warm in memory.
 - `LIVE_LOW_LATENCY_HTTP_ENABLED=true`: enable keep-alive order transports.
-- `LIVE_POLYMARKET_PRESIGN_ENABLED=true`: pre-sign fresh Polymarket market orders before the timed submit section so hot-path `parallel_fak` mostly performs `postOrder`.
+- `LIVE_POLYMARKET_PRESIGN_ENABLED=true`: pre-sign fresh Polymarket market orders before the timed submit section so the Polymarket-first path mostly performs `postOrder`.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated order streams.
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: private-stream confirmation wait after submit.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block entries when unresolved venue evidence requires operator review.
 - `LIVE_AUTO_HARDLOCKS_ENABLED=true`: normal persistent-lock policy. Temporary operator overrides must be explicit and visible on the dashboard.
+- `LIVE_EXACT_EXPOSURE_REQUIRED=true`: block entries whenever a submitted signal has unresolved partial, mismatched, unknown, or quarantined exposure.
+- `LIVE_EXECUTION_QUALITY_GATE_ENABLED=true`: block entries when recent Polymarket exact-fill quality is too poor or estimated executable edge turns negative after mismatch cost.
 - `LIVE_PARTIAL_FILL_LOCK_MODE=quarantine`: verified bounded one-sided exposure can be quarantined instead of globally stopping the worker.
 - `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS=10`: total quarantined exposure cap.
 

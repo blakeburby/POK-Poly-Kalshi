@@ -649,6 +649,7 @@ function polymarketOrderType(value: string): OrderType.FOK | OrderType.FAK {
 }
 
 function polymarketImmediateOrderType(configuredValue: string, context: LiveOrderContext): OrderType.FOK | OrderType.FAK {
+  if (context.placementMode === "polymarket_first_exact") return OrderType.FAK;
   if (context.placementMode === "parallel_fak") return OrderType.FAK;
   if (context.placementMode === "parallel_fok") return OrderType.FOK;
   return polymarketOrderType(configuredValue);

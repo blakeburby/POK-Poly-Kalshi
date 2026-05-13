@@ -38,6 +38,7 @@ function at(timestampMs: number): string {
 
 test("analytics estimates guaranteed PnL from fill prices and falls back to premium", () => {
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 })), 0.08);
+  assert.equal(estimatedGuaranteedPnl(signal({ higher: { venue: "kalshi", contractId: "kalshi", direction: "no", strike: 1502, ask: 0.46 }, kalshiFillPrice: 0.54, polymarketFillPrice: 0.52 })), 0.02);
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillPrice: null, polymarketFillPrice: null, premium: 0.95 })), 0.05);
   assert.equal(estimatedGuaranteedPnl(signal({ action: "failed" })), null);
   assert.equal(estimatedGuaranteedPnl(signal({ executionGroupId: null })), null);

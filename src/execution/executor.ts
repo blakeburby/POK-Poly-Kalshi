@@ -14,6 +14,8 @@ import {
   type VenueOrderClient,
   type VenueOrderResult,
 } from "./live-clients";
+import { economicFillPriceForLeg } from "./economic-prices";
+import type { LiveExecutionQualityOptions } from "./execution-quality";
 import { evaluateLiveQuoteQuality } from "./quote-quality";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
 
@@ -174,6 +176,8 @@ interface ExecutionMetadata {
 export interface RiskQuarantineExposureReader {
   unresolvedRiskQuarantineExposureDollars(): Promise<number>;
   liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
+  liveExactExposureBlockReason?(now: number): Promise<string | null>;
+  liveExecutionQualityStatus?(now: number, options: LiveExecutionQualityOptions): Promise<LiveExecutionReadiness["executionQuality"]>;
 }
 
 interface RiskQuarantineDecision {
@@ -226,13 +230,34 @@ export class LiveExecutor implements ArbExecutor {
   }
 
   async readiness(now = this.now()): Promise<LiveExecutionReadiness> {
-    const [kalshi, polymarket, activeLock, quarantineStatus] = await Promise.all([
+    const qualityOptions = this.executionQualityOptions();
+    const defaultExecutionQuality: LiveExecutionReadiness["executionQuality"] = {
+      enabled: qualityOptions.enabled,
+      ok: true,
+      reason: null,
+      sampleCount: 0,
+      lookbackMs: qualityOptions.lookbackMs,
+      sampleLimit: qualityOptions.sampleLimit,
+      minSamples: qualityOptions.minSamples,
+      minExactFillRate: qualityOptions.minExactFillRate,
+      exactPairFillRate: null,
+      polymarketTimeoutRate: null,
+      mismatchRate: null,
+      avgPolymarketRttMs: null,
+      avgMismatchCostDollars: null,
+      estimatedExecutableEdge: null,
+    };
+    const [kalshi, polymarket, activeLock, quarantineStatus, exactExposureReason, executionQuality] = await Promise.all([
       this.kalshiClient.readiness(now),
       this.polymarketClient.readiness(now),
       this.liveLocks?.getActiveLock() ?? Promise.resolve(null),
       this.quarantineExposureReader?.liveRiskQuarantineStatus?.()
         ?? this.quarantineExposureReader?.unresolvedRiskQuarantineExposureDollars().then((total) => ({ total, count: total > 0 ? 1 : 0 }))
         ?? Promise.resolve(null),
+      this.config.liveExactExposureRequired
+        ? this.quarantineExposureReader?.liveExactExposureBlockReason?.(now) ?? Promise.resolve(null)
+        : Promise.resolve(null),
+      this.quarantineExposureReader?.liveExecutionQualityStatus?.(now, qualityOptions) ?? Promise.resolve(defaultExecutionQuality),
     ]);
     const userStreams = this.confirmationMonitor?.userStreamReadiness(now)
       ?? buildUserStreamReadiness(
@@ -263,6 +288,8 @@ export class LiveExecutor implements ArbExecutor {
       reconciliation,
       userStreams.reason,
       effectivePartialFillLocked,
+      exactExposureReason,
+      executionQuality?.reason ?? null,
     );
     return {
       mode: "live",
@@ -288,6 +315,9 @@ export class LiveExecutor implements ArbExecutor {
       partialFillLockMode: this.config.livePartialFillLockMode,
       autoHardlocksEnabled: this.config.liveAutoHardlocksEnabled,
       maxUnresolvedExposureDollars: this.config.liveMaxUnresolvedExposureDollars,
+      exactExposureRequired: this.config.liveExactExposureRequired,
+      executionQualityGateEnabled: this.config.liveExecutionQualityGateEnabled,
+      executionQuality,
       orderTimeoutMs: this.config.liveOrderTimeoutMs,
       kalshiOrderGroupEnabled: this.config.liveKalshiOrderGroupEnabled && Boolean(this.config.liveKalshiOrderGroupId),
       userStreams,
@@ -358,7 +388,9 @@ export class LiveExecutor implements ArbExecutor {
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
-    const placementMode = this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
+    const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact"
+      ? "polymarket_first_exact"
+      : this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
     const limitRestMs = placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
     let kalshiContext: LiveOrderContext = {
       executionGroupId,
@@ -421,6 +453,16 @@ export class LiveExecutor implements ArbExecutor {
     };
     const hotGateCompletedAt = this.now();
 
+    if (placementMode === "polymarket_first_exact") {
+      return await this.executePolymarketFirstExact(candidate, executionGroupId, prepared, kalshiContext, polymarketContext, {
+        executeStartedAt,
+        preflightStartedAt,
+        preflightCompletedAt,
+        hotGateStartedAt,
+        hotGateCompletedAt,
+      });
+    }
+
     if (this.config.liveParallelExecutionEnabled) {
       const executionStrategy = placementMode === "parallel_limit_rest"
         ? "parallel_limit_rest"
@@ -440,7 +482,7 @@ export class LiveExecutor implements ArbExecutor {
         { result: kalshi, leg: prepared.kalshi.leg, submittedAtMs: Date.parse(kalshi.requestedAt) },
         { result: polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(polymarket.requestedAt) },
       ]);
-      const confirmed = this.applyVenueConfirmations(kalshi, polymarket, venueConfirmations);
+      const confirmed = this.applyVenueConfirmations(kalshi, polymarket, venueConfirmations, prepared.kalshi.leg, prepared.polymarket.leg);
       return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
         executionTimings: this.executionTimings(executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
@@ -567,7 +609,9 @@ export class LiveExecutor implements ArbExecutor {
       { result: firstResult, leg: firstPlan.prepared.leg, submittedAtMs: Date.parse(firstResult.requestedAt) },
       { result: hedgeResult, leg: hedge.leg, submittedAtMs: Date.parse(hedgeResult.requestedAt) },
     ]);
-    const confirmed = this.applyVenueConfirmations(results.kalshi!, results.polymarket!, venueConfirmations);
+    const kalshiConfirmationLeg = firstPlan.venue === "kalshi" ? firstPlan.prepared.leg : hedge.leg;
+    const polymarketConfirmationLeg = firstPlan.venue === "polymarket" ? firstPlan.prepared.leg : hedge.leg;
+    const confirmed = this.applyVenueConfirmations(results.kalshi!, results.polymarket!, venueConfirmations, kalshiConfirmationLeg, polymarketConfirmationLeg);
 
     return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
@@ -587,8 +631,159 @@ export class LiveExecutor implements ArbExecutor {
     });
   }
 
+  private async executePolymarketFirstExact(
+    candidate: ArbCandidate,
+    executionGroupId: string,
+    prepared: PreparedExecution,
+    kalshiContext: LiveOrderContext,
+    polymarketContext: LiveOrderContext,
+    timings: {
+      executeStartedAt: number;
+      preflightStartedAt: number;
+      preflightCompletedAt: number;
+      hotGateStartedAt: number;
+      hotGateCompletedAt: number;
+    },
+  ): Promise<ExecutionResult> {
+    const firstVenueReason = "Polymarket FAK submitted first; Kalshi submits only after exact Polymarket fill";
+    const polymarket = await this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext);
+    const polymarketConfirmations = await this.confirmVenueOrders(executionGroupId, [
+      { result: polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(polymarket.requestedAt) },
+    ]);
+    const confirmedPolymarket = this.applyVenueConfirmation(polymarket, polymarketConfirmations?.polymarket, prepared.polymarket.leg);
+    const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
+
+    if (!this.isExactVenueFill(confirmedPolymarket)) {
+      const kalshi = this.notSubmittedResult(
+        "kalshi",
+        kalshiContext.clientOrderId,
+        "not submitted because Polymarket leg did not fill exactly",
+      );
+      return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
+        quoteSnapshot: prepared.quoteSnapshot,
+        executionTimings: this.executionTimings(timings.executeStartedAt, kalshi, confirmedPolymarket, {
+          preflightStartedAt: timings.preflightStartedAt,
+          preflightCompletedAt: timings.preflightCompletedAt,
+          hotGateStartedAt: timings.hotGateStartedAt,
+          hotGateCompletedAt: timings.hotGateCompletedAt,
+          firstVenue: "polymarket",
+          firstVenueReason,
+          firstVenueVwap,
+          venueConfirmations: polymarketConfirmations ?? undefined,
+        }),
+        venueConfirmations: polymarketConfirmations,
+        executionStrategy: "polymarket_first_exact",
+        riskHedge: false,
+      });
+    }
+
+    const hedgeDecisionStartedAt = this.now();
+    const hedge = this.prepareVenueHedge(candidate, prepared.polymarket.leg, prepared.kalshi.leg, confirmedPolymarket);
+    const postFillHedgeDecisionMs = Math.max(0, this.now() - hedgeDecisionStartedAt);
+    if (typeof hedge === "string") {
+      const hedgeFailureReason = `Kalshi hedge cap preflight failed: ${hedge}`;
+      const kalshi = this.notSubmittedResult(
+        "kalshi",
+        kalshiContext.clientOrderId,
+        `not submitted because ${hedgeFailureReason}`,
+      );
+      return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
+        quoteSnapshot: prepared.quoteSnapshot,
+        executionTimings: this.executionTimings(timings.executeStartedAt, kalshi, confirmedPolymarket, {
+          preflightStartedAt: timings.preflightStartedAt,
+          preflightCompletedAt: timings.preflightCompletedAt,
+          hotGateStartedAt: timings.hotGateStartedAt,
+          hotGateCompletedAt: timings.hotGateCompletedAt,
+          postFillHedgeDecisionMs,
+          firstVenue: "polymarket",
+          firstVenueReason,
+          firstVenueVwap,
+          venueConfirmations: polymarketConfirmations ?? undefined,
+        }),
+        venueConfirmations: polymarketConfirmations,
+        executionStrategy: "polymarket_first_exact",
+        riskHedge: true,
+        hedgeFailureReason,
+      });
+    }
+
+    const hedgeContext: LiveOrderContext = {
+      ...kalshiContext,
+      maxBuyPrice: hedge.maxBuyPrice,
+      requiredCollateral: hedge.requiredCollateral,
+    };
+    const kalshiPreflight = await this.preflightVenueOrders([
+      { client: this.kalshiClient, leg: hedge.leg, context: hedgeContext },
+    ]);
+    if (kalshiPreflight) {
+      const hedgeFailureReason = `fresh Kalshi preflight failed: ${kalshiPreflight}`;
+      const kalshi = this.notSubmittedResult(
+        "kalshi",
+        kalshiContext.clientOrderId,
+        `not submitted because ${hedgeFailureReason}`,
+      );
+      return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
+        quoteSnapshot: hedge.quoteSnapshot,
+        executionTimings: this.executionTimings(timings.executeStartedAt, kalshi, confirmedPolymarket, {
+          preflightStartedAt: timings.preflightStartedAt,
+          preflightCompletedAt: timings.preflightCompletedAt,
+          hotGateStartedAt: timings.hotGateStartedAt,
+          hotGateCompletedAt: timings.hotGateCompletedAt,
+          postFillHedgeDecisionMs,
+          firstVenue: "polymarket",
+          firstVenueReason,
+          firstVenueVwap,
+          venueConfirmations: polymarketConfirmations ?? undefined,
+        }),
+        venueConfirmations: polymarketConfirmations,
+        executionStrategy: "polymarket_first_exact",
+        riskHedge: true,
+        hedgeCapPrice: hedge.hedgeCapPrice,
+        hedgeFailureReason,
+      });
+    }
+
+    const kalshi = await this.placeVenueOrder(this.kalshiClient, hedge.leg, hedgeContext);
+    const kalshiConfirmations = await this.confirmVenueOrders(executionGroupId, [
+      { result: kalshi, leg: hedge.leg, submittedAtMs: Date.parse(kalshi.requestedAt) },
+    ]);
+    const venueConfirmations = {
+      ...(polymarketConfirmations ?? {}),
+      ...(kalshiConfirmations ?? {}),
+    };
+    const confirmedKalshi = this.applyVenueConfirmation(kalshi, venueConfirmations.kalshi, hedge.leg);
+    return await this.resultFromVenueOrders(executionGroupId, confirmedKalshi, confirmedPolymarket, {
+      quoteSnapshot: hedge.quoteSnapshot,
+      executionTimings: this.executionTimings(timings.executeStartedAt, confirmedKalshi, confirmedPolymarket, {
+        preflightStartedAt: timings.preflightStartedAt,
+        preflightCompletedAt: timings.preflightCompletedAt,
+        hotGateStartedAt: timings.hotGateStartedAt,
+        hotGateCompletedAt: timings.hotGateCompletedAt,
+        postFillHedgeDecisionMs,
+        firstVenue: "polymarket",
+        firstVenueReason,
+        firstVenueVwap,
+        venueConfirmations,
+      }),
+      venueConfirmations,
+      executionStrategy: "polymarket_first_exact",
+      riskHedge: true,
+      hedgeCapPrice: hedge.hedgeCapPrice,
+    });
+  }
+
   private failed(reason: string): ExecutionResult {
     return failed(reason);
+  }
+
+  private executionQualityOptions(): LiveExecutionQualityOptions {
+    return {
+      enabled: this.config.liveExecutionQualityGateEnabled,
+      lookbackMs: this.config.liveExecutionQualityLookbackMs,
+      sampleLimit: this.config.liveExecutionQualitySampleLimit,
+      minSamples: this.config.liveExecutionQualityMinSamples,
+      minExactFillRate: this.config.liveExecutionQualityMinExactFillRate,
+    };
   }
 
   private withRecoveryMetadata(
@@ -612,7 +807,11 @@ export class LiveExecutor implements ArbExecutor {
     reconciliation: { reason: string | null; quarantinedExposureDollars?: number | null; quarantinedSignalCount?: number | null },
     userStreamReason: string | null,
     partialFillLocked = this.partialFillLocked,
+    exactExposureReason: string | null = null,
+    executionQualityReason: string | null = null,
   ): { state: LiveRiskState; reason: string | null } {
+    if (this.config.liveExactExposureRequired && exactExposureReason) return { state: "blocked", reason: exactExposureReason };
+    if (this.config.liveExecutionQualityGateEnabled && executionQualityReason) return { state: "blocked", reason: executionQualityReason };
     if (!this.config.liveAutoHardlocksEnabled) {
       return {
         state: "auto_hardlocks_disabled",
@@ -919,14 +1118,16 @@ export class LiveExecutor implements ArbExecutor {
     kalshi: VenueOrderResult,
     polymarket: VenueOrderResult,
     confirmations: VenueConfirmations | null,
+    kalshiLeg: ArbLeg,
+    polymarketLeg: ArbLeg,
   ): { kalshi: VenueOrderResult; polymarket: VenueOrderResult } {
     return {
-      kalshi: this.applyVenueConfirmation(kalshi, confirmations?.kalshi),
-      polymarket: this.applyVenueConfirmation(polymarket, confirmations?.polymarket),
+      kalshi: this.applyVenueConfirmation(kalshi, confirmations?.kalshi, kalshiLeg),
+      polymarket: this.applyVenueConfirmation(polymarket, confirmations?.polymarket, polymarketLeg),
     };
   }
 
-  private applyVenueConfirmation(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined): VenueOrderResult {
+  private applyVenueConfirmation(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined, leg: ArbLeg): VenueOrderResult {
     if (!confirmation || confirmation.status !== "confirmed") return result;
     const fillCount = typeof confirmation.fillCount === "number" ? confirmation.fillCount : result.fillCount;
     if (fillCount == null || fillCount <= 0) return result;
@@ -943,7 +1144,9 @@ export class LiveExecutor implements ArbExecutor {
         : result.orderId,
       status: "filled",
       fillCount,
-      fillPrice: typeof confirmation.fillPrice === "number" ? confirmation.fillPrice : result.fillPrice,
+      fillPrice: typeof confirmation.fillPrice === "number"
+        ? economicFillPriceForLeg(result.venue, leg.direction, confirmation.fillPrice, leg.ask)
+        : result.fillPrice,
       fee: typeof confirmation.fee === "number" ? confirmation.fee : result.fee ?? null,
       exchangeTimestampMs: typeof confirmation.exchangeTimestampMs === "number" ? confirmation.exchangeTimestampMs : result.exchangeTimestampMs ?? null,
       respondedAt: receivedAtMs == null ? result.respondedAt : new Date(receivedAtMs).toISOString(),

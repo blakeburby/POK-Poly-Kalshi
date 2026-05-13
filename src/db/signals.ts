@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import type { FilledAttempt } from "../scanner/reentry";
 import { buildSyntheticStructureRisk } from "../scanner/payoff";
+import { buildLiveExecutionQualityStatus, liveExecutionQualityBlockReason, type LiveExecutionQualityOptions } from "../execution/execution-quality";
 
 export interface QueryResult<T> {
   rows: T[];
@@ -255,17 +256,13 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
-    executionStrategy: row.execution_strategy === "parallel_limit_rest"
-      ? "parallel_limit_rest"
-      : row.execution_strategy === "parallel_fak"
-      ? "parallel_fak"
-      : row.execution_strategy === "parallel_fok"
-      ? "parallel_fok"
-      : row.execution_strategy === "parallel_canary"
-        ? "parallel_canary"
-        : row.execution_strategy === "sequential_hedge"
-          ? "sequential_hedge"
-          : null,
+    executionStrategy: row.execution_strategy === "polymarket_first_exact" ? "polymarket_first_exact"
+      : row.execution_strategy === "parallel_limit_rest" ? "parallel_limit_rest"
+      : row.execution_strategy === "parallel_fak" ? "parallel_fak"
+      : row.execution_strategy === "parallel_fok" ? "parallel_fok"
+      : row.execution_strategy === "parallel_canary" ? "parallel_canary"
+      : row.execution_strategy === "sequential_hedge" ? "sequential_hedge"
+      : null,
     riskHedge: booleanFrom(row.risk_hedge),
     realizedGuaranteedProfit: numberFrom(row.realized_guaranteed_profit),
     hedgeCapPrice: numberFrom(row.hedge_cap_price),
@@ -578,6 +575,65 @@ export class SignalStore {
       LIMIT $2
     `, [now, limit]);
     return result.rows.map(signalFromRow);
+  }
+
+  async listLiveExactExposureSignals(limit = 500): Promise<DashboardSignal[]> {
+    const result = await this.db.query<DashboardSignalRow>(`
+      SELECT ${SIGNAL_COLUMNS}
+      FROM cross_venue_arb_signals
+      WHERE execution_group_id IS NOT NULL
+        AND reconciliation_resolved_at IS NULL
+        AND (
+          risk_quarantined_at IS NOT NULL
+          OR partial_fill = TRUE
+          OR ABS(COALESCE(kalshi_fill_count, 0) - COALESCE(polymarket_fill_count, 0)) > 0.000001
+          OR kalshi_status IN ('unknown', 'unexpected_fill_count')
+          OR polymarket_status IN ('unknown', 'unexpected_fill_count')
+        )
+      ORDER BY updated_at DESC
+      LIMIT $1
+    `, [limit]);
+    return result.rows.map(signalFromRow);
+  }
+
+  async liveExactExposureBlockReason(_now: number): Promise<string | null> {
+    const signals = await this.listLiveExactExposureSignals(50);
+    const signal = signals[0];
+    if (!signal) return null;
+    const kalshiCount = signal.kalshiFillCount ?? 0;
+    const polymarketCount = signal.polymarketFillCount ?? 0;
+    if (signal.riskQuarantinedAt != null) {
+      return `live exact-exposure guard blocked: signal #${signal.id} has unresolved quarantined exposure`;
+    }
+    if (signal.partialFill) return `live exact-exposure guard blocked: signal #${signal.id} is marked partial_fill`;
+    if (Math.abs(kalshiCount - polymarketCount) > 0.000001) {
+      return `live exact-exposure guard blocked: signal #${signal.id} fill mismatch kalshi=${kalshiCount} polymarket=${polymarketCount}`;
+    }
+    return `live exact-exposure guard blocked: signal #${signal.id} has unresolved venue status`;
+  }
+
+  async listLiveExecutionQualitySignals(now: number, lookbackMs: number, limit = 50): Promise<DashboardSignal[]> {
+    const sinceMs = Math.max(0, now - Math.max(0, lookbackMs));
+    const result = await this.db.query<DashboardSignalRow>(`
+      SELECT ${SIGNAL_COLUMNS}
+      FROM cross_venue_arb_signals
+      WHERE execution_group_id IS NOT NULL
+        AND action IN ('filled', 'failed')
+        AND updated_at >= to_timestamp($1 / 1000.0)
+      ORDER BY updated_at DESC
+      LIMIT $2
+    `, [sinceMs, limit]);
+    return result.rows.map(signalFromRow);
+  }
+
+  async liveExecutionQualityStatus(now: number, options: LiveExecutionQualityOptions) {
+    const signals = await this.listLiveExecutionQualitySignals(now, options.lookbackMs, options.sampleLimit);
+    return buildLiveExecutionQualityStatus(signals, null, options);
+  }
+
+  async liveExecutionQualityBlockReason(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null> {
+    const signals = await this.listLiveExecutionQualitySignals(now, options.lookbackMs, options.sampleLimit);
+    return liveExecutionQualityBlockReason(buildLiveExecutionQualityStatus(signals, candidate, options));
   }
 
   async liveReconciliationBlockReason(

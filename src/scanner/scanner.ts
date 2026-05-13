@@ -4,6 +4,7 @@ import { logEvent } from "../logger";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { ArbCandidate, DashboardSignal } from "../types";
 import type { SignalStore } from "../db/signals";
+import type { LiveExecutionQualityOptions } from "../execution/execution-quality";
 import { pairExecutableCandidates } from "./pairing";
 import { ReentryThrottle } from "./reentry";
 import { protectedCandidateBlockReason } from "./safety";
@@ -21,8 +22,13 @@ export interface ScannerOptions {
   maxLiveTradesPerWindow?: number;
   maxUnresolvedExposureDollars?: number;
   liveAutoHardlocksEnabled?: boolean;
+  liveExactExposureRequired?: boolean;
+  liveExecutionQualityGateEnabled?: boolean;
+  liveExecutionQualityOptions?: LiveExecutionQualityOptions;
   liveExposure?: {
     liveSubmittedAttemptBlockReason?(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null>;
+    liveExactExposureBlockReason?(now: number): Promise<string | null>;
+    liveExecutionQualityBlockReason?(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null>;
     liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
     observeSignal?(signal: DashboardSignal): void;
   };
@@ -344,6 +350,14 @@ export class CrossVenueArbScanner {
     }
     const submittedAttemptReason = await this.options.liveExposure?.liveSubmittedAttemptBlockReason?.(candidate, now, maxTrades);
     if (submittedAttemptReason) return submittedAttemptReason;
+    if (this.options.liveExactExposureRequired) {
+      const exactExposureReason = await this.options.liveExposure?.liveExactExposureBlockReason?.(now);
+      if (exactExposureReason) return exactExposureReason;
+    }
+    if (this.options.liveExecutionQualityGateEnabled && this.options.liveExecutionQualityOptions) {
+      const qualityReason = await this.options.liveExposure?.liveExecutionQualityBlockReason?.(candidate, now, this.options.liveExecutionQualityOptions);
+      if (qualityReason) return qualityReason;
+    }
     if (this.options.liveAutoHardlocksEnabled === false) return null;
     return await this.options.liveExposure?.liveExposureBlockReason(
       candidate,

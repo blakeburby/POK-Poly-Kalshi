@@ -65,6 +65,12 @@ export interface AppConfig {
   liveFinalRecoveryPollMs: number;
   liveAutoResolveVerifiedIncidents: boolean;
   liveAutoHardlocksEnabled: boolean;
+  liveExactExposureRequired: boolean;
+  liveExecutionQualityGateEnabled: boolean;
+  liveExecutionQualityLookbackMs: number;
+  liveExecutionQualitySampleLimit: number;
+  liveExecutionQualityMinSamples: number;
+  liveExecutionQualityMinExactFillRate: number;
   livePartialFillLockMode: LivePartialFillLockMode;
   liveMaxUnresolvedExposureDollars: number;
   liveReconcileBeforeTrade: boolean;
@@ -103,8 +109,8 @@ function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]):
 
 function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMode {
   const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "parallel_limit_rest").toLowerCase();
-  if (value === "parallel_fok" || value === "parallel_fak" || value === "parallel_limit_rest") return value;
-  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok, parallel_fak, or parallel_limit_rest");
+  if (value === "parallel_fok" || value === "parallel_fak" || value === "parallel_limit_rest" || value === "polymarket_first_exact") return value;
+  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
 }
 
 function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLockMode {
@@ -184,6 +190,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveFinalRecoveryPollMs: envNumber(env, "LIVE_FINAL_RECOVERY_POLL_MS", 250),
     liveAutoResolveVerifiedIncidents: envBoolean(env, "LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS", true),
     liveAutoHardlocksEnabled: envBoolean(env, "LIVE_AUTO_HARDLOCKS_ENABLED", true),
+    liveExactExposureRequired: envBoolean(env, "LIVE_EXACT_EXPOSURE_REQUIRED", true),
+    liveExecutionQualityGateEnabled: envBoolean(env, "LIVE_EXECUTION_QUALITY_GATE_ENABLED", true),
+    liveExecutionQualityLookbackMs: envNumber(env, "LIVE_EXECUTION_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),
+    liveExecutionQualitySampleLimit: envNumber(env, "LIVE_EXECUTION_QUALITY_SAMPLE_LIMIT", 50),
+    liveExecutionQualityMinSamples: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_SAMPLES", 5),
+    liveExecutionQualityMinExactFillRate: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_EXACT_FILL_RATE", 0.4),
     livePartialFillLockMode: envLivePartialFillLockMode(env),
     liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),

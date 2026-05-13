@@ -34,6 +34,15 @@ function economicPrice(rawPrice: unknown, side: unknown): number | null {
   return Math.round(bounded * 1_000_000_000) / 1_000_000_000;
 }
 
+function economicSide(msg: Record<string, unknown>, fallbackSide: string | null): string | null {
+  const purchasedSide = stringOrNull(msg.purchased_side);
+  if (purchasedSide) return purchasedSide;
+  if (msg.is_yes === false || String(msg.is_yes).toLowerCase() === "false") return "no";
+  if (msg.is_yes === true || String(msg.is_yes).toLowerCase() === "true") return "yes";
+  if (fallbackSide === "yes" || fallbackSide === "no") return fallbackSide;
+  return fallbackSide;
+}
+
 export function buildKalshiUserStreamSubscribeMessage(id: number, marketTickers: Iterable<string>): Record<string, unknown> {
   const tickers = [...marketTickers].sort();
   const params: Record<string, unknown> = { channels: ["user_orders", "fill"] };
@@ -50,6 +59,7 @@ export function parseKalshiUserStreamMessage(payload: unknown, receivedAtMs = Da
 
   if (type === "user_order") {
     const side = stringOrNull(msg.side) ?? (msg.is_yes === false ? "no" : "yes");
+    const priceSide = economicSide(msg, side);
     return {
       venue: "kalshi" as const,
       clientOrderId: stringOrNull(msg.client_order_id),
@@ -60,7 +70,7 @@ export function parseKalshiUserStreamMessage(payload: unknown, receivedAtMs = Da
       status: stringOrNull(msg.status) ?? "unknown",
       fillCount: numberOrNull(msg.fill_count_fp ?? msg.fill_count),
       remainingCount: numberOrNull(msg.remaining_count_fp ?? msg.remaining_count),
-      fillPrice: economicPrice(msg.yes_price_dollars ?? msg.yes_price, side),
+      fillPrice: economicPrice(msg.yes_price_dollars ?? msg.yes_price, priceSide),
       fee: numberOrNull(msg.taker_fees_dollars ?? msg.maker_fees_dollars),
       exchangeTimestampMs: timestampMs(msg.last_update_ts_ms ?? msg.created_ts_ms),
       sequence: numberOrNull(record.sid),
@@ -71,6 +81,7 @@ export function parseKalshiUserStreamMessage(payload: unknown, receivedAtMs = Da
 
   if (type === "fill") {
     const side = stringOrNull(msg.purchased_side) ?? stringOrNull(msg.side);
+    const priceSide = economicSide(msg, side);
     return {
       venue: "kalshi" as const,
       clientOrderId: null,
@@ -81,7 +92,7 @@ export function parseKalshiUserStreamMessage(payload: unknown, receivedAtMs = Da
       status: "filled",
       fillCount: numberOrNull(msg.count_fp ?? msg.count),
       remainingCount: null,
-      fillPrice: economicPrice(msg.yes_price_dollars ?? msg.yes_price, side),
+      fillPrice: economicPrice(msg.yes_price_dollars ?? msg.yes_price, priceSide),
       fee: numberOrNull(msg.fee ?? msg.fees_dollars),
       exchangeTimestampMs: timestampMs(msg.ts_ms ?? msg.ts),
       sequence: numberOrNull(record.sid),

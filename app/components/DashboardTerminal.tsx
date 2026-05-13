@@ -42,6 +42,7 @@ import { formatCurrency as formatActivityCurrency, formatPercentValue as formatA
 import { useTradingData } from "../hooks/useTradingData";
 import type { RiskSurface3DProps } from "./dashboard/risk-surface-types";
 import { isExactLiveFilledSignal } from "../../src/analytics/performance";
+import { economicFillPriceForSignalVenue } from "../../src/execution/economic-prices";
 
 type StreamState = "connecting" | "live" | "degraded";
 type SignalVenue = "kalshi" | "polymarket";
@@ -437,10 +438,12 @@ function averageSignalLatency(signals: DashboardSignal[]): number | null {
 }
 
 function fillAuditPnl(signal: DashboardSignal): number {
-  if (signal.realizedGuaranteedProfit != null && Number.isFinite(signal.realizedGuaranteedProfit)) return signal.realizedGuaranteedProfit;
-  if (signal.kalshiFillPrice != null && signal.polymarketFillPrice != null) {
-    return 1 - signal.kalshiFillPrice - signal.polymarketFillPrice;
+  const kalshiFillPrice = economicFillPriceForSignalVenue(signal, "kalshi", signal.kalshiFillPrice);
+  const polymarketFillPrice = economicFillPriceForSignalVenue(signal, "polymarket", signal.polymarketFillPrice);
+  if (kalshiFillPrice != null && polymarketFillPrice != null) {
+    return 1 - kalshiFillPrice - polymarketFillPrice;
   }
+  if (signal.realizedGuaranteedProfit != null && Number.isFinite(signal.realizedGuaranteedProfit)) return signal.realizedGuaranteedProfit;
   return signal.guaranteedProfit;
 }
 
@@ -2526,7 +2529,7 @@ function legForVenue(signal: DashboardSignal, venue: SignalVenue) {
 }
 
 function fillPriceForVenue(signal: DashboardSignal, venue: SignalVenue): number | null {
-  return venue === "kalshi" ? signal.kalshiFillPrice : signal.polymarketFillPrice;
+  return economicFillPriceForSignalVenue(signal, venue, venue === "kalshi" ? signal.kalshiFillPrice : signal.polymarketFillPrice);
 }
 
 function fillIdForVenue(signal: DashboardSignal, venue: SignalVenue): string | null {

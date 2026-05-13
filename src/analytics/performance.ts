@@ -8,6 +8,7 @@ import type {
   DashboardAnalyticsWindow,
   DashboardSignal,
 } from "../types";
+import { economicFillPriceForSignalVenue } from "../execution/economic-prices";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -107,8 +108,10 @@ export function oldestAnalyticsSinceMs(now = Date.now()): number {
 
 export function estimatedGuaranteedPnl(signal: DashboardSignal): number | null {
   if (!isExactLiveFilledSignal(signal)) return null;
-  const fillPremium = signal.kalshiFillPrice != null && signal.polymarketFillPrice != null
-    ? signal.kalshiFillPrice + signal.polymarketFillPrice
+  const kalshiFillPrice = economicFillPriceForSignalVenue(signal, "kalshi", signal.kalshiFillPrice);
+  const polymarketFillPrice = economicFillPriceForSignalVenue(signal, "polymarket", signal.polymarketFillPrice);
+  const fillPremium = kalshiFillPrice != null && polymarketFillPrice != null
+    ? kalshiFillPrice + polymarketFillPrice
     : signal.premium;
   if (!Number.isFinite(fillPremium)) return null;
   return roundMetric(1 - fillPremium);
@@ -119,8 +122,14 @@ function signalTrade(signal: DashboardSignal): AnalyticsTrade | null {
   const timestampMs = new Date(signal.updatedAt).getTime();
   const createdAtMs = new Date(signal.createdAt).getTime();
   if (!Number.isFinite(timestampMs)) return null;
-  const fillPremium = signal.kalshiFillPrice != null && signal.polymarketFillPrice != null
-    ? roundMetric(signal.kalshiFillPrice + signal.polymarketFillPrice)
+  const kalshiFillPrice = signal.kalshiFillPrice == null
+    ? null
+    : economicFillPriceForSignalVenue(signal, "kalshi", signal.kalshiFillPrice) ?? signal.kalshiFillPrice;
+  const polymarketFillPrice = signal.polymarketFillPrice == null
+    ? null
+    : economicFillPriceForSignalVenue(signal, "polymarket", signal.polymarketFillPrice) ?? signal.polymarketFillPrice;
+  const fillPremium = kalshiFillPrice != null && polymarketFillPrice != null
+    ? roundMetric(kalshiFillPrice + polymarketFillPrice)
     : signal.action === "filled" ? signal.premium : null;
   const askPremium = Number.isFinite(signal.lower.ask + signal.higher.ask) ? roundMetric(signal.lower.ask + signal.higher.ask) : signal.premium;
   return {
