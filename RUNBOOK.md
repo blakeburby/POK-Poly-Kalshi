@@ -45,7 +45,7 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_USER_STREAM_CONFIRM_TIMEOUT_MS=2500`: private-stream confirmation wait after submit.
 - `LIVE_RECONCILE_BEFORE_TRADE=true`: block entries when unresolved venue evidence requires operator review.
 - `LIVE_AUTO_HARDLOCKS_ENABLED=true`: normal persistent-lock policy. Temporary operator overrides must be explicit and visible on the dashboard.
-- `LIVE_EXACT_EXPOSURE_REQUIRED=true`: block entries whenever a submitted signal has unresolved partial, mismatched, unknown, or quarantined exposure.
+- `LIVE_EXACT_EXPOSURE_REQUIRED=false`: unresolved partial, mismatched, unknown, or quarantined exposure stays audited and visible by default but does not block new entries. Set this to `true` to restore strict exact-exposure blocking.
 - `LIVE_EXECUTION_QUALITY_GATE_ENABLED=true`: block entries when recent Polymarket exact-fill quality is too poor or estimated executable edge turns negative after mismatch cost.
 - `LIVE_PARTIAL_FILL_LOCK_MODE=quarantine`: verified bounded one-sided exposure can be quarantined instead of globally stopping the worker.
 - `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS=10`: total quarantined exposure cap.

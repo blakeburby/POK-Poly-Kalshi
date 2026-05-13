@@ -221,7 +221,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       liveFinalRecoveryPollMs: 250,
       liveAutoResolveVerifiedIncidents: true,
       liveAutoHardlocksEnabled: true,
-      liveExactExposureRequired: true,
+      liveExactExposureRequired: false,
       liveExecutionQualityGateEnabled: true,
       liveExecutionQualityLookbackMs: 30 * 60 * 1_000,
       liveExecutionQualitySampleLimit: 50,

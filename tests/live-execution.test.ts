@@ -117,7 +117,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFinalRecoveryPollMs: 250,
     liveAutoResolveVerifiedIncidents: true,
     liveAutoHardlocksEnabled: true,
-    liveExactExposureRequired: true,
+    liveExactExposureRequired: false,
     liveExecutionQualityGateEnabled: true,
     liveExecutionQualityLookbackMs: 30 * 60 * 1_000,
     liveExecutionQualitySampleLimit: 50,
@@ -1989,7 +1989,8 @@ test("live executor defaults to parallel aggressive limit and starts both venue 
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "polymarket_first_exact" }).liveOrderPlacementMode, "polymarket_first_exact");
   assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
-  assert.equal(loadConfig({}).liveExactExposureRequired, true);
+  assert.equal(loadConfig({}).liveExactExposureRequired, false);
+  assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
   assert.equal(loadConfig({}).liveKalshiPrearmEnabled, true);
   assert.equal(loadConfig({}).liveKalshiPrearmMaxAgeMs, 5_000);
@@ -2620,6 +2621,80 @@ test("live executor readiness surfaces persisted quarantined exposure after rest
   assert.equal(readiness.reconciliation.quarantinedExposureDollars, 4.2);
   assert.equal(readiness.reconciliation.quarantinedSignalCount, 1);
   assert.match(readiness.riskStateReason ?? "", /trading with quarantined unresolved exposure 4.20/);
+});
+
+test("live executor readiness does not block on unresolved exact exposure when guard is disabled", async () => {
+  const now = 1_799_999_900_000;
+  const { lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const exposureReader = {
+    unresolvedRiskQuarantineExposureDollars: async () => 0,
+    liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
+    liveExactExposureBlockReason: async () => {
+      throw new Error("exact-exposure reader should not run when disabled");
+    },
+  };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveAutoHardlocksEnabled: false,
+      liveExactExposureRequired: false,
+      liveExecutionQualityGateEnabled: false,
+      liveUserStreamsEnabled: true,
+    }),
+    books,
+    new FakeVenueClient("kalshi"),
+    new FakeVenueClient("polymarket"),
+    () => now,
+    new FakeLiveLockStore(),
+    undefined,
+    new FakeConfirmationMonitor(),
+    exposureReader,
+  );
+
+  const readiness = await executor.readiness(now);
+
+  assert.equal(readiness.exactExposureRequired, false);
+  assert.equal(readiness.riskState, "auto_hardlocks_disabled");
+  assert.doesNotMatch(readiness.riskStateReason ?? "", /exact-exposure guard/);
+});
+
+test("live executor readiness blocks unresolved exact exposure when guard is enabled", async () => {
+  const now = 1_799_999_900_000;
+  const { lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const exposureReader = {
+    unresolvedRiskQuarantineExposureDollars: async () => 0,
+    liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
+    liveExactExposureBlockReason: async () => "live exact-exposure guard blocked: signal #119283 is marked partial_fill",
+  };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveAutoHardlocksEnabled: false,
+      liveExactExposureRequired: true,
+      liveExecutionQualityGateEnabled: false,
+      liveUserStreamsEnabled: true,
+    }),
+    books,
+    new FakeVenueClient("kalshi"),
+    new FakeVenueClient("polymarket"),
+    () => now,
+    new FakeLiveLockStore(),
+    undefined,
+    new FakeConfirmationMonitor(),
+    exposureReader,
+  );
+
+  const readiness = await executor.readiness(now);
+
+  assert.equal(readiness.exactExposureRequired, true);
+  assert.equal(readiness.riskState, "blocked");
+  assert.match(readiness.riskStateReason ?? "", /signal #119283 is marked partial_fill/);
 });
 
 test("live exposure cache reads persisted quarantine totals from the backing store", async () => {

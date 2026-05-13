@@ -92,7 +92,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFinalRecoveryPollMs: 250,
     liveAutoResolveVerifiedIncidents: true,
     liveAutoHardlocksEnabled: true,
-    liveExactExposureRequired: true,
+    liveExactExposureRequired: false,
     liveExecutionQualityGateEnabled: true,
     liveExecutionQualityLookbackMs: 30 * 60 * 1_000,
     liveExecutionQualitySampleLimit: 50,
