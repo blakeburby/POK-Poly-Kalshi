@@ -440,9 +440,9 @@ export class KalshiOrderClient implements VenueOrderClient {
   constructor(private readonly config: AppConfig, private readonly fetchFn: typeof fetch = fetch) {}
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
-    const cachedAgeMs = this.cachedReadiness?.lastCheckedAt == null ? Number.POSITIVE_INFINITY : now - this.cachedReadiness.lastCheckedAt;
-    if (this.cachedReadiness && cachedAgeMs >= 0 && cachedAgeMs < 30_000) return this.cachedReadiness;
-    return requireKalshiConfigured(now);
+    return this.checkReadiness(now, {
+      requiredCollateral: roundPrice(this.config.liveOrderSize + this.config.liveCollateralBufferDollars),
+    });
   }
 
   async warm(options: { now?: number; requiredCollateral?: number } = {}): Promise<void> {
