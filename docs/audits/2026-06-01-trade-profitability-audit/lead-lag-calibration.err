@@ -1,0 +1,4 @@
+{
+  "error": "LEAD_LAG_CALIBRATION_DB_ERROR",
+  "message": "column \"lead_lag_snapshot\" does not exist"
+}

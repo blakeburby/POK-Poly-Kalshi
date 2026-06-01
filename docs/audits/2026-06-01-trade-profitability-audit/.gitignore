@@ -1,0 +1,4 @@
+# Raw production exports are intentionally local-only.
+*.csv
+account-snapshot.json
+lead-lag-calibration.json
