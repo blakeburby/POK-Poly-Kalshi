@@ -3,7 +3,7 @@ import type { TradingActivitySnapshot } from "../types/trading";
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
-export type LiveOrderPlacementMode = "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
+export type LiveOrderPlacementMode = "parallel_market" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
 export type LiveKalshiPrearmPricePolicy = "patch_after_fill";
 export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
@@ -131,6 +131,7 @@ export interface QuoteSnapshot {
   quoteSkewMs: number | null;
   kalshi: QuoteSnapshotLeg | null;
   polymarket: QuoteSnapshotLeg | null;
+  leadLagSnapshot?: LeadLagSnapshot | null;
   projectedPremium: number | null;
   projectedEdge: number | null;
   projectedPremiumAtLimit?: number | null;
@@ -141,6 +142,42 @@ export interface QuoteSnapshot {
   polymarketMaxBuyPrice?: number | null;
   minProfitDollars: number;
   failureReason: string | null;
+}
+
+export type LeadLagVenue = Venue | "none";
+
+export interface LeadLagWindowSnapshot {
+  windowMs: number;
+  kalshiMove: number | null;
+  polymarketMove: number | null;
+  kalshiUpdateCount: number;
+  polymarketUpdateCount: number;
+  kalshiLiquidity: number | null;
+  polymarketLiquidity: number | null;
+  kalshiOfi: number | null;
+  polymarketOfi: number | null;
+  firstKalshiMoveAtMs: number | null;
+  firstPolymarketMoveAtMs: number | null;
+  leaderVenue: LeadLagVenue;
+}
+
+export interface LeadLagSnapshot {
+  version: string;
+  scoredAt: number;
+  shadowMode: boolean;
+  gateEnabled: boolean;
+  gatePassed: boolean;
+  blockReason: string | null;
+  leaderVenue: LeadLagVenue;
+  laggingVenue: Venue | null;
+  lagMsEstimate: number | null;
+  confidence: number;
+  stalenessScore: number;
+  adverseSelectionScore: number;
+  cheapLegVenue: Venue | null;
+  cheapLegIsLagging: boolean | null;
+  windows: LeadLagWindowSnapshot[];
+  reasons: string[];
 }
 
 export interface ExecutionTimings {
@@ -191,7 +228,7 @@ export interface ReconciliationResolution {
   notes?: string | null;
 }
 
-export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
+export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_market" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
 
 export interface UserStreamVenueState {
   enabled: boolean;
@@ -273,6 +310,11 @@ export interface FillQualityFeatures {
   polymarketSignedOrderReuseRate: number | null;
   polymarketSignedOrderFallbackRate: number | null;
   recentVenueEventCount: number;
+  leadLagLeaderVenue?: LeadLagVenue | null;
+  leadLagConfidence?: number | null;
+  leadLagStalenessScore?: number | null;
+  leadLagAdverseSelectionScore?: number | null;
+  leadLagCheapLegIsLagging?: boolean | null;
 }
 
 export interface FillQualitySnapshot {
@@ -320,6 +362,7 @@ export interface ExecutionResult {
   quoteSnapshot?: QuoteSnapshot | null;
   depthVwap?: number | null;
   projectedEdgeAfterFees?: number | null;
+  leadLagSnapshot?: LeadLagSnapshot | null;
   fillQualitySnapshot?: FillQualitySnapshot | null;
   expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
@@ -371,6 +414,7 @@ export interface SignalUpdate {
   quoteSnapshot?: QuoteSnapshot | null;
   depthVwap?: number | null;
   projectedEdgeAfterFees?: number | null;
+  leadLagSnapshot?: LeadLagSnapshot | null;
   fillQualitySnapshot?: FillQualitySnapshot | null;
   expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
@@ -429,6 +473,7 @@ export interface DashboardSignal {
   quoteSnapshot?: QuoteSnapshot | null;
   depthVwap?: number | null;
   projectedEdgeAfterFees?: number | null;
+  leadLagSnapshot?: LeadLagSnapshot | null;
   fillQualitySnapshot?: FillQualitySnapshot | null;
   expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
@@ -463,6 +508,7 @@ export interface VenueExecutionReadiness {
   signatureType?: number | null;
   collateralBalanceRaw?: number | null;
   collateralBalanceNormalized?: number | null;
+  kalshiBalanceField?: string | null;
   collateralAllowanceRaw?: number | null;
   collateralAllowanceNormalized?: number | null;
   clobCredentialsSource?: "configured" | "derived" | "created" | null;
@@ -718,6 +764,7 @@ export interface DashboardSnapshot {
     scanHeartbeatMs: number;
     staleBookMs: number;
     liveMaxTradesPerWindow: number;
+    liveOrderSize: number;
     liveTakerPriceCushionCents?: number;
     liveQuoteMaxAgeMs: number;
     liveQuoteSyncMaxSkewMs: number;
@@ -761,6 +808,12 @@ export interface DashboardSnapshot {
     liveFillQualitySampleLimit: number;
     liveFillQualityMinSamples: number;
     liveFillQualityModelVersion: string;
+    liveLeadLagScoringEnabled: boolean;
+    liveLeadLagGateEnabled: boolean;
+    liveLeadLagModelVersion: string;
+    liveLeadLagWindowsMs: number[];
+    liveLeadLagMinConfidence: number;
+    liveLeadLagMaxAdverseSelectionScore: number;
     livePartialFillLockMode: LivePartialFillLockMode;
     liveMaxUnresolvedExposureDollars: number;
     liveReconcileBeforeTrade: boolean;

@@ -4,7 +4,7 @@ import { loadConfig } from "../config";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { VenueOrderEventReader, VenueOrderEventWriter } from "../db/venue-order-events";
 import { protectedCandidateBlockReason } from "../scanner/safety";
-import type { ArbCandidate, ArbLeg, BinaryContract, DashboardSignal, ExecutionResult, ExecutionStrategy, ExecutionTimings, FillQualitySnapshot, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveOrderPlacementMode, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
+import type { ArbCandidate, ArbLeg, BinaryContract, DashboardSignal, ExecutionResult, ExecutionStrategy, ExecutionTimings, FillQualitySnapshot, LeadLagSnapshot, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveOrderPlacementMode, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
 import {
   failedVenueResult,
   generatedClientOrderId,
@@ -18,6 +18,7 @@ import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
 import { fillQualityBlockReason, scoreFillQuality } from "./fill-quality";
 import { evaluateLiveQuoteQuality } from "./quote-quality";
+import { leadLagBlockReason, scoreLeadLag, type LeadLagHistory } from "../signals/lead-lag";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
 
 export interface ArbExecutor {
@@ -121,6 +122,7 @@ function protectedGuardFailure(candidate: ArbCandidate, minProfitDollars: number
 
 export interface LiveExecutionBookReader {
   snapshot(): { kalshi: BinaryContract[]; polymarket: BinaryContract[] };
+  leadLagHistoryForQuoteSnapshot?(snapshot: QuoteSnapshot, nowMs: number, lookbackMs: number): LeadLagHistory;
 }
 
 interface PreparedLeg {
@@ -162,6 +164,7 @@ interface VenueExecutionPlan {
 
 interface ExecutionMetadata {
   quoteSnapshot?: QuoteSnapshot | null;
+  leadLagSnapshot?: LeadLagSnapshot | null;
   fillQualitySnapshot?: FillQualitySnapshot | null;
   expectedExecutableEdge?: number | null;
   executionTimings?: ExecutionTimings | null;
@@ -407,8 +410,8 @@ export class LiveExecutor implements ArbExecutor {
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
-    const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact"
-      ? "polymarket_first_exact"
+    const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact" || this.config.liveOrderPlacementMode === "parallel_market"
+      ? this.config.liveOrderPlacementMode
       : this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
     const limitRestMs = placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
     let kalshiContext: LiveOrderContext = {
@@ -416,6 +419,7 @@ export class LiveExecutor implements ArbExecutor {
       clientOrderId: kalshiClientOrderId,
       size: this.config.liveOrderSize,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
+      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars),
       orderGroupId: this.config.liveKalshiOrderGroupEnabled ? this.config.liveKalshiOrderGroupId || undefined : undefined,
       placementMode,
       limitRestMs,
@@ -429,6 +433,17 @@ export class LiveExecutor implements ArbExecutor {
       placementMode,
       limitRestMs,
     };
+    let leadLagSnapshot = this.leadLagSnapshot(candidate, prepared.quoteSnapshot);
+    const initialLeadLagBlock = leadLagBlockReason(leadLagSnapshot);
+    if (initialLeadLagBlock) {
+      const blockedAt = this.now();
+      return this.skippedWithQuoteQuality(
+        initialLeadLagBlock,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt: blockedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
+        null,
+      );
+    }
     let fillQualitySnapshot = await this.fillQualitySnapshot(candidate, prepared.quoteSnapshot, placementMode);
     const initialFillQualityBlock = fillQualityBlockReason(fillQualitySnapshot);
     if (initialFillQualityBlock) {
@@ -472,6 +487,16 @@ export class LiveExecutor implements ArbExecutor {
       );
     }
     prepared = refreshed;
+    leadLagSnapshot = this.leadLagSnapshot(candidate, prepared.quoteSnapshot);
+    const refreshedLeadLagBlock = leadLagBlockReason(leadLagSnapshot);
+    if (refreshedLeadLagBlock) {
+      return this.skippedWithQuoteQuality(
+        refreshedLeadLagBlock,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+        null,
+      );
+    }
     fillQualitySnapshot = await this.fillQualitySnapshot(candidate, prepared.quoteSnapshot, placementMode);
     const refreshedFillQualityBlock = fillQualityBlockReason(fillQualitySnapshot);
     if (refreshedFillQualityBlock) {
@@ -482,14 +507,31 @@ export class LiveExecutor implements ArbExecutor {
         fillQualitySnapshot,
       );
     }
-    kalshiContext = { ...kalshiContext, maxBuyPrice: prepared.kalshi.maxBuyPrice };
+    kalshiContext = {
+      ...kalshiContext,
+      maxBuyPrice: prepared.kalshi.maxBuyPrice,
+      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars),
+    };
     polymarketContext = {
       ...polymarketContext,
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
       requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
     };
+    const refreshedKalshiPreflight = await this.preflightVenueOrders([
+      { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
+    ]);
+    if (refreshedKalshiPreflight) {
+      const blockedAt = this.now();
+      return this.skippedWithQuoteQuality(
+        `live Kalshi hedge collateral revalidation failed: ${refreshedKalshiPreflight}`,
+        prepared.quoteSnapshot,
+        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
+        fillQualitySnapshot,
+      );
+    }
     const hotGateCompletedAt = this.now();
     const fillQualityMetadata = {
+      leadLagSnapshot,
       fillQualitySnapshot,
       expectedExecutableEdge: fillQualitySnapshot?.expectedExecutableEdge ?? null,
     };
@@ -504,17 +546,21 @@ export class LiveExecutor implements ArbExecutor {
       }, fillQualityMetadata);
     }
 
-    if (this.config.liveParallelExecutionEnabled) {
+    if (this.config.liveParallelExecutionEnabled || placementMode === "parallel_market") {
       const executionStrategy = placementMode === "parallel_limit_rest"
         ? "parallel_limit_rest"
-        : placementMode === "parallel_fak"
-          ? "parallel_fak"
-          : "parallel_fok";
+        : placementMode === "parallel_market"
+          ? "parallel_market"
+          : placementMode === "parallel_fak"
+            ? "parallel_fak"
+            : "parallel_fok";
       const firstVenueReason = placementMode === "parallel_limit_rest"
         ? `parallel aggressive limit orders submitted concurrently with ${limitRestMs ?? 0}ms rest`
-        : placementMode === "parallel_fak"
-          ? "parallel Kalshi FOK and Polymarket FAK orders submitted concurrently"
-          : "parallel FOK orders submitted concurrently";
+        : placementMode === "parallel_market"
+          ? "parallel capped market orders submitted concurrently"
+          : placementMode === "parallel_fak"
+            ? "parallel Kalshi FOK and Polymarket FAK orders submitted concurrently"
+            : "parallel FOK orders submitted concurrently";
       const [kalshi, polymarket] = await Promise.all([
         this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, kalshiContext),
         this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext),
@@ -690,7 +736,7 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
-    fillQualityMetadata: Pick<ExecutionMetadata, "fillQualitySnapshot" | "expectedExecutableEdge">,
+    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge">,
   ): Promise<ExecutionResult> {
     const firstVenueReason = `Polymarket FAK submitted first; Kalshi submits after Polymarket fill count is within ${this.polymarketFirstFillRangeLabel()}`;
     const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
@@ -859,6 +905,22 @@ export class LiveExecutor implements ArbExecutor {
     });
   }
 
+  private leadLagSnapshot(candidate: ArbCandidate, quoteSnapshot: QuoteSnapshot): LeadLagSnapshot | null {
+    if (!this.config.liveLeadLagScoringEnabled) return null;
+    const now = this.now();
+    const maxWindowMs = Math.max(1, ...this.config.liveLeadLagWindowsMs);
+    const history = this.books?.leadLagHistoryForQuoteSnapshot?.(quoteSnapshot, now, maxWindowMs) ?? { kalshi: [], polymarket: [] };
+    const snapshot = scoreLeadLag({
+      candidate,
+      quoteSnapshot,
+      history,
+      config: this.config,
+      nowMs: now,
+    });
+    quoteSnapshot.leadLagSnapshot = snapshot;
+    return snapshot;
+  }
+
   private skippedWithQuoteQuality(
     reason: string,
     quoteSnapshot: QuoteSnapshot,
@@ -870,6 +932,7 @@ export class LiveExecutor implements ArbExecutor {
       quoteSnapshot,
       depthVwap: quoteSnapshot.projectedPremium,
       projectedEdgeAfterFees: quoteSnapshot.projectedEdgeAfterFees,
+      leadLagSnapshot: quoteSnapshot.leadLagSnapshot ?? null,
       fillQualitySnapshot,
       expectedExecutableEdge: fillQualitySnapshot?.expectedExecutableEdge ?? null,
       executionTimings,
@@ -1718,6 +1781,7 @@ export class LiveExecutor implements ArbExecutor {
       quoteSnapshot: metadata.quoteSnapshot ?? null,
       depthVwap: metadata.quoteSnapshot?.projectedPremium ?? null,
       projectedEdgeAfterFees: metadata.quoteSnapshot?.projectedEdgeAfterFees ?? null,
+      leadLagSnapshot: metadata.leadLagSnapshot ?? metadata.quoteSnapshot?.leadLagSnapshot ?? null,
       fillQualitySnapshot: metadata.fillQualitySnapshot ?? null,
       expectedExecutableEdge: metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
       executionTimings: metadata.executionTimings ?? null,
@@ -1760,6 +1824,7 @@ export class LiveExecutor implements ArbExecutor {
           recoveryEvidence,
           finalizationMs,
           quoteSnapshot: metadata.quoteSnapshot ?? null,
+          leadLagSnapshot: metadata.leadLagSnapshot ?? metadata.quoteSnapshot?.leadLagSnapshot ?? null,
           fillQualitySnapshot: metadata.fillQualitySnapshot ?? null,
           expectedExecutableEdge: metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
           executionTimings: metadata.executionTimings ?? null,

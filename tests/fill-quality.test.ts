@@ -209,6 +209,48 @@ test("fill quality deterministically penalizes thin stale skewed high-latency bo
   assert.ok(weak.penaltyReasons.some((reason) => reason.includes("RTT")));
 });
 
+test("fill quality incorporates high-confidence adverse lead/lag risk", () => {
+  const base = scoreFillQuality({
+    candidate: candidate(),
+    quoteSnapshot: quote(0.05),
+    recentSignals: exactSamples(),
+    config: config(),
+    nowMs: now,
+    placementMode: "polymarket_first_exact",
+  });
+  const adverse = scoreFillQuality({
+    candidate: candidate(),
+    quoteSnapshot: quote(0.05, {
+      leadLagSnapshot: {
+        version: "heuristic-v1",
+        scoredAt: now,
+        shadowMode: true,
+        gateEnabled: false,
+        gatePassed: true,
+        blockReason: null,
+        leaderVenue: "polymarket",
+        laggingVenue: "kalshi",
+        lagMsEstimate: 120,
+        confidence: 0.82,
+        stalenessScore: 0,
+        adverseSelectionScore: 0.86,
+        cheapLegVenue: "polymarket",
+        cheapLegIsLagging: false,
+        windows: [],
+        reasons: ["Polymarket appears to lead recent book movement"],
+      },
+    }),
+    recentSignals: exactSamples(),
+    config: config(),
+    nowMs: now,
+    placementMode: "polymarket_first_exact",
+  });
+
+  assert.ok(adverse.polymarketExactFillProbability < base.polymarketExactFillProbability);
+  assert.ok((adverse.expectedExecutableEdge ?? 0) < (base.expectedExecutableEdge ?? 0));
+  assert.ok(adverse.penaltyReasons.some((reason) => reason.includes("Lead/lag")));
+});
+
 test("fill quality cold start uses conservative defaults but does not block in shadow mode", () => {
   const snapshot = scoreFillQuality({
     candidate: candidate(),

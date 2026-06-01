@@ -211,8 +211,8 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       liveHotPathWarmIntervalMs: 1_000,
       livePolymarketPresignEnabled: false,
       livePolymarketSignedOrderTtlMs: 5_000,
-      livePolymarketFirstMinFillShares: 4,
-      livePolymarketFirstMaxFillShares: 6,
+      livePolymarketFirstMinFillShares: 7,
+      livePolymarketFirstMaxFillShares: 9,
       liveLowLatencyHttpEnabled: true,
       liveUserStreamsEnabled: true,
       liveUserStreamPretradeGraceMs: 750,
@@ -229,6 +229,19 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       liveExecutionQualitySampleLimit: 50,
       liveExecutionQualityMinSamples: 5,
       liveExecutionQualityMinExactFillRate: 0.4,
+      liveFillQualityScoringEnabled: true,
+      liveFillQualityGateEnabled: false,
+      liveFillQualityMinExpectedEdge: 0.01,
+      liveFillQualityLookbackMs: 30 * 60 * 1_000,
+      liveFillQualitySampleLimit: 200,
+      liveFillQualityMinSamples: 30,
+      liveFillQualityModelVersion: "heuristic-v1",
+      liveLeadLagScoringEnabled: true,
+      liveLeadLagGateEnabled: false,
+      liveLeadLagModelVersion: "heuristic-v1",
+      liveLeadLagWindowsMs: [1_000, 5_000, 15_000, 60_000],
+      liveLeadLagMinConfidence: 0.65,
+      liveLeadLagMaxAdverseSelectionScore: 0.75,
       livePartialFillLockMode: "quarantine",
       liveMaxUnresolvedExposureDollars: 10,
       liveReconcileBeforeTrade: true,
@@ -494,6 +507,120 @@ test("signal details render compact fill-quality metadata", () => {
   assert.match(rendered, /shadow · XEV \+1c · Pair 61\.0%/);
   assert.match(rendered, /Fill Penalty/);
   assert.match(rendered, /Polymarket p95 RTT is near timeout/);
+});
+
+test("signal details warn when shadow fill-quality expected edge is below threshold", () => {
+  const detail = buildTradeDetailModel("signal", signal({
+    expectedExecutableEdge: 0.004,
+    fillQualitySnapshot: {
+      version: "heuristic-v1",
+      scoredAt: generatedAt,
+      shadowMode: true,
+      gateEnabled: false,
+      gatePassed: true,
+      blockReason: null,
+      projectedEdgeAtLimit: 0.03,
+      expectedExecutableEdge: 0.004,
+      minExpectedEdge: 0.01,
+      pairedFillProbability: 0.33,
+      kalshiExactFillProbability: 0.9,
+      polymarketExactFillProbability: 0.37,
+      expectedSlippage: 0.001,
+      expectedMismatchCost: 0.012,
+      timeoutCost: 0.004,
+      penaltyReasons: ["Recent mismatch rate is elevated"],
+      features: {
+        sampleCount: 60,
+        minSamples: 30,
+        coldStart: false,
+        orderSize: 8,
+        placementMode: "polymarket_first_exact",
+        kalshiDepth: 10,
+        polymarketDepth: 10,
+        kalshiDepthRatio: 1.25,
+        polymarketDepthRatio: 1.25,
+        kalshiSpread: 0.02,
+        polymarketSpread: 0.02,
+        kalshiQuoteAgeMs: 50,
+        polymarketQuoteAgeMs: 50,
+        quoteSkewMs: 20,
+        secondsToExpiry: 600,
+        sameExpiryAttemptCount: 1,
+        recentExactPairFillRate: 0.18,
+        recentMismatchRate: 0.5,
+        recentTimeoutRate: 0.2,
+        kalshiRecentExactFillRate: 0.9,
+        polymarketRecentExactFillRate: 0.37,
+        kalshiRttP50Ms: 100,
+        kalshiRttP95Ms: 220,
+        polymarketRttP50Ms: 900,
+        polymarketRttP95Ms: 2300,
+        kalshiConfirmationP95Ms: 180,
+        polymarketConfirmationP95Ms: 2100,
+        polymarketSignedOrderReuseRate: 0.85,
+        polymarketSignedOrderFallbackRate: 0.05,
+        recentVenueEventCount: 12,
+      },
+    },
+  }));
+  const rendered = JSON.stringify(detail);
+  assert.match(rendered, /Fill Quality/);
+  assert.match(rendered, /warning · XEV/);
+  assert.match(rendered, /Pair 33\.0%/);
+});
+
+test("signal details render compact lead-lag metadata", () => {
+  const detail = buildTradeDetailModel("signal", signal({
+    leadLagSnapshot: {
+      version: "heuristic-v1",
+      scoredAt: generatedAt,
+      shadowMode: true,
+      gateEnabled: false,
+      gatePassed: true,
+      blockReason: null,
+      leaderVenue: "polymarket",
+      laggingVenue: "kalshi",
+      lagMsEstimate: 118,
+      confidence: 0.82,
+      stalenessScore: 0.12,
+      adverseSelectionScore: 0.74,
+      cheapLegVenue: "polymarket",
+      cheapLegIsLagging: false,
+      windows: [],
+      reasons: ["Polymarket appears to lead recent book movement", "Both venue microprices moved against entry"],
+    },
+  }));
+  const rendered = JSON.stringify(detail);
+  assert.match(rendered, /Lead\/Lag/);
+  assert.match(rendered, /shadow · leader P · conf 82\.0% · stale 12\.0% · adverse 74\.0% · cheap lag no/);
+  assert.match(rendered, /Lead\/Lag Note/);
+  assert.match(rendered, /Polymarket appears to lead/);
+});
+
+test("signal details warn when shadow lead-lag would fail the simulated gate", () => {
+  const detail = buildTradeDetailModel("signal", signal({
+    leadLagSnapshot: {
+      version: "heuristic-v1",
+      scoredAt: generatedAt,
+      shadowMode: true,
+      gateEnabled: false,
+      gatePassed: true,
+      blockReason: null,
+      leaderVenue: "polymarket",
+      laggingVenue: "kalshi",
+      lagMsEstimate: 104,
+      confidence: 0.86,
+      stalenessScore: 0.08,
+      adverseSelectionScore: 0.82,
+      cheapLegVenue: "polymarket",
+      cheapLegIsLagging: false,
+      windows: [],
+      reasons: ["Polymarket appears to lead recent book movement"],
+    },
+  }));
+  const rendered = JSON.stringify(detail);
+  assert.match(rendered, /Lead\/Lag/);
+  assert.match(rendered, /warning · leader P · conf 86\.0% · stale 8\.0% · adverse 82\.0% · cheap lag no/);
 });
 
 test("cumulative pnl curve uses combined account values instead of fill-audit pnl", () => {

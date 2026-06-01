@@ -1,6 +1,6 @@
 import type { BookStore } from "../books/book-store";
 import type { ArbExecutor } from "../execution/executor";
-import { logEvent } from "../logger";
+import { logEvent, logThrottle } from "../logger";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { ArbCandidate, DashboardSignal } from "../types";
 import type { SignalStore } from "../db/signals";
@@ -8,6 +8,9 @@ import type { LiveExecutionQualityOptions } from "../execution/execution-quality
 import { pairExecutableCandidates } from "./pairing";
 import { ReentryThrottle } from "./reentry";
 import { protectedCandidateBlockReason } from "./safety";
+
+const SCANNER_BLOCK_LOG_THROTTLE_MS = 60_000;
+const SCANNER_SKIP_LOG_THROTTLE_MS = 60_000;
 
 export type SignalWriter = {
   insertSignal: SignalStore["insertSignal"];
@@ -120,7 +123,7 @@ export class CrossVenueArbScanner {
       for (const candidate of candidates) {
         const blockReason = protectedCandidateBlockReason(candidate, this.options.minProfitDollars);
         if (blockReason) {
-          logEvent({
+          logThrottle(`scanner:protected-block:${candidate.pairKey}:${blockReason}`, SCANNER_BLOCK_LOG_THROTTLE_MS, {
             severity: "WARN",
             category: "SCANNER",
             message: "candidate blocked by protected-spread guard",
@@ -139,7 +142,7 @@ export class CrossVenueArbScanner {
         }
         const liveBlockReason = await this.liveCandidateBlockReason(candidate, now);
         if (liveBlockReason) {
-          logEvent({
+          logThrottle(`scanner:live-block:${candidate.pairKey}:${liveBlockReason}`, SCANNER_BLOCK_LOG_THROTTLE_MS, {
             severity: "WARN",
             category: "SCANNER",
             message: "candidate blocked by live exposure guard",
@@ -242,11 +245,7 @@ export class CrossVenueArbScanner {
       }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
       else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
-      logEvent({
-        category: "SCANNER",
-        message: "candidate processed",
-        context: { pairKey: candidate.pairKey, action: result.action, guaranteedProfit: candidate.guaranteedProfit },
-      });
+      this.logCandidateProcessed(candidate, result);
     } catch (error) {
       const updatedSignal = await this.signals.updateSignal(signalId, {
         action: "failed",
@@ -304,11 +303,7 @@ export class CrossVenueArbScanner {
       }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
       else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
-      logEvent({
-        category: "SCANNER",
-        message: "candidate processed",
-        context: { pairKey: candidate.pairKey, action: result.action, guaranteedProfit: candidate.guaranteedProfit },
-      });
+      this.logCandidateProcessed(candidate, result);
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : String(error);
       try {
@@ -365,6 +360,31 @@ export class CrossVenueArbScanner {
       maxTrades,
       this.options.maxUnresolvedExposureDollars,
     ) ?? null;
+  }
+
+  private logCandidateProcessed(
+    candidate: ArbCandidate,
+    result: { action: string; failureReason?: string | null },
+  ): void {
+    const event = {
+      category: "SCANNER" as const,
+      message: "candidate processed",
+      context: {
+        pairKey: candidate.pairKey,
+        action: result.action,
+        guaranteedProfit: candidate.guaranteedProfit,
+        failureReason: result.failureReason ?? null,
+      },
+    };
+    if (result.action === "skipped") {
+      logThrottle(
+        `scanner:candidate-processed:skipped:${candidate.pairKey}:${result.failureReason ?? ""}`,
+        SCANNER_SKIP_LOG_THROTTLE_MS,
+        event,
+      );
+      return;
+    }
+    logEvent(event);
   }
 
   private reserveLiveCandidate(candidate: ArbCandidate): void {

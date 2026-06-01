@@ -1,11 +1,17 @@
-import type { BinaryContract } from "../types";
+import type { BinaryContract, QuoteSnapshot } from "../types";
 import type { KalshiTickerSnapshot } from "../kalshi/client";
 import type { TokenBookSnapshot } from "../polymarket/client";
+import { RollingBookHistory, type LeadLagHistory } from "../signals/lead-lag";
 
 export class BookStore {
   private readonly kalshi = new Map<string, BinaryContract>();
   private readonly polymarket = new Map<string, BinaryContract>();
   private readonly polyTokenToContract = new Map<string, { contractId: string; side: "yes" | "no" }>();
+  private readonly history: RollingBookHistory;
+
+  constructor(requiredHistoryDepth = 5) {
+    this.history = new RollingBookHistory(requiredHistoryDepth);
+  }
 
   setKalshiContracts(contracts: BinaryContract[]): void {
     const nextIds = new Set(contracts.map((contract) => contract.contractId));
@@ -36,7 +42,7 @@ export class BookStore {
   applyKalshiSnapshot(snapshot: KalshiTickerSnapshot): void {
     const contract = this.kalshi.get(snapshot.marketTicker);
     if (!contract) return;
-    this.kalshi.set(snapshot.marketTicker, {
+    const updated = {
       ...contract,
       yesAsk: snapshot.yesAsk,
       noAsk: snapshot.noAsk,
@@ -51,7 +57,10 @@ export class BookStore {
       tickSize: snapshot.tickSize,
       tickSizeChangedAt: snapshot.tickSizeChangedAt,
       updatedAt: snapshot.timestamp,
-    });
+    };
+    this.kalshi.set(snapshot.marketTicker, updated);
+    this.history.record(updated, "yes", snapshot.timestamp);
+    this.history.record(updated, "no", snapshot.timestamp);
   }
 
   applyPolymarketSnapshot(snapshot: TokenBookSnapshot): void {
@@ -59,7 +68,7 @@ export class BookStore {
     if (!mapping) return;
     const contract = this.polymarket.get(mapping.contractId);
     if (!contract) return;
-    this.polymarket.set(mapping.contractId, {
+    const updated = {
       ...contract,
       yesAsk: mapping.side === "yes" ? snapshot.bestAsk : contract.yesAsk,
       noAsk: mapping.side === "no" ? snapshot.bestAsk : contract.noAsk,
@@ -73,7 +82,9 @@ export class BookStore {
       tickSize: snapshot.tickSize ?? contract.tickSize,
       tickSizeChangedAt: snapshot.tickSizeChangedAt ?? contract.tickSizeChangedAt,
       updatedAt: snapshot.timestamp,
-    });
+    };
+    this.polymarket.set(mapping.contractId, updated);
+    this.history.record(updated, mapping.side, snapshot.timestamp);
   }
 
   getKalshiContracts(staleBookMs: number, now = Date.now()): BinaryContract[] {
@@ -100,6 +111,17 @@ export class BookStore {
     return {
       kalshi: [...this.kalshi.values()],
       polymarket: [...this.polymarket.values()],
+    };
+  }
+
+  leadLagHistoryForQuoteSnapshot(snapshot: QuoteSnapshot, nowMs: number, lookbackMs: number): LeadLagHistory {
+    return {
+      kalshi: snapshot.kalshi
+        ? this.history.get("kalshi", snapshot.kalshi.contractId, snapshot.kalshi.direction, nowMs, lookbackMs)
+        : [],
+      polymarket: snapshot.polymarket
+        ? this.history.get("polymarket", snapshot.polymarket.contractId, snapshot.polymarket.direction, nowMs, lookbackMs)
+        : [],
     };
   }
 

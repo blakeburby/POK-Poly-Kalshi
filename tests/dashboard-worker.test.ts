@@ -63,8 +63,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHotPathWarmIntervalMs: 1_000,
     livePolymarketPresignEnabled: false,
     livePolymarketSignedOrderTtlMs: 5_000,
-    livePolymarketFirstMinFillShares: 4,
-    livePolymarketFirstMaxFillShares: 6,
+    livePolymarketFirstMinFillShares: 7,
+    livePolymarketFirstMaxFillShares: 9,
     liveKalshiPrearmEnabled: true,
     liveKalshiPrearmMaxAgeMs: 5_000,
     liveKalshiPrearmPricePolicy: "patch_after_fill",
@@ -93,6 +93,12 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFillQualitySampleLimit: 200,
     liveFillQualityMinSamples: 30,
     liveFillQualityModelVersion: "heuristic-v1",
+    liveLeadLagScoringEnabled: true,
+    liveLeadLagGateEnabled: false,
+    liveLeadLagModelVersion: "heuristic-v1",
+    liveLeadLagWindowsMs: [1_000, 5_000, 15_000, 60_000],
+    liveLeadLagMinConfidence: 0.65,
+    liveLeadLagMaxAdverseSelectionScore: 0.75,
     livePartialFillLockMode: "quarantine",
     liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,
@@ -262,8 +268,11 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.health.ok, true);
   assert.equal(snapshot.health.scanHeartbeatMs, 250);
   assert.equal(snapshot.health.liveMaxTradesPerWindow, 3);
-  assert.equal(snapshot.health.livePolymarketFirstMinFillShares, 4);
-  assert.equal(snapshot.health.livePolymarketFirstMaxFillShares, 6);
+  assert.equal(snapshot.health.liveOrderSize, 1);
+  assert.equal(snapshot.health.livePolymarketFirstMinFillShares, 7);
+  assert.equal(snapshot.health.livePolymarketFirstMaxFillShares, 9);
+  assert.equal(snapshot.health.liveLeadLagScoringEnabled, true);
+  assert.equal(snapshot.health.liveLeadLagGateEnabled, false);
   assert.equal(snapshot.scanner.lastScanAgeMs, 500);
   assert.equal(snapshot.books.kalshi.length, 1);
   assert.equal(snapshot.books.polymarket.length, 1);

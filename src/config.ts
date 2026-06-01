@@ -83,6 +83,12 @@ export interface AppConfig {
   liveFillQualitySampleLimit: number;
   liveFillQualityMinSamples: number;
   liveFillQualityModelVersion: string;
+  liveLeadLagScoringEnabled: boolean;
+  liveLeadLagGateEnabled: boolean;
+  liveLeadLagModelVersion: string;
+  liveLeadLagWindowsMs: number[];
+  liveLeadLagMinConfidence: number;
+  liveLeadLagMaxAdverseSelectionScore: number;
   livePartialFillLockMode: LivePartialFillLockMode;
   liveMaxUnresolvedExposureDollars: number;
   liveReconcileBeforeTrade: boolean;
@@ -120,9 +126,15 @@ function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]):
 }
 
 function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMode {
-  const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "parallel_limit_rest").toLowerCase();
-  if (value === "parallel_fok" || value === "parallel_fak" || value === "parallel_limit_rest" || value === "polymarket_first_exact") return value;
-  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
+  const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "polymarket_first_exact").toLowerCase();
+  if (
+    value === "parallel_market"
+    || value === "parallel_fok"
+    || value === "parallel_fak"
+    || value === "parallel_limit_rest"
+    || value === "polymarket_first_exact"
+  ) return value;
+  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
 }
 
 function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLockMode {
@@ -138,9 +150,9 @@ function envLiveKalshiPrearmPricePolicy(env: NodeJS.ProcessEnv): LiveKalshiPrear
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 1);
-  const livePolymarketFirstMinFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES", 4);
-  const livePolymarketFirstMaxFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES", 6);
+  const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 8);
+  const livePolymarketFirstMinFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES", 7);
+  const livePolymarketFirstMaxFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES", 9);
   if (livePolymarketFirstMinFillShares <= 0 || livePolymarketFirstMaxFillShares <= 0 || livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares) {
     throw new Error("LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES");
   }
@@ -181,7 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketChainId: envNumber(env, "POLYMARKET_CHAIN_ID", 137),
     polymarketClobHost: envString(env, "POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
     polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
-    polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FOK").toUpperCase() === "FAK" ? "FAK" : "FOK",
+    polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK",
     liveOrderSize,
     liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
     liveMinExpiryMs: envNumber(env, "LIVE_MIN_EXPIRY_MS", 30_000),
@@ -189,7 +201,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveCollateralBufferDollars: envNumber(env, "LIVE_COLLATERAL_BUFFER_DOLLARS", 0.25),
     liveQuoteMaxAgeMs: envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
     liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
-    liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", liveOrderSize),
+    liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", 10),
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
     liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
     liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),
@@ -231,6 +243,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveFillQualitySampleLimit: envNumber(env, "LIVE_FILL_QUALITY_SAMPLE_LIMIT", 200),
     liveFillQualityMinSamples: envNumber(env, "LIVE_FILL_QUALITY_MIN_SAMPLES", 30),
     liveFillQualityModelVersion: envString(env, "LIVE_FILL_QUALITY_MODEL_VERSION", "heuristic-v1"),
+    liveLeadLagScoringEnabled: envBoolean(env, "LIVE_LEAD_LAG_SCORING_ENABLED", true),
+    liveLeadLagGateEnabled: envBoolean(env, "LIVE_LEAD_LAG_GATE_ENABLED", false),
+    liveLeadLagModelVersion: envString(env, "LIVE_LEAD_LAG_MODEL_VERSION", "heuristic-v1"),
+    liveLeadLagWindowsMs: envNumberList(env, "LIVE_LEAD_LAG_WINDOWS_MS", [1_000, 5_000, 15_000, 60_000]),
+    liveLeadLagMinConfidence: envNumber(env, "LIVE_LEAD_LAG_MIN_CONFIDENCE", 0.65),
+    liveLeadLagMaxAdverseSelectionScore: envNumber(env, "LIVE_LEAD_LAG_MAX_ADVERSE_SELECTION_SCORE", 0.75),
     livePartialFillLockMode: envLivePartialFillLockMode(env),
     liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),

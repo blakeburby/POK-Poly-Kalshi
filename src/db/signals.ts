@@ -4,6 +4,7 @@ import type {
   DashboardSignal,
   ExecutionTimings,
   FillQualitySnapshot,
+  LeadLagSnapshot,
   LegDirection,
   QuoteSnapshot,
   ReconciliationResolution,
@@ -71,6 +72,7 @@ interface DashboardSignalRow {
   quote_snapshot: QuoteSnapshot | string | null;
   depth_vwap: string | number | null;
   projected_edge_after_fees: string | number | null;
+  lead_lag_snapshot: LeadLagSnapshot | string | null;
   fill_quality_snapshot: FillQualitySnapshot | string | null;
   expected_executable_edge: string | number | null;
   execution_timings: ExecutionTimings | string | null;
@@ -144,12 +146,40 @@ const SIGNAL_COLUMNS = `
   kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
   kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
   kalshi_error, polymarket_error, partial_fill,
-  quote_snapshot, depth_vwap, projected_edge_after_fees, fill_quality_snapshot, expected_executable_edge,
+  quote_snapshot, depth_vwap, projected_edge_after_fees, lead_lag_snapshot, fill_quality_snapshot, expected_executable_edge,
   execution_timings, venue_confirmations,
   execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
   reconciliation_resolved_at, reconciliation_resolution_reason, reconciliation_resolution,
   recovery_status, recovery_attempts, recovery_evidence, finalization_ms,
   risk_quarantined_at, risk_quarantine_reason, risk_quarantine_exposure_dollars, risk_quarantine_evidence
+`;
+
+const LIVE_SIGNAL_COLUMNS = `
+  id, created_at, updated_at, pair_key, expiry_ms,
+  kalshi_contract_id, polymarket_contract_id,
+  lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
+  higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
+  premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
+  kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price,
+  execution_group_id, kalshi_client_order_id, polymarket_client_order_id,
+  kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
+  kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
+  kalshi_error, polymarket_error, partial_fill,
+  NULL::JSONB AS quote_snapshot,
+  depth_vwap, projected_edge_after_fees,
+  NULL::JSONB AS lead_lag_snapshot,
+  NULL::JSONB AS fill_quality_snapshot,
+  expected_executable_edge,
+  execution_timings,
+  NULL::JSONB AS venue_confirmations,
+  execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
+  reconciliation_resolved_at, reconciliation_resolution_reason,
+  NULL::JSONB AS reconciliation_resolution,
+  recovery_status, recovery_attempts,
+  NULL::JSONB AS recovery_evidence,
+  finalization_ms,
+  risk_quarantined_at, risk_quarantine_reason, risk_quarantine_exposure_dollars,
+  NULL::JSONB AS risk_quarantine_evidence
 `;
 
 function numberFrom(value: string | number | null): number | null {
@@ -258,6 +288,7 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     quoteSnapshot: jsonFromRow<QuoteSnapshot>(row.quote_snapshot),
     depthVwap: numberFrom(row.depth_vwap),
     projectedEdgeAfterFees: numberFrom(row.projected_edge_after_fees),
+    leadLagSnapshot: jsonFromRow<LeadLagSnapshot>(row.lead_lag_snapshot),
     fillQualitySnapshot: jsonFromRow<FillQualitySnapshot>(row.fill_quality_snapshot),
     expectedExecutableEdge: numberFrom(row.expected_executable_edge),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
@@ -266,6 +297,7 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
       : row.execution_strategy === "parallel_limit_rest" ? "parallel_limit_rest"
       : row.execution_strategy === "parallel_fak" ? "parallel_fak"
       : row.execution_strategy === "parallel_fok" ? "parallel_fok"
+      : row.execution_strategy === "parallel_market" ? "parallel_market"
       : row.execution_strategy === "parallel_canary" ? "parallel_canary"
       : row.execution_strategy === "sequential_hedge" ? "sequential_hedge"
       : null,
@@ -377,6 +409,7 @@ export class SignalStore {
           risk_quarantine_reason = $41,
           risk_quarantine_exposure_dollars = $42,
           risk_quarantine_evidence = CASE WHEN $43::TEXT IS NULL THEN NULL ELSE $43::JSONB END,
+          lead_lag_snapshot = CASE WHEN $44::TEXT IS NULL THEN NULL ELSE $44::JSONB END,
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
@@ -424,6 +457,7 @@ export class SignalStore {
       update.riskQuarantineReason ?? null,
       update.riskQuarantineExposureDollars ?? null,
       update.riskQuarantineEvidence == null ? null : JSON.stringify(update.riskQuarantineEvidence),
+      update.leadLagSnapshot == null ? null : JSON.stringify(update.leadLagSnapshot),
     ]);
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
@@ -555,7 +589,7 @@ export class SignalStore {
 
   async listLiveExposureSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT ${SIGNAL_COLUMNS}
+      SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND reconciliation_resolved_at IS NULL
@@ -576,7 +610,7 @@ export class SignalStore {
 
   async listLiveSubmittedAttemptSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT ${SIGNAL_COLUMNS}
+      SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND expiry_ms > $1
@@ -589,7 +623,7 @@ export class SignalStore {
 
   async listLiveExactExposureSignals(limit = 500): Promise<DashboardSignal[]> {
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT ${SIGNAL_COLUMNS}
+      SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND reconciliation_resolved_at IS NULL
@@ -625,7 +659,7 @@ export class SignalStore {
   async listLiveExecutionQualitySignals(now: number, lookbackMs: number, limit = 50): Promise<DashboardSignal[]> {
     const sinceMs = Math.max(0, now - Math.max(0, lookbackMs));
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT ${SIGNAL_COLUMNS}
+      SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND action IN ('filled', 'failed')

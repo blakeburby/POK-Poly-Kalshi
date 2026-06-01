@@ -305,7 +305,7 @@ export class TradingActivityStore {
       SELECT
         id, created_at, execution_group_id, venue, client_order_id, venue_order_id,
         event_type, asset_id, market_id, side, status,
-        fill_count, remaining_count, fill_price, fee, exchange_ts, received_at, raw
+        fill_count, remaining_count, fill_price, fee, exchange_ts, received_at
       FROM venue_order_events
       WHERE venue = $1
       ORDER BY COALESCE(exchange_ts, received_at, created_at) DESC, id DESC

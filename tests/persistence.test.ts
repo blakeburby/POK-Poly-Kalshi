@@ -58,6 +58,7 @@ class FakeDb implements Queryable {
           quote_snapshot: values?.[21] ?? null,
           depth_vwap: values?.[22] ?? null,
           projected_edge_after_fees: values?.[23] ?? null,
+          lead_lag_snapshot: values?.[43] ?? null,
           fill_quality_snapshot: values?.[24] ?? null,
           expected_executable_edge: values?.[25] ?? null,
           execution_timings: values?.[26] ?? null,
@@ -262,6 +263,24 @@ test("signal persistence inserts threshold-crossing candidate before execution u
         recentVenueEventCount: 8,
       },
     },
+    leadLagSnapshot: {
+      version: "heuristic-v1",
+      scoredAt: 1_800_000_000_000,
+      shadowMode: true,
+      gateEnabled: false,
+      gatePassed: true,
+      blockReason: null,
+      leaderVenue: "polymarket",
+      laggingVenue: "kalshi",
+      lagMsEstimate: 120,
+      confidence: 0.82,
+      stalenessScore: 0.1,
+      adverseSelectionScore: 0.7,
+      cheapLegVenue: "polymarket",
+      cheapLegIsLagging: false,
+      windows: [],
+      reasons: ["test lead lag"],
+    },
     expectedExecutableEdge: 0.03,
     recoveryStatus: "auto_resolved_paired_fill",
     recoveryAttempts: 1,
@@ -285,6 +304,7 @@ test("signal persistence inserts threshold-crossing candidate before execution u
   assert.equal(db.calls[1].values?.[39], "2026-04-29T20:00:02.000Z");
   assert.equal(db.calls[1].values?.[40], "test quarantine");
   assert.equal(db.calls[1].values?.[41], 4.2);
+  assert.match(String(db.calls[1].values?.[43]), /test lead lag/);
 });
 
 test("signal persistence exposes recent filled attempts for restart hydration", async () => {
@@ -346,11 +366,25 @@ test("polymarket-first migration allows the new execution strategy", () => {
   assert.match(sql, /polymarket_first_exact/);
 });
 
+test("parallel market migration allows the default execution strategy", () => {
+  const sql = readFileSync("src/db/migrations/020_allow_parallel_market_execution_strategy.sql", "utf8");
+  assert.match(sql, /DROP CONSTRAINT IF EXISTS cross_venue_arb_signals_execution_strategy_check/);
+  assert.match(sql, /parallel_market/);
+  assert.match(sql, /parallel_limit_rest/);
+  assert.match(sql, /polymarket_first_exact/);
+});
+
 test("fill quality migration adds candidate-level scoring columns", () => {
   const sql = readFileSync("src/db/migrations/018_add_fill_quality_snapshot.sql", "utf8");
   assert.match(sql, /ADD COLUMN IF NOT EXISTS fill_quality_snapshot JSONB/);
   assert.match(sql, /ADD COLUMN IF NOT EXISTS expected_executable_edge NUMERIC/);
   assert.match(sql, /idx_cross_venue_arb_signals_expected_executable_edge/);
+});
+
+test("lead/lag migration adds candidate-level price-discovery snapshot", () => {
+  const sql = readFileSync("src/db/migrations/019_add_lead_lag_snapshot.sql", "utf8");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS lead_lag_snapshot JSONB/);
+  assert.match(sql, /idx_cross_venue_arb_signals_lead_lag_snapshot/);
 });
 
 test("reconciliation resolution migration adds operator-resolved incident markers", () => {

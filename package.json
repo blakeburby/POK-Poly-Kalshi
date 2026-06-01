@@ -9,6 +9,8 @@
     "build:dashboard": "next build",
     "dev:dashboard": "next dev",
     "migrate": "tsx src/migrate.ts",
+    "fill-quality:calibrate": "tsx scripts/fill-quality-calibrate.ts",
+    "lead-lag:calibrate": "tsx scripts/lead-lag-calibrate.ts",
     "worker": "tsx src/index.ts",
     "test": "node --import tsx --test --test-isolation=none tests/*.test.ts tests/*.test.tsx",
     "typecheck": "npm run build:worker",

@@ -54,6 +54,8 @@ type LiveOperationalState = "clean" | "quarantined" | "autoHardlocksDisabled" | 
 type TradingTab = "history" | "positions" | "openOrders";
 
 const ACCOUNT_PNL_FALLBACK_WINDOW_MS = 24 * 60 * 60_000;
+const LEAD_LAG_WARNING_MIN_CONFIDENCE = 0.65;
+const LEAD_LAG_WARNING_MAX_ADVERSE_SELECTION = 0.75;
 
 interface TradeDetailLeg {
   label: "A" | "B";
@@ -892,14 +894,32 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
     if (signal.fillQualitySnapshot) {
       const fillQuality = signal.fillQualitySnapshot;
       const expectedEdge = signal.expectedExecutableEdge ?? fillQuality.expectedExecutableEdge;
-      const fillQualityStatus = fillQuality.shadowMode ? "shadow" : fillQuality.gatePassed ? "pass" : "fail";
+      const fillQualityWarning = fillQuality.shadowMode && expectedEdge != null && expectedEdge < fillQuality.minExpectedEdge;
+      const fillQualityStatus = fillQualityWarning ? "warning" : fillQuality.shadowMode ? "shadow" : fillQuality.gatePassed ? "pass" : "fail";
       metadata.push({
         label: "Fill Quality",
         value: `${fillQualityStatus} · XEV ${formatSignedCents(expectedEdge)} · Pair ${formatPercent(fillQuality.pairedFillProbability)}`,
-        tone: fillQuality.gatePassed ? (fillQuality.shadowMode ? "warn" : "profit") : "loss",
+        tone: fillQualityWarning ? "warn" : fillQuality.gatePassed ? (fillQuality.shadowMode ? "warn" : "profit") : "loss",
       });
       if (fillQuality.penaltyReasons.length > 0) {
         metadata.push({ label: "Fill Penalty", value: fillQuality.penaltyReasons.slice(0, 2).join("; "), tone: "warn" });
+      }
+    }
+    const leadLag = signal.leadLagSnapshot ?? signal.quoteSnapshot?.leadLagSnapshot ?? null;
+    if (leadLag) {
+      const leadLagWarning = leadLag.shadowMode
+        && leadLag.confidence >= LEAD_LAG_WARNING_MIN_CONFIDENCE
+        && leadLag.adverseSelectionScore > LEAD_LAG_WARNING_MAX_ADVERSE_SELECTION;
+      const leadLagStatus = leadLagWarning ? "warning" : leadLag.shadowMode ? "shadow" : leadLag.gatePassed ? "pass" : "fail";
+      const leader = leadLag.leaderVenue === "polymarket" ? "P" : leadLag.leaderVenue === "kalshi" ? "K" : "none";
+      const cheapLeg = leadLag.cheapLegIsLagging == null ? "?" : leadLag.cheapLegIsLagging ? "yes" : "no";
+      metadata.push({
+        label: "Lead/Lag",
+        value: `${leadLagStatus} · leader ${leader} · conf ${formatPercent(leadLag.confidence)} · stale ${formatPercent(leadLag.stalenessScore)} · adverse ${formatPercent(leadLag.adverseSelectionScore)} · cheap lag ${cheapLeg}`,
+        tone: leadLagWarning ? "warn" : leadLag.gatePassed ? (leadLag.shadowMode ? "warn" : "profit") : "loss",
+      });
+      if (leadLag.reasons.length > 0) {
+        metadata.push({ label: "Lead/Lag Note", value: leadLag.reasons.slice(0, 2).join("; "), tone: "warn" });
       }
     }
     if (typeof executionTimings?.polymarketHedgeTriggerFillCount === "number") {
@@ -3056,7 +3076,7 @@ function SignalTape({
           const strategy = signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--";
           const firstVenue = signal.executionTimings?.firstVenue
             ? signal.executionTimings.firstVenue.toUpperCase()
-            : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_fak" || signal.executionStrategy === "parallel_limit_rest"
+            : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_market" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_fak" || signal.executionStrategy === "parallel_limit_rest"
               ? "BOTH"
               : "--";
           const riskStateLabel = isResolvedPartialSignal(signal)
@@ -3335,7 +3355,7 @@ function ExecutionAuditPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
             <span>Edge {formatSignedCents(signal.projectedEdgeAfterFees ?? signal.guaranteedProfit)}</span>
             <span>Skew {signal.quoteSnapshot?.quoteSkewMs == null ? "--" : `${Math.round(signal.quoteSnapshot.quoteSkewMs)}ms`}</span>
             <span>Strategy {signal.executionStrategy ? signal.executionStrategy.replace(/_/g, " ") : "--"}</span>
-            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_fak" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</span>
+            <span>First {signal.executionTimings?.firstVenue ? signal.executionTimings.firstVenue.toUpperCase() : signal.executionStrategy === "parallel_canary" || signal.executionStrategy === "parallel_market" || signal.executionStrategy === "parallel_fok" || signal.executionStrategy === "parallel_fak" || signal.executionStrategy === "parallel_limit_rest" ? "BOTH" : "--"}</span>
             <span>Recovery {signal.recoveryStatus ? signal.recoveryStatus.replace(/_/g, " ") : "--"}</span>
             <span>RTT K {signal.executionTimings?.kalshiRttMs == null ? "--" : `${Math.round(signal.executionTimings.kalshiRttMs)}ms`}</span>
             <span>Partial {signal.partialFill ? "YES" : "NO"}</span>

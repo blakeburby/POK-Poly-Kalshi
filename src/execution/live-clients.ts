@@ -53,6 +53,8 @@ export interface KalshiPreparedOrder {
 export interface LiveOrderPreflight {
   kalshiPreparedOrder?: KalshiPreparedOrder;
   kalshiPreparedOrderFallbackReason?: string | null;
+  kalshiReadiness?: VenueExecutionReadiness;
+  kalshiRequiredCollateral?: number;
   polymarketReadiness?: VenueExecutionReadiness;
   polymarketRequiredCollateral?: number;
   polymarketOrderBook?: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">;
@@ -298,6 +300,46 @@ function kalshiOrderEndpoint(config: AppConfig): { url: URL; signPath: string } 
   return { url, signPath: `${url.pathname}${url.search}` };
 }
 
+function kalshiBalanceEndpoint(config: AppConfig): { url: URL; signPath: string } {
+  const url = new URL(config.kalshiApiBase);
+  const basePath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${basePath}/portfolio/balance`;
+  return { url, signPath: `${url.pathname}${url.search}` };
+}
+
+function firstFiniteRecordValue(record: Record<string, unknown>, keys: string[]): { key: string; value: number } | null {
+  for (const key of keys) {
+    const value = finiteOrNull(record[key]);
+    if (value != null) return { key, value };
+  }
+  return null;
+}
+
+function kalshiCashBalanceFromPayload(payload: Record<string, unknown>): { balance: number | null; rawBalance: number | null; rawField: string | null } {
+  const record = recordOrNull(payload.balance) ?? payload;
+  const dollars = firstFiniteRecordValue(record, [
+    "available_balance_dollars",
+    "cash_balance_dollars",
+    "cash_dollars",
+    "balance_dollars",
+    "available_cash_dollars",
+  ]);
+  if (dollars) return { balance: roundPrice(dollars.value), rawBalance: dollars.value, rawField: dollars.key };
+
+  const cents = firstFiniteRecordValue(record, [
+    "available_balance_cents",
+    "cash_balance_cents",
+    "cash_cents",
+    "available_cash_cents",
+    "balance",
+    "available_balance",
+    "cash_balance",
+    "cash",
+  ]);
+  if (cents) return { balance: roundPrice(cents.value / 100), rawBalance: cents.value, rawField: cents.key };
+  return { balance: null, rawBalance: null, rawField: null };
+}
+
 function kalshiYesBookPrice(leg: ArbLeg, context: LiveOrderContext): number {
   return roundPrice(leg.direction === "yes" ? context.maxBuyPrice : 1 - context.maxBuyPrice);
 }
@@ -311,7 +353,7 @@ export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): 
     side: isYes ? "bid" : "ask",
     count: fixedCount(context.size),
     price: fixedDollars(yesBookPrice),
-    time_in_force: isLimitRestMode(context) ? "good_till_canceled" : "fill_or_kill",
+    time_in_force: kalshiTimeInForce(context),
     self_trade_prevention_type: "taker_at_cross",
     cancel_order_on_pause: true,
   };
@@ -393,15 +435,99 @@ function kalshiOrderStatus(record: Record<string, unknown>, fillCount: number | 
 
 export class KalshiOrderClient implements VenueOrderClient {
   readonly venue = "kalshi" as const;
+  private cachedReadiness: VenueExecutionReadiness | null = null;
 
   constructor(private readonly config: AppConfig, private readonly fetchFn: typeof fetch = fetch) {}
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
+    const cachedAgeMs = this.cachedReadiness?.lastCheckedAt == null ? Number.POSITIVE_INFINITY : now - this.cachedReadiness.lastCheckedAt;
+    if (this.cachedReadiness && cachedAgeMs >= 0 && cachedAgeMs < 30_000) return this.cachedReadiness;
     return requireKalshiConfigured(now);
   }
 
+  async warm(options: { now?: number; requiredCollateral?: number } = {}): Promise<void> {
+    if (options.requiredCollateral == null) return;
+    await this.checkReadiness(options.now ?? Date.now(), {
+      requiredCollateral: options.requiredCollateral,
+      force: true,
+    });
+  }
+
+  private async checkReadiness(
+    now = Date.now(),
+    options: { force?: boolean; requiredCollateral?: number } = {},
+  ): Promise<VenueExecutionReadiness> {
+    const requiredCollateral = options.requiredCollateral;
+    const configured = requireKalshiConfigured(now);
+    if (!configured.ready || requiredCollateral == null) {
+      const readiness = { ...configured, requiredCollateral };
+      if (requiredCollateral != null) this.cachedReadiness = readiness;
+      return readiness;
+    }
+
+    const cachedRequiredCollateral = this.cachedReadiness?.requiredCollateral ?? 0;
+    if (
+      !options.force
+      && this.cachedReadiness
+      && cachedRequiredCollateral + 1e-9 >= requiredCollateral
+      && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000
+    ) {
+      return this.cachedReadiness;
+    }
+
+    try {
+      const { url, signPath } = kalshiBalanceEndpoint(this.config);
+      const response = await this.fetchFn(url, {
+        method: "GET",
+        headers: getKalshiHeaders("GET", signPath),
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`Kalshi balance query failed ${response.status}: ${sanitizeError(text)}`);
+      const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+      const { balance, rawBalance, rawField } = kalshiCashBalanceFromPayload(payload);
+      const reason = balance == null || balance + 1e-9 < requiredCollateral
+        ? `Kalshi cash balance ${balance ?? 0} is below required hedge collateral ${requiredCollateral}`
+        : null;
+      const readiness: VenueExecutionReadiness = {
+        configured: true,
+        ready: reason == null,
+        reason,
+        balance,
+        allowance: null,
+        lastCheckedAt: now,
+        collateralBalanceRaw: rawBalance,
+        collateralBalanceNormalized: balance,
+        kalshiBalanceField: rawField,
+        requiredCollateral,
+      };
+      this.cachedReadiness = readiness;
+      return readiness;
+    } catch (error) {
+      const readiness: VenueExecutionReadiness = {
+        configured: true,
+        ready: false,
+        reason: sanitizeError(error),
+        balance: null,
+        allowance: null,
+        lastCheckedAt: now,
+        requiredCollateral,
+      };
+      this.cachedReadiness = readiness;
+      return readiness;
+    }
+  }
+
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
-    const readiness = await this.readiness(context.requestedAt ?? Date.now());
+    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
+      requiredCollateral,
+      force: true,
+    });
+    context.preflight = {
+      ...context.preflight,
+      kalshiReadiness: readiness,
+      kalshiRequiredCollateral: requiredCollateral,
+    };
     if (!readiness.ready) return readiness.reason ?? "Kalshi execution is not configured";
     if (!this.config.liveKalshiPrearmEnabled || context.placementMode !== "polymarket_first_exact") return null;
 
@@ -442,7 +568,15 @@ export class KalshiOrderClient implements VenueOrderClient {
   }
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
-    const readiness = await this.readiness(context.requestedAt ?? Date.now());
+    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const readiness = context.preflight?.kalshiReadiness
+      && context.preflight.kalshiRequiredCollateral != null
+      && context.preflight.kalshiRequiredCollateral + 1e-9 >= requiredCollateral
+      ? context.preflight.kalshiReadiness
+      : await this.checkReadiness(context.requestedAt ?? Date.now(), {
+        force: true,
+        requiredCollateral,
+      });
     if (!readiness.ready) throw new Error(readiness.reason ?? "Kalshi execution is not configured");
 
     const requestedAt = context.requestedAt ?? Date.now();
@@ -500,7 +634,8 @@ export class KalshiOrderClient implements VenueOrderClient {
       fee,
       exchangeTimestampMs,
       metadata: {
-        orderPlacementMode: context.placementMode ?? "parallel_fok",
+        orderPlacementMode: context.placementMode ?? "parallel_market",
+        kalshiTimeInForce: body.time_in_force,
         kalshiInitialStatus: String(record.status ?? initialResultStatus(fillCount, context.size)),
         kalshiInitialFillCount: fillCount,
         limitRestMs: isLimitRestMode(context) ? limitRestMs(context) : null,
@@ -514,6 +649,8 @@ export class KalshiOrderClient implements VenueOrderClient {
         kalshiPrearmOriginalYesBookPrice: prepared?.originalYesBookPrice ?? null,
         kalshiSubmittedMaxBuyPrice: context.maxBuyPrice,
         kalshiSubmittedYesBookPrice: kalshiYesBookPrice(leg, context),
+        kalshiRequiredCollateral: requiredCollateral,
+        kalshiCollateralBalance: readiness.balance,
       },
     };
     if (!isLimitRestMode(context)) return initialResult;
@@ -793,6 +930,7 @@ function polymarketOrderType(value: string): OrderType.FOK | OrderType.FAK {
 }
 
 function polymarketImmediateOrderType(configuredValue: string, context: LiveOrderContext): OrderType.FOK | OrderType.FAK {
+  if (context.placementMode === "parallel_market") return OrderType.FAK;
   if (context.placementMode === "polymarket_first_exact") return OrderType.FAK;
   if (context.placementMode === "parallel_fak") return OrderType.FAK;
   if (context.placementMode === "parallel_fok") return OrderType.FOK;
@@ -862,6 +1000,12 @@ function isExactFillCount(fillCount: number | null, requestedSize: number): bool
 
 function isLimitRestMode(context: LiveOrderContext): boolean {
   return context.placementMode === "parallel_limit_rest";
+}
+
+function kalshiTimeInForce(context: LiveOrderContext): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {
+  if (isLimitRestMode(context)) return "good_till_canceled";
+  if (context.placementMode === "parallel_market") return "immediate_or_cancel";
+  return "fill_or_kill";
 }
 
 function limitRestMs(context: LiveOrderContext): number {
@@ -1270,7 +1414,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
         exchangeTimestampMs: null,
         signMs,
         metadata: {
-          orderPlacementMode: context.placementMode ?? "parallel_fok",
+          orderPlacementMode: context.placementMode ?? "parallel_market",
           polymarketOrderType: orderType,
           polymarketMarketOrderStatus: timeoutLike ? "unknown" : "failed",
           polymarketFokStatus: timeoutLike ? "unknown" : "failed",
@@ -1339,7 +1483,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
       exchangeTimestampMs: null,
       signMs,
       metadata: {
-        orderPlacementMode: context.placementMode ?? "parallel_fok",
+        orderPlacementMode: context.placementMode ?? "parallel_market",
         polymarketOrderType: orderType,
         polymarketMarketOrderStatus: status || (success ? "unknown" : "rejected"),
         polymarketFokStatus: status || (success ? "unknown" : "rejected"),

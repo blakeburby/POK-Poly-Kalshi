@@ -236,6 +236,18 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
   if ((signedFallbackRate ?? 0) >= 0.2) polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.07, "Polymarket signed-order fallback rate is elevated");
   if ((mismatchRate ?? 0) >= 0.35) polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.10, "Recent mismatch rate is elevated");
   if ((timeoutRate ?? 0) >= 0.2) polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.10, "Recent timeout/unknown rate is elevated");
+  const leadLag = quoteSnapshot.leadLagSnapshot ?? null;
+  if (leadLag && leadLag.confidence >= config.liveLeadLagMinConfidence) {
+    if (leadLag.leaderVenue === "polymarket") {
+      polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.10, "Lead/lag shows Polymarket leading");
+    }
+    if (leadLag.adverseSelectionScore >= config.liveLeadLagMaxAdverseSelectionScore) {
+      polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.08, "Lead/lag adverse selection is elevated");
+    }
+    if (leadLag.cheapLegIsLagging === false) {
+      polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.04, "Cheap leg is not the lagging venue");
+    }
+  }
   if (sameExpiryAttemptCount >= config.liveMaxTradesPerWindow) polymarketProbability = addPenalty(penaltyReasons, polymarketProbability, 0.08, "Same-expiry attempt count is at cap");
   const secondsToExpiry = roundMetric((candidate.expiryMs - nowMs) / 1_000);
   if (secondsToExpiry < 120) {
@@ -312,6 +324,11 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
       polymarketSignedOrderReuseRate: signedReuseRate,
       polymarketSignedOrderFallbackRate: signedFallbackRate,
       recentVenueEventCount: input.recentVenueEvents?.length ?? 0,
+      leadLagLeaderVenue: leadLag?.leaderVenue ?? null,
+      leadLagConfidence: leadLag?.confidence ?? null,
+      leadLagStalenessScore: leadLag?.stalenessScore ?? null,
+      leadLagAdverseSelectionScore: leadLag?.adverseSelectionScore ?? null,
+      leadLagCheapLegIsLagging: leadLag?.cheapLegIsLagging ?? null,
     },
   };
 }

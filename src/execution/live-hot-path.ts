@@ -165,6 +165,11 @@ export class CachedLiveExecutionLockStore implements LiveExecutionLockWriter {
 }
 
 export class LiveExposureCache {
+  private static readonly exposureRefreshLimit = 100;
+  private static readonly submittedAttemptRefreshLimit = 100;
+  private static readonly exactExposureRefreshLimit = 100;
+  private static readonly executionQualityRefreshLimit = 100;
+
   private signals: DashboardSignal[] = [];
   private exactExposureSignals: DashboardSignal[] = [];
   private executionQualitySignals: DashboardSignal[] = [];
@@ -183,10 +188,10 @@ export class LiveExposureCache {
     if (this.refreshInFlight) return this.refreshInFlight;
     this.refreshInFlight = (async () => {
       const [signals, submittedAttempts, exactExposureSignals, executionQualitySignals] = await Promise.all([
-        this.reader.listLiveExposureSignals(now),
-        this.reader.listLiveSubmittedAttemptSignals?.(now) ?? Promise.resolve([]),
-        this.reader.listLiveExactExposureSignals?.() ?? Promise.resolve([]),
-        this.reader.listLiveExecutionQualitySignals?.(now, 24 * 60 * 60 * 1_000, 500) ?? Promise.resolve([]),
+        this.reader.listLiveExposureSignals(now, LiveExposureCache.exposureRefreshLimit),
+        this.reader.listLiveSubmittedAttemptSignals?.(now, LiveExposureCache.submittedAttemptRefreshLimit) ?? Promise.resolve([]),
+        this.reader.listLiveExactExposureSignals?.(LiveExposureCache.exactExposureRefreshLimit) ?? Promise.resolve([]),
+        this.reader.listLiveExecutionQualitySignals?.(now, 24 * 60 * 60 * 1_000, LiveExposureCache.executionQualityRefreshLimit) ?? Promise.resolve([]),
       ]);
       this.signals = signals.filter(hasLiveExposure);
       this.exactExposureSignals = exactExposureSignals.filter(hasExactExposureProblem);
@@ -225,6 +230,16 @@ export class LiveExposureCache {
     };
   }
 
+  private async ensureFresh(now = this.now()): Promise<string | null> {
+    if (!this.status().reason) return null;
+    try {
+      await this.refresh(now);
+    } catch (error) {
+      return `live hot-path exposure cache refresh failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    return this.status().reason;
+  }
+
   async unresolvedRiskQuarantineExposureDollars(): Promise<number> {
     if (this.reader.unresolvedRiskQuarantineExposureDollars) {
       return this.reader.unresolvedRiskQuarantineExposureDollars();
@@ -248,7 +263,7 @@ export class LiveExposureCache {
   }
 
   async liveSubmittedAttemptBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(now);
     if (staleReason) return staleReason;
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
     const submittedAttempts = [...this.submittedAttemptExpiriesBySignalId.values()]
@@ -260,13 +275,13 @@ export class LiveExposureCache {
   }
 
   async liveExactExposureBlockReason(_now?: number): Promise<string | null> {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(_now);
     if (staleReason) return staleReason;
     return exactExposureReason(this.exactExposureSignals);
   }
 
   async liveExecutionQualityStatus(now: number, options: LiveExecutionQualityOptions) {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(now);
     if (staleReason) {
       return {
         ...buildLiveExecutionQualityStatus([], null, options),
@@ -285,7 +300,7 @@ export class LiveExposureCache {
   }
 
   async listLiveExecutionQualitySignals(now: number, lookbackMs: number, limit = 50): Promise<DashboardSignal[]> {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(now);
     if (staleReason) return [];
     const since = now - Math.max(0, lookbackMs);
     return this.executionQualitySignals
@@ -297,7 +312,7 @@ export class LiveExposureCache {
   }
 
   async liveExecutionQualityBlockReason(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null> {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(now);
     if (staleReason) return staleReason;
     const since = now - Math.max(0, options.lookbackMs);
     const samples = this.executionQualitySignals
@@ -310,7 +325,7 @@ export class LiveExposureCache {
   }
 
   async liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(now);
     if (staleReason) return staleReason;
     const quarantineReason = this.quarantineBlockReason();
     if (quarantineReason) return quarantineReason;
@@ -331,7 +346,7 @@ export class LiveExposureCache {
   }
 
   async liveReconciliationBlockReason(candidate: ArbCandidate, now: number): Promise<string | null> {
-    const staleReason = this.status().reason;
+    const staleReason = await this.ensureFresh(now);
     if (staleReason) return `live reconciliation blocked: ${staleReason}`;
     const quarantineReason = this.quarantineBlockReason();
     if (quarantineReason) return quarantineReason;

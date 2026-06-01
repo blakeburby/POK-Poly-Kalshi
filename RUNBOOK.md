@@ -24,22 +24,24 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `ARB_REENTRY_INTERVAL_MS=60000`: pair/configuration cooldown.
 - `ARB_SCAN_HEARTBEAT_MS=250`: fallback scan heartbeat; websocket book updates still trigger scans immediately.
 - `ARB_EXECUTION_CONCURRENCY=1`: first production posture for live attempts.
-- `LIVE_ORDER_PLACEMENT_MODE=polymarket_first_exact`: submit Polymarket FAK first, then submit Kalshi only after Polymarket confirms a fill inside the configured hedge-trigger range.
+- `LIVE_ORDER_PLACEMENT_MODE=polymarket_first_exact`: submit Polymarket FAK first, then hedge Kalshi after an in-range Polymarket fill.
 - `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by the first leg.
-- `LIVE_ORDER_SIZE=5`: venue share size.
-- `LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES=4` and `LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES=6`: inclusive Polymarket fill range that triggers the fixed 5-contract Kalshi hedge; non-5 Polymarket fills remain partial/mismatch audit records.
+- `LIVE_ORDER_PLACEMENT_MODE=parallel_market`: alternative capped market mode that submits Kalshi IOC-style and Polymarket market FAK concurrently.
+- `LIVE_ORDER_PLACEMENT_MODE=parallel_limit_rest`: rollback to the preserved aggressive GTC limit-rest/cancel path with `LIVE_AGGRESSIVE_LIMIT_REST_MS`.
+- `LIVE_ORDER_SIZE=8`: venue share size.
+- `LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES=7` and `LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES=9`: inclusive Polymarket fill range that triggers the fixed 8-contract Kalshi hedge; non-8 Polymarket fills remain partial/mismatch audit records.
 - `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: per-leg taker cushion included in the edge gate before entry.
 - `LIVE_MIN_EXPIRY_MS=60000`: skip entries inside the final minute.
 - `LIVE_MAX_TRADES_PER_WINDOW=3`: max real submitted live attempts per 15-minute expiry window.
 - `LIVE_COLLATERAL_BUFFER_DOLLARS=0.25`: extra collateral required before entry.
 - `LIVE_QUOTE_MAX_AGE_MS=750`: max individual book age.
 - `LIVE_QUOTE_SYNC_MAX_SKEW_MS=250`: max cross-venue book skew.
-- `LIVE_MIN_BOOK_DEPTH_SHARES=5`: minimum executable depth.
+- `LIVE_MIN_BOOK_DEPTH_SHARES=10`: minimum executable depth. With `LIVE_ORDER_SIZE=8`, this requires at least 10 executable shares/contracts before entry.
 - `LIVE_ORDER_TIMEOUT_MS=2500`: REST order timeout.
 - `LIVE_HOT_PATH_ENABLED=true`: keep readiness, metadata, locks, and exposure state warm in memory.
 - `LIVE_LOW_LATENCY_HTTP_ENABLED=true`: enable keep-alive order transports.
-- `LIVE_POLYMARKET_PRESIGN_ENABLED=true`: pre-sign fresh Polymarket market orders before the timed submit section so the Polymarket-first path mostly performs `postOrder`.
-- `LIVE_KALSHI_PREARM_ENABLED=true`: prebuild and pre-sign the Kalshi hedge request during preflight, then patch only the final price after qualifying Polymarket hedge-trigger evidence.
+- `LIVE_POLYMARKET_PRESIGN_ENABLED=true`: pre-sign fresh Polymarket market orders before the timed submit section so immediate paths mostly perform `postOrder`.
+- `LIVE_KALSHI_PREARM_ENABLED=true`: prebuild and pre-sign the Kalshi hedge request for the optional `polymarket_first_exact` path, then patch only the final price after qualifying Polymarket hedge-trigger evidence.
 - `LIVE_KALSHI_PREARM_MAX_AGE_MS=5000`: discard stale pre-armed Kalshi requests and fall back to live signing.
 - `LIVE_KALSHI_PREARM_PRICE_POLICY=patch_after_fill`: keep Kalshi fully prepared while still using the actual Polymarket fill price for the final hedge cap.
 - `LIVE_USER_STREAMS_ENABLED=true`: require authenticated order streams.
@@ -51,8 +53,57 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `LIVE_FILL_QUALITY_SCORING_ENABLED=true`: score each candidate’s expected executable edge from recent fills, mismatch cost, quote quality, and latency before submit.
 - `LIVE_FILL_QUALITY_GATE_ENABLED=false`: start candidate-level fill quality in shadow mode; set to `true` only after calibration proves the gate reduces bad attempts.
 - `LIVE_FILL_QUALITY_MIN_EXPECTED_EDGE=0.01`: future enforcement threshold for expected executable edge after fill probability, slippage, mismatch, and timeout costs.
+- `LIVE_LEAD_LAG_SCORING_ENABLED=true`: score cross-venue price-discovery/staleness from recent Kalshi and Polymarket book movement.
+- `LIVE_LEAD_LAG_GATE_ENABLED=false`: keep lead/lag in shadow mode until calibration proves high-adverse buckets should block entries.
+- `LIVE_LEAD_LAG_WINDOWS_MS=1000,5000,15000,60000`: rolling book-history windows used for leader/lagger inference.
 - `LIVE_PARTIAL_FILL_LOCK_MODE=quarantine`: verified bounded one-sided exposure can be quarantined instead of globally stopping the worker.
 - `LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS=10`: total quarantined exposure cap.
+
+## Fill Quality Phase Gates
+
+Phase 1 is shadow scoring only: keep `LIVE_FILL_QUALITY_SCORING_ENABLED=true` and `LIVE_FILL_QUALITY_GATE_ENABLED=false` while the worker collects candidate-level predictions.
+
+Phase 2 calibration is read-only:
+
+```bash
+npm run fill-quality:calibrate -- --limit=2000
+```
+
+Do not promote fill-quality enforcement unless the report passes all criteria: at least 200 submitted scored attempts, lower predicted paired-fill buckets have materially worse exact-fill rates, the simulated `expectedExecutableEdge >= 0.01` gate removes at least 25% of bad/partial/unknown attempts, and it removes no more than 50% of profitable exact paired fills.
+
+Phase 3 dashboard warnings are operator-only. A shadow score below the configured minimum expected edge should render as a warning, but must not block entries while `LIVE_FILL_QUALITY_GATE_ENABLED=false`.
+
+Phase 4 enforcement is a config-only promotion after calibration passes:
+
+```bash
+LIVE_FILL_QUALITY_GATE_ENABLED=true
+systemctl restart pok-worker
+```
+
+Rollback is the reverse config flip back to `LIVE_FILL_QUALITY_GATE_ENABLED=false` followed by a worker restart.
+
+## Lead/Lag Phase Gates
+
+Phase 1 is shadow scoring only: keep `LIVE_LEAD_LAG_SCORING_ENABLED=true` and `LIVE_LEAD_LAG_GATE_ENABLED=false` while the worker collects candidate-level price-discovery snapshots.
+
+Phase 2 calibration is read-only:
+
+```bash
+npm run lead-lag:calibrate -- --limit=2000
+```
+
+Do not promote lead/lag enforcement unless the report passes all criteria: at least 200 submitted scored attempts, high-adverse buckets have materially worse exact-fill rates or realized edge than low-adverse buckets, the simulated gate removes at least 15% of bad/partial/unknown attempts, and it removes no more than 50% of profitable exact paired fills.
+
+Phase 3 dashboard warnings are operator-only. A shadow score that would fail the configured lead/lag gate should render as a warning, but must not block entries while `LIVE_LEAD_LAG_GATE_ENABLED=false`.
+
+Phase 4 enforcement is a config-only promotion after calibration passes:
+
+```bash
+LIVE_LEAD_LAG_GATE_ENABLED=true
+systemctl restart pok-worker
+```
+
+Rollback is the reverse config flip back to `LIVE_LEAD_LAG_GATE_ENABLED=false` followed by a worker restart.
 
 ## Dashboard
 
@@ -90,6 +141,39 @@ Healthy live state requires:
 - No active rows in `live_execution_locks`.
 
 If `ARB_ENABLED=false`, the worker remains online for discovery/readiness but will not submit new entries.
+
+## Disk Guard
+
+The VPS should not need an upgrade unless disk growth returns after log controls are installed. Trust direct `df -h /` from the VPS over a stale provider panel.
+
+Install or refresh the disk guard after deploys that touch `deploy/vps`:
+
+```bash
+install -o root -g root -m 0755 deploy/vps/pok-disk-guard.sh /usr/local/sbin/pok-disk-guard
+install -o root -g root -m 0644 deploy/vps/pok-disk-guard.service /etc/systemd/system/pok-disk-guard.service
+install -o root -g root -m 0644 deploy/vps/pok-disk-guard.timer /etc/systemd/system/pok-disk-guard.timer
+mkdir -p /etc/systemd/journald.conf.d
+install -o root -g root -m 0644 deploy/vps/pok-journald.conf /etc/systemd/journald.conf.d/pok-disk-guard.conf
+install -o root -g root -m 0644 deploy/vps/rsyslog-logrotate.conf /etc/logrotate.d/rsyslog
+systemctl daemon-reload
+systemctl restart systemd-journald
+systemctl enable --now pok-disk-guard.timer
+systemctl start pok-disk-guard.service
+```
+
+Thresholds:
+
+- Alert at `80%` root disk usage.
+- Urgent at `90%`.
+- Emergency cleanup at `95%`.
+
+The guard removes stale `/tmp/pok-*` diagnostics, removes runaway `/tmp/pok-filltest-monitor.log` when it exceeds 100MB, rotates `/var/log/syslog` at 128MB, and caps journald near 128MB. If `/var/log/syslog` keeps growing quickly, inspect repeated messages with:
+
+```bash
+journalctl -u pok-worker -n 200 --no-pager
+tail -n 200 /var/log/syslog
+find /tmp /var/log -xdev -type f -printf '%s %TY-%Tm-%Td %TH:%TM %p\n' | sort -n | tail -25
+```
 
 ## Risk And Recovery
 

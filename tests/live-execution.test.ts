@@ -102,8 +102,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHotPathWarmIntervalMs: 1_000,
     livePolymarketPresignEnabled: false,
     livePolymarketSignedOrderTtlMs: 5_000,
-    livePolymarketFirstMinFillShares: 4,
-    livePolymarketFirstMaxFillShares: 6,
+    livePolymarketFirstMinFillShares: 7,
+    livePolymarketFirstMaxFillShares: 9,
     liveKalshiPrearmEnabled: true,
     liveKalshiPrearmMaxAgeMs: 5_000,
     liveKalshiPrearmPricePolicy: "patch_after_fill",
@@ -132,6 +132,12 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFillQualitySampleLimit: 200,
     liveFillQualityMinSamples: 30,
     liveFillQualityModelVersion: "heuristic-v1",
+    liveLeadLagScoringEnabled: true,
+    liveLeadLagGateEnabled: false,
+    liveLeadLagModelVersion: "heuristic-v1",
+    liveLeadLagWindowsMs: [1_000, 5_000, 15_000, 60_000],
+    liveLeadLagMinConfidence: 0.65,
+    liveLeadLagMaxAdverseSelectionScore: 0.75,
     livePartialFillLockMode: "lock",
     liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,
@@ -293,6 +299,73 @@ function liveCandidate(now: number) {
   return { candidate, lower, higher };
 }
 
+function seedPolymarketLeadingHistory(books: BookStore, now: number): void {
+  books.applyPolymarketSnapshot({
+    tokenId: "yes-token",
+    bestBid: 0.36,
+    bestAsk: 0.38,
+    bidLevels: [{ price: 0.36, size: 20 }],
+    askLevels: [{ price: 0.38, size: 20 }],
+    timestamp: now - 5_000,
+  });
+  books.applyKalshiSnapshot({
+    marketTicker: "kalshi",
+    yesBid: null,
+    yesAsk: null,
+    noBid: 0.46,
+    noAsk: 0.48,
+    noBidLevels: [{ price: 0.46, size: 20 }],
+    noAskLevels: [{ price: 0.48, size: 20 }],
+    timestamp: now - 5_000,
+  });
+  books.applyPolymarketSnapshot({
+    tokenId: "yes-token",
+    bestBid: 0.39,
+    bestAsk: 0.4,
+    bidLevels: [{ price: 0.39, size: 20 }],
+    askLevels: [{ price: 0.4, size: 20 }],
+    timestamp: now - 4_000,
+  });
+  books.applyKalshiSnapshot({
+    marketTicker: "kalshi",
+    yesBid: null,
+    yesAsk: null,
+    noBid: 0.46,
+    noAsk: 0.48,
+    noBidLevels: [{ price: 0.46, size: 20 }],
+    noAskLevels: [{ price: 0.48, size: 20 }],
+    timestamp: now - 4_000,
+  });
+  books.applyKalshiSnapshot({
+    marketTicker: "kalshi",
+    yesBid: null,
+    yesAsk: null,
+    noBid: 0.49,
+    noAsk: 0.5,
+    noBidLevels: [{ price: 0.49, size: 20 }],
+    noAskLevels: [{ price: 0.5, size: 20 }],
+    timestamp: now - 2_000,
+  });
+  books.applyPolymarketSnapshot({
+    tokenId: "yes-token",
+    bestBid: 0.39,
+    bestAsk: 0.4,
+    bidLevels: [{ price: 0.39, size: 20 }],
+    askLevels: [{ price: 0.4, size: 20 }],
+    timestamp: now,
+  });
+  books.applyKalshiSnapshot({
+    marketTicker: "kalshi",
+    yesBid: null,
+    yesAsk: null,
+    noBid: 0.49,
+    noAsk: 0.5,
+    noBidLevels: [{ price: 0.49, size: 20 }],
+    noAskLevels: [{ price: 0.5, size: 20 }],
+    timestamp: now,
+  });
+}
+
 function qualitySignal(now: number, input: Partial<DashboardSignal> = {}): DashboardSignal {
   return {
     id: input.id ?? 1,
@@ -317,8 +390,8 @@ function qualitySignal(now: number, input: Partial<DashboardSignal> = {}): Dashb
     executionGroupId: "group",
     kalshiStatus: "filled",
     polymarketStatus: "filled",
-    kalshiFillCount: 5,
-    polymarketFillCount: 5,
+    kalshiFillCount: 8,
+    polymarketFillCount: 8,
     partialFill: false,
     executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: 150 },
     ...input,
@@ -405,11 +478,29 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     limitRestMs: 500,
   });
   assert.equal(limitRest.time_in_force, "good_till_canceled");
+
+  const market = buildKalshiV2OrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-MARKET",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-market",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "parallel_market",
+  });
+  assert.equal(market.time_in_force, "immediate_or_cancel");
 });
 
 test("Kalshi order client pre-arms request during preflight and patches final price", async () => {
   const calls: Array<{ body: Record<string, unknown>; headers: Record<string, string> }> = [];
-  const fetchFn = async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
     calls.push({
       body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {},
       headers: init?.headers as Record<string, string>,
@@ -458,7 +549,10 @@ test("Kalshi order client pre-arms request during preflight and patches final pr
 
 test("Kalshi order client falls back to live signing when pre-armed request is stale", async () => {
   const calls: Array<{ body: Record<string, unknown> }> = [];
-  const fetchFn = async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
     calls.push({ body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {} });
     return new Response(JSON.stringify({
       order: {
@@ -500,6 +594,73 @@ test("Kalshi order client falls back to live signing when pre-armed request is s
   assert.match(String(result.metadata?.kalshiPreparedFallbackReason), /expired_/);
 });
 
+test("Kalshi order client uses capped IOC order in parallel_market mode", async () => {
+  const calls: Array<{ body: Record<string, unknown> }> = [];
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
+    calls.push({ body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {} });
+    return new Response(JSON.stringify({
+      order: {
+        order_id: "kalshi-market",
+        client_order_id: "client-market",
+        status: "executed",
+        fill_count: "5",
+        yes_price_dollars: "0.5100",
+      },
+    }), { status: 200 });
+  };
+  const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
+
+  const result = await withKalshiEnv(() => client.placeOrder({
+    venue: "kalshi",
+    contractId: "KXBTC15M-MARKET",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.5,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-market",
+    size: 5,
+    maxBuyPrice: 0.51,
+    placementMode: "parallel_market",
+  }));
+
+  assert.equal(calls[0]?.body.time_in_force, "immediate_or_cancel");
+  assert.equal(calls[0]?.body.price, "0.5100");
+  assert.equal(result.status, "filled");
+  assert.equal(result.metadata?.orderPlacementMode, "parallel_market");
+  assert.equal(result.metadata?.kalshiTimeInForce, "immediate_or_cancel");
+});
+
+test("Kalshi order client preflight blocks when cash cannot cover hedge collateral", async () => {
+  const fetchFn = async (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "0.03" }), { status: 200 });
+    }
+    throw new Error("order submit should not run when Kalshi collateral is insufficient");
+  };
+  const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
+
+  const reason = await withKalshiEnv(() => client.preflightOrder({
+    venue: "kalshi",
+    contractId: "KXBTC15M-COLLATERAL",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.5,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-collateral",
+    size: 8,
+    maxBuyPrice: 0.52,
+    requiredCollateral: 4.41,
+    placementMode: "polymarket_first_exact",
+  }));
+
+  assert.match(reason ?? "", /Kalshi cash balance 0.03 is below required hedge collateral 4.41/);
+});
+
 test("Kalshi order client uses aggressive GTC limit and cancels unfilled remainder", async () => {
   const calls: Array<{ method: string; path: string; body: Record<string, unknown> | null }> = [];
   const responses: Array<Record<string, unknown>> = [
@@ -533,6 +694,9 @@ test("Kalshi order client uses aggressive GTC limit and cancels unfilled remaind
     },
   ];
   const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
     calls.push({
       method: init?.method ?? "GET",
       path: new URL(String(url)).pathname,
@@ -759,6 +923,70 @@ test("Polymarket order client uses FAK market order in parallel_fak mode", async
   assert.equal(result.metadata?.polymarketWorstPrice, 0.8);
   assert.equal(result.metadata?.polymarketTakingAmount, 5.128204);
   assert.equal(result.metadata?.polymarketMakingAmount, 4);
+});
+
+test("Polymarket order client uses FAK market order in parallel_market mode", async () => {
+  class FakeClob implements PolymarketClobLike {
+    createOrderCalls = 0;
+    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    postedType: OrderType | undefined;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      this.createOrderCalls += 1;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+      this.createdMarketOrder = order;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(_order: SignedOrder, orderType?: OrderType): Promise<unknown> {
+      this.postedType = orderType;
+      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5", makingAmount: "4.00" };
+    }
+
+    async cancelOrder(): Promise<unknown> {
+      throw new Error("matched FAK should not cancel");
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new FakeClob();
+  const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
+  const result = await client.placeOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.78,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.8,
+    placementMode: "parallel_market",
+  });
+
+  assert.equal(fake.createOrderCalls, 0);
+  assert.equal(fake.createdMarketOrder?.tokenID, "yes-token");
+  assert.equal(fake.createdMarketOrder?.price, 0.8);
+  assert.equal(fake.createdMarketOrder?.amount, 4);
+  assert.equal(fake.createdMarketOrder?.orderType, OrderType.FAK);
+  assert.equal(fake.postedType, OrderType.FAK);
+  assert.equal(result.status, "matched");
+  assert.equal(result.fillCount, 5);
+  assert.equal(result.metadata?.orderPlacementMode, "parallel_market");
+  assert.equal(result.metadata?.polymarketOrderType, OrderType.FAK);
 });
 
 test("Polymarket order client uses FAK market order in polymarket_first_exact mode", async () => {
@@ -2044,7 +2272,7 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   const result = await executor.execute(candidate);
 
   assert.equal(result.executionTimings?.preflightMs, 50);
-  assert.equal(result.executionTimings?.candidateToSubmitMs, 50);
+  assert.equal(result.executionTimings?.candidateToSubmitMs, 80);
   assert.equal(result.executionTimings?.kalshiOrderRttMs, 10);
   assert.equal(result.executionTimings?.kalshiRttMs, 10);
   assert.equal(result.executionTimings?.polymarketOrderRttMs, 15);
@@ -2052,9 +2280,13 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   assert.equal(result.executionTimings?.polymarketPostOrderMs, 11);
 });
 
-test("live executor defaults to parallel aggressive limit and starts both venue orders concurrently after preflight", async () => {
-  assert.equal(loadConfig({}).liveParallelExecutionEnabled, true);
-  assert.equal(loadConfig({}).liveOrderPlacementMode, "parallel_limit_rest");
+test("live executor keeps parallel market available and starts both venue orders concurrently after preflight", async () => {
+  const defaults = loadConfig({});
+  assert.equal(defaults.liveParallelExecutionEnabled, true);
+  assert.equal(defaults.liveOrderPlacementMode, "polymarket_first_exact");
+  assert.equal(defaults.polymarketOrderType, "FAK");
+  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_market" }).liveOrderPlacementMode, "parallel_market");
+  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_limit_rest" }).liveOrderPlacementMode, "parallel_limit_rest");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_fak" }).liveOrderPlacementMode, "parallel_fak");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "polymarket_first_exact" }).liveOrderPlacementMode, "polymarket_first_exact");
   assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
@@ -2069,8 +2301,16 @@ test("live executor defaults to parallel aggressive limit and starts both venue 
   assert.equal(loadConfig({}).liveFillQualitySampleLimit, 200);
   assert.equal(loadConfig({}).liveFillQualityMinSamples, 30);
   assert.equal(loadConfig({}).liveFillQualityModelVersion, "heuristic-v1");
-  assert.equal(loadConfig({}).livePolymarketFirstMinFillShares, 4);
-  assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 6);
+  assert.equal(loadConfig({}).liveLeadLagScoringEnabled, true);
+  assert.equal(loadConfig({}).liveLeadLagGateEnabled, false);
+  assert.equal(loadConfig({}).liveLeadLagModelVersion, "heuristic-v1");
+  assert.deepEqual(loadConfig({}).liveLeadLagWindowsMs, [1_000, 5_000, 15_000, 60_000]);
+  assert.equal(loadConfig({}).liveLeadLagMinConfidence, 0.65);
+  assert.equal(loadConfig({}).liveLeadLagMaxAdverseSelectionScore, 0.75);
+  assert.equal(loadConfig({}).liveOrderSize, 8);
+  assert.equal(loadConfig({}).liveMinBookDepthShares, 10);
+  assert.equal(loadConfig({}).livePolymarketFirstMinFillShares, 7);
+  assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 9);
   assert.equal(loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "4.5", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "5.5" }).livePolymarketFirstMinFillShares, 4.5);
   assert.throws(
     () => loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "6.1", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "6" }),
@@ -2100,7 +2340,13 @@ test("live executor defaults to parallel aggressive limit and starts both venue 
   const kalshi = new ParallelClient("kalshi");
   const polymarket = new ParallelClient("polymarket");
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 1, liveParallelExecutionEnabled: loadConfig({}).liveParallelExecutionEnabled, liveOrderTimeoutMs: 5_000 }),
+    config({
+      liveOrderSize: 1,
+      liveOrderPlacementMode: "parallel_market",
+      liveParallelExecutionEnabled: false,
+      polymarketOrderType: defaults.polymarketOrderType,
+      liveOrderTimeoutMs: 5_000,
+    }),
     books,
     kalshi,
     polymarket,
@@ -2112,11 +2358,37 @@ test("live executor defaults to parallel aggressive limit and starts both venue 
   releaseKalshi();
   const result = await execution;
 
-  assert.equal(result.executionStrategy, "parallel_limit_rest");
+  assert.equal(result.executionStrategy, "parallel_market");
   assert.equal(result.action, "filled");
   assert.equal(result.executionTimings?.firstVenue, null);
-  assert.match(result.executionTimings?.firstVenueReason ?? "", /aggressive limit orders submitted concurrently/);
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /capped market orders submitted concurrently/);
   assert.deepEqual(starts.sort(), ["kalshi", "polymarket"]);
+  assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_market");
+  assert.equal(polymarket.placed[0]?.context.placementMode, "parallel_market");
+  assert.equal(polymarket.placed[0]?.context.limitRestMs, undefined);
+});
+
+test("live executor keeps parallel aggressive limit available when configured", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 1, liveParallelExecutionEnabled: true, liveOrderPlacementMode: "parallel_limit_rest" }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_limit_rest");
+  assert.equal(result.action, "filled");
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /aggressive limit orders submitted concurrently/);
   assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_limit_rest");
   assert.equal(polymarket.placed[0]?.context.limitRestMs, 500);
 });
@@ -2167,7 +2439,7 @@ test("live executor uses parallel_fak and audits fractional Polymarket fills wit
   });
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveParallelExecutionEnabled: true,
       liveOrderPlacementMode: "parallel_fak",
       liveAutoHardlocksEnabled: false,
@@ -2202,10 +2474,10 @@ test("live executor uses polymarket_first_exact and submits Kalshi after Polymar
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
-  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 5, liveOrderPlacementMode: "polymarket_first_exact" }),
+    config({ liveOrderSize: 8, liveOrderPlacementMode: "polymarket_first_exact" }),
     books,
     kalshi,
     polymarket,
@@ -2223,11 +2495,11 @@ test("live executor uses polymarket_first_exact and submits Kalshi after Polymar
   assert.equal(kalshi.placed[0]?.context.placementMode, "polymarket_first_exact");
   assert.equal(kalshi.placed[0]?.context.maxBuyPrice, 0.61);
   assert.equal(result.executionTimings?.firstVenue, "polymarket");
-  assert.match(result.executionTimings?.firstVenueReason ?? "", /4-6 shares/);
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /7-9 shares/);
   assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "rest_response");
   assert.equal(typeof result.executionTimings?.polyExactToKalshiSubmitMs, "number");
   assert.equal(result.executionTimings?.polymarketHedgeTriggerSource, "rest_response");
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 5);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 8);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerExact, true);
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
 });
@@ -2238,11 +2510,11 @@ test("live executor persists fill-quality snapshot in shadow mode without blocki
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
-  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveOrderPlacementMode: "polymarket_first_exact",
       liveExecutionQualityGateEnabled: false,
       liveFillQualityScoringEnabled: true,
@@ -2265,7 +2537,44 @@ test("live executor persists fill-quality snapshot in shadow mode without blocki
   assert.equal(kalshi.placed.length, 1);
   assert.equal(result.fillQualitySnapshot?.shadowMode, true);
   assert.equal(result.fillQualitySnapshot?.gateEnabled, false);
+  assert.equal(result.leadLagSnapshot?.shadowMode, true);
+  assert.equal(result.leadLagSnapshot?.gateEnabled, false);
   assert.equal(result.expectedExecutableEdge, result.fillQualitySnapshot?.expectedExecutableEdge);
+});
+
+test("live executor lead/lag gate skips before venue submit on adverse Polymarket-leading movement", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore(5);
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  seedPolymarketLeadingHistory(books, now);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveExecutionQualityGateEnabled: false,
+      liveLeadLagScoringEnabled: true,
+      liveLeadLagGateEnabled: true,
+      liveLeadLagWindowsMs: [5_000, 15_000, 60_000],
+      liveLeadLagMaxAdverseSelectionScore: 0.3,
+      liveFillQualityScoringEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /lead-lag adverse selection score/);
+  assert.equal(result.leadLagSnapshot?.gatePassed, false);
+  assert.equal(polymarket.placed.length, 0);
+  assert.equal(kalshi.placed.length, 0);
 });
 
 test("live executor fill-quality gate skips before venue submit when expected edge is too low", async () => {
@@ -2274,11 +2583,11 @@ test("live executor fill-quality gate skips before venue submit when expected ed
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
-  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveOrderPlacementMode: "polymarket_first_exact",
       liveExecutionQualityGateEnabled: false,
       liveFillQualityScoringEnabled: true,
@@ -2309,11 +2618,11 @@ test("live executor fill-quality gate allows candidate when expected edge clears
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
-  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveOrderPlacementMode: "polymarket_first_exact",
       liveExecutionQualityGateEnabled: false,
       liveFillQualityScoringEnabled: true,
@@ -2344,8 +2653,8 @@ test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stre
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
-  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   class DelayedPolymarketConfirmation extends FakeConfirmationMonitor {
     resolvePolymarket: (() => void) | null = null;
 
@@ -2359,7 +2668,7 @@ test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stre
           reason: null,
           clientOrderId: result.clientOrderId,
           venueOrderId: result.orderId,
-          fillCount: 5,
+          fillCount: 8,
           fillPrice: 0.4,
           fee: null,
           exchangeTimestampMs: null,
@@ -2371,7 +2680,7 @@ test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stre
   }
   const monitor = new DelayedPolymarketConfirmation();
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 5, liveOrderPlacementMode: "polymarket_first_exact", liveUserStreamsEnabled: true }),
+    config({ liveOrderSize: 8, liveOrderPlacementMode: "polymarket_first_exact", liveUserStreamsEnabled: true }),
     books,
     kalshi,
     polymarket,
@@ -2390,7 +2699,7 @@ test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stre
   assert.equal(result.action, "filled");
   assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "rest_response");
   assert.equal(result.executionTimings?.polymarketHedgeTriggerSource, "rest_response");
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 5);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 8);
   assert.equal(kalshi.placed.length, 1);
 });
 
@@ -2400,7 +2709,7 @@ test("polymarket_first_exact sends Kalshi from exact stream evidence while REST 
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
   class SlowUnknownPolymarketClient extends FakeVenueClient {
     async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
       this.placed.push({ leg, context });
@@ -2430,7 +2739,7 @@ test("polymarket_first_exact sends Kalshi from exact stream evidence while REST 
         reason: null,
         clientOrderId: result.clientOrderId,
         venueOrderId: "polymarket-stream-order",
-        fillCount: 5,
+        fillCount: 8,
         fillPrice: 0.4,
         fee: null,
         exchangeTimestampMs: null,
@@ -2442,7 +2751,7 @@ test("polymarket_first_exact sends Kalshi from exact stream evidence while REST 
   const polymarket = new SlowUnknownPolymarketClient("polymarket");
   const monitor = new ImmediateStreamConfirmation();
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 5, liveOrderPlacementMode: "polymarket_first_exact", liveUserStreamsEnabled: true }),
+    config({ liveOrderSize: 8, liveOrderPlacementMode: "polymarket_first_exact", liveUserStreamsEnabled: true }),
     books,
     kalshi,
     polymarket,
@@ -2460,7 +2769,7 @@ test("polymarket_first_exact sends Kalshi from exact stream evidence while REST 
   assert.equal(result.polymarketFillId, "polymarket-stream-order");
   assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "private_stream");
   assert.equal(result.executionTimings?.polymarketHedgeTriggerSource, "private_stream");
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 5);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 8);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerExact, true);
   assert.equal(typeof result.executionTimings?.polyExactToKalshiSubmitMs, "number");
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
@@ -2472,7 +2781,7 @@ test("polymarket_first_exact sends Kalshi from in-range stream mismatch evidence
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
   class SlowUnknownPolymarketClient extends FakeVenueClient {
     async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
       this.placed.push({ leg, context });
@@ -2499,10 +2808,10 @@ test("polymarket_first_exact sends Kalshi from in-range stream mismatch evidence
       return {
         venue: "polymarket",
         status: "mismatch",
-        reason: "filled 5.2 shares for expected size 5",
+        reason: "filled 8.2 shares for expected size 8",
         clientOrderId: result.clientOrderId,
         venueOrderId: "polymarket-stream-order",
-        fillCount: 5.2,
+        fillCount: 8.2,
         fillPrice: 0.4,
         fee: null,
         exchangeTimestampMs: null,
@@ -2515,7 +2824,7 @@ test("polymarket_first_exact sends Kalshi from in-range stream mismatch evidence
   const monitor = new ImmediateMismatchStreamConfirmation();
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveOrderPlacementMode: "polymarket_first_exact",
       liveUserStreamsEnabled: true,
       liveAutoHardlocksEnabled: false,
@@ -2536,9 +2845,9 @@ test("polymarket_first_exact sends Kalshi from in-range stream mismatch evidence
   assert.equal(result.action, "failed");
   assert.equal(result.partialFill, true);
   assert.equal(result.polymarketFillId, "polymarket-stream-order");
-  assert.equal(result.polymarketFillCount, 5.2);
+  assert.equal(result.polymarketFillCount, 8.2);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerSource, "private_stream");
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 5.2);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 8.2);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerExact, false);
   assert.equal(result.executionTimings?.polymarketExactEvidenceSource, null);
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
@@ -2551,16 +2860,16 @@ test("polymarket_first_exact submits Kalshi after fractional Polymarket fill ins
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
   const locks = new FakeLiveLockStore();
-  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
   const polymarket = new FakeVenueClient("polymarket", {
     status: "unexpected_fill_count",
-    fillCount: 5.128204,
+    fillCount: 8.128204,
     fillPrice: 0.4,
     error: "Polymarket FAK returned fractional fill",
   });
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveOrderPlacementMode: "polymarket_first_exact",
       liveAutoHardlocksEnabled: false,
     }),
@@ -2578,12 +2887,12 @@ test("polymarket_first_exact submits Kalshi after fractional Polymarket fill ins
   assert.equal(result.partialFill, true);
   assert.equal(polymarket.placed.length, 1);
   assert.equal(kalshi.placed.length, 1);
-  assert.equal(result.kalshiFillCount, 5);
-  assert.equal(result.polymarketFillCount, 5.128204);
+  assert.equal(result.kalshiFillCount, 8);
+  assert.equal(result.polymarketFillCount, 8.128204);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerSource, "rest_response");
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 5.128204);
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerMinFillShares, 4);
-  assert.equal(result.executionTimings?.polymarketHedgeTriggerMaxFillShares, 6);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 8.128204);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerMinFillShares, 7);
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerMaxFillShares, 9);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerExact, false);
   assert.equal(result.executionTimings?.polymarketExactEvidenceSource, null);
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
@@ -2594,15 +2903,15 @@ test("polymarket_first_exact submits Kalshi after fractional Polymarket fill ins
 test("polymarket_first_exact treats configured Polymarket fill range boundaries as hedge triggers", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
-  for (const fillCount of [4, 6]) {
+  for (const fillCount of [7, 8, 8.5, 9]) {
     const books = new BookStore();
     books.setPolymarketContracts([lower]);
     books.setKalshiContracts([higher]);
-    const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+    const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
     const polymarket = new FakeVenueClient("polymarket", { fillCount, fillPrice: 0.4 });
     const executor = new LiveExecutor(
       config({
-        liveOrderSize: 5,
+        liveOrderSize: 8,
         liveOrderPlacementMode: "polymarket_first_exact",
         liveAutoHardlocksEnabled: false,
       }),
@@ -2616,8 +2925,8 @@ test("polymarket_first_exact treats configured Polymarket fill range boundaries 
 
     assert.equal(polymarket.placed.length, 1);
     assert.equal(kalshi.placed.length, 1);
-    assert.equal(result.action, "failed");
-    assert.equal(result.partialFill, true);
+    assert.equal(result.action, fillCount === 8 ? "filled" : "failed");
+    assert.equal(result.partialFill, fillCount !== 8);
     assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, fillCount);
   }
 });
@@ -2625,11 +2934,11 @@ test("polymarket_first_exact treats configured Polymarket fill range boundaries 
 test("polymarket_first_exact does not submit Kalshi when Polymarket fill is outside configured range", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
-  for (const fillCount of [0, 3.99, 6.01]) {
+  for (const fillCount of [0, 6.99, 9.01]) {
     const books = new BookStore();
     books.setPolymarketContracts([lower]);
     books.setKalshiContracts([higher]);
-    const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+    const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
     const polymarket = new FakeVenueClient("polymarket", {
       status: fillCount === 0 ? "unfilled" : "unexpected_fill_count",
       fillCount,
@@ -2638,7 +2947,7 @@ test("polymarket_first_exact does not submit Kalshi when Polymarket fill is outs
     });
     const executor = new LiveExecutor(
       config({
-        liveOrderSize: 5,
+        liveOrderSize: 8,
         liveOrderPlacementMode: "polymarket_first_exact",
         liveAutoHardlocksEnabled: false,
       }),
@@ -2668,10 +2977,10 @@ test("polymarket_first_exact marks exposure when Kalshi misses after exact Polym
     fillPrice: null,
     error: "Kalshi FOK rejected",
   });
-  const polymarket = new FakeVenueClient("polymarket", { fillCount: 5, fillPrice: 0.4 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   const executor = new LiveExecutor(
     config({
-      liveOrderSize: 5,
+      liveOrderSize: 8,
       liveOrderPlacementMode: "polymarket_first_exact",
       liveAutoHardlocksEnabled: false,
     }),
@@ -3843,6 +4152,29 @@ test("live executor preflights Polymarket minimum size before placing Kalshi", a
 
   assert.equal(result.action, "skipped");
   assert.match(result.failureReason ?? "", /min order size 5/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+});
+
+test("live executor does not submit Polymarket when Kalshi hedge collateral preflight fails", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  class InsufficientKalshiCollateralClient extends FakeVenueClient {
+    async preflightOrder(): Promise<string | null> {
+      return "Kalshi cash balance 0.03 is below required hedge collateral 4.41";
+    }
+  }
+  const kalshi = new InsufficientKalshiCollateralClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(config({ liveOrderSize: 8 }), books, kalshi, polymarket, () => now);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /Kalshi cash balance 0.03 is below required hedge collateral/);
   assert.equal(kalshi.placed.length, 0);
   assert.equal(polymarket.placed.length, 0);
 });

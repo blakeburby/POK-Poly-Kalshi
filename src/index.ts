@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   const pool = createPool(config);
   await runMigrations(pool);
 
-  const books = new BookStore();
+  const books = new BookStore(config.liveOrderSize);
   const signals = new SignalStore(pool);
   const baseLiveLocks = new LiveExecutionLockStore(pool);
   const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs) : null;
@@ -274,6 +274,8 @@ async function main(): Promise<void> {
           liveTrading: true,
           arbEnabled: config.arbEnabled,
           liveOrderPlacementMode: config.liveOrderPlacementMode,
+          liveOrderSize: config.liveOrderSize,
+          liveMinBookDepthShares: config.liveMinBookDepthShares,
           scanHeartbeatMs: config.arbScanHeartbeatMs,
           lastScanAgeMs: scannerStatus.lastScanAt > 0 ? Math.max(0, Date.now() - scannerStatus.lastScanAt) : null,
           maxTradesPerWindow: config.liveMaxTradesPerWindow,
@@ -298,6 +300,12 @@ async function main(): Promise<void> {
           liveFillQualitySampleLimit: config.liveFillQualitySampleLimit,
           liveFillQualityMinSamples: config.liveFillQualityMinSamples,
           liveFillQualityModelVersion: config.liveFillQualityModelVersion,
+          liveLeadLagScoringEnabled: config.liveLeadLagScoringEnabled,
+          liveLeadLagGateEnabled: config.liveLeadLagGateEnabled,
+          liveLeadLagModelVersion: config.liveLeadLagModelVersion,
+          liveLeadLagWindowsMs: config.liveLeadLagWindowsMs,
+          liveLeadLagMinConfidence: config.liveLeadLagMinConfidence,
+          liveLeadLagMaxAdverseSelectionScore: config.liveLeadLagMaxAdverseSelectionScore,
         });
         return;
       }

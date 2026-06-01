@@ -1,0 +1,204 @@
+{
+  "generatedAt": "2026-06-01T06:26:24.281Z",
+  "thresholds": {
+    "minExpectedEdge": 0.01,
+    "minSamples": 200,
+    "badAttemptReductionTarget": 0.25,
+    "maxProfitableFillEliminationRate": 0.5,
+    "minTopBottomExactFillRateSpread": 0.1
+  },
+  "summary": {
+    "sampleCount": 870,
+    "firstScoredAt": "2026-05-13T20:45:58.698Z",
+    "lastScoredAt": "2026-06-01T03:25:43.519Z",
+    "exactPairedFills": 18,
+    "profitableExactPairedFills": 18,
+    "partials": 467,
+    "unknownOrTimeouts": 17,
+    "failures": 852,
+    "badAttempts": 852
+  },
+  "pairedFillProbabilityBuckets": [
+    {
+      "label": "0.0-0.1",
+      "count": 33,
+      "exactPairedFills": 2,
+      "partials": 13,
+      "unknownOrTimeouts": 1,
+      "badAttempts": 31,
+      "exactPairFillRate": 0.060606,
+      "badAttemptRate": 0.939394,
+      "avgExpectedExecutableEdge": -1.183218,
+      "avgRealizedEdge": 0.058225
+    },
+    {
+      "label": "0.1-0.2",
+      "count": 137,
+      "exactPairedFills": 7,
+      "partials": 67,
+      "unknownOrTimeouts": 3,
+      "badAttempts": 130,
+      "exactPairFillRate": 0.051095,
+      "badAttemptRate": 0.948905,
+      "avgExpectedExecutableEdge": -1.366445,
+      "avgRealizedEdge": 0.086764
+    },
+    {
+      "label": "0.2-0.3",
+      "count": 700,
+      "exactPairedFills": 9,
+      "partials": 387,
+      "unknownOrTimeouts": 13,
+      "badAttempts": 691,
+      "exactPairFillRate": 0.012857,
+      "badAttemptRate": 0.987143,
+      "avgExpectedExecutableEdge": -1.332394,
+      "avgRealizedEdge": 0.068514
+    }
+  ],
+  "expectedExecutableEdgeDeciles": [
+    {
+      "label": "D1 -7.152..-4.679",
+      "count": 87,
+      "exactPairedFills": 0,
+      "partials": 72,
+      "unknownOrTimeouts": 1,
+      "badAttempts": 87,
+      "exactPairFillRate": 0,
+      "badAttemptRate": 1,
+      "avgExpectedExecutableEdge": -5.683235,
+      "avgRealizedEdge": 0.02136
+    },
+    {
+      "label": "D2 -4.669..-3.179",
+      "count": 87,
+      "exactPairedFills": 0,
+      "partials": 70,
+      "unknownOrTimeouts": 0,
+      "badAttempts": 87,
+      "exactPairFillRate": 0,
+      "badAttemptRate": 1,
+      "avgExpectedExecutableEdge": -3.984611,
+      "avgRealizedEdge": null
+    },
+    {
+      "label": "D3 -3.169..-1.332",
+      "count": 87,
+      "exactPairedFills": 0,
+      "partials": 58,
+      "unknownOrTimeouts": 1,
+      "badAttempts": 87,
+      "exactPairFillRate": 0,
+      "badAttemptRate": 1,
+      "avgExpectedExecutableEdge": -2.236508,
+      "avgRealizedEdge": 0.0302
+    },
+    {
+      "label": "D4 -1.309..-0.367",
+      "count": 87,
+      "exactPairedFills": 7,
+      "partials": 42,
+      "unknownOrTimeouts": 1,
+      "badAttempts": 80,
+      "exactPairFillRate": 0.08046,
+      "badAttemptRate": 0.91954,
+      "avgExpectedExecutableEdge": -0.752048,
+      "avgRealizedEdge": 0.09845
+    },
+    {
+      "label": "D5 -0.349..-0.212",
+      "count": 87,
+      "exactPairedFills": 0,
+      "partials": 50,
+      "unknownOrTimeouts": 2,
+      "badAttempts": 87,
+      "exactPairFillRate": 0,
+      "badAttemptRate": 1,
+      "avgExpectedExecutableEdge": -0.259142,
+      "avgRealizedEdge": 0.119346
+    },
+    {
+      "label": "D6 -0.212..-0.179",
+      "count": 87,
+      "exactPairedFills": 0,
+      "partials": 47,
+      "unknownOrTimeouts": 1,
+      "badAttempts": 87,
+      "exactPairFillRate": 0,
+      "badAttemptRate": 1,
+      "avgExpectedExecutableEdge": -0.192577,
+      "avgRealizedEdge": 0.038004
+    },
+    {
+      "label": "D7 -0.179..-0.070",
+      "count": 87,
+      "exactPairedFills": 1,
+      "partials": 36,
+      "unknownOrTimeouts": 2,
+      "badAttempts": 86,
+      "exactPairFillRate": 0.011494,
+      "badAttemptRate": 0.988506,
+      "avgExpectedExecutableEdge": -0.126466,
+      "avgRealizedEdge": 0.13767
+    },
+    {
+      "label": "D8 -0.070..-0.029",
+      "count": 87,
+      "exactPairedFills": 3,
+      "partials": 40,
+      "unknownOrTimeouts": 4,
+      "badAttempts": 84,
+      "exactPairFillRate": 0.034483,
+      "badAttemptRate": 0.965517,
+      "avgExpectedExecutableEdge": -0.047327,
+      "avgRealizedEdge": 0.061597
+    },
+    {
+      "label": "D9 -0.029..-0.025",
+      "count": 87,
+      "exactPairedFills": 5,
+      "partials": 36,
+      "unknownOrTimeouts": 0,
+      "badAttempts": 82,
+      "exactPairFillRate": 0.057471,
+      "badAttemptRate": 0.942529,
+      "avgExpectedExecutableEdge": -0.026566,
+      "avgRealizedEdge": 0.030964
+    },
+    {
+      "label": "D10 -0.025..0.088",
+      "count": 87,
+      "exactPairedFills": 2,
+      "partials": 16,
+      "unknownOrTimeouts": 5,
+      "badAttempts": 85,
+      "exactPairFillRate": 0.022989,
+      "badAttemptRate": 0.977011,
+      "avgExpectedExecutableEdge": -0.0125,
+      "avgRealizedEdge": 0.070967
+    }
+  ],
+  "gateSimulation": {
+    "allowed": 6,
+    "blocked": 864,
+    "allowedBadAttempts": 6,
+    "blockedBadAttempts": 846,
+    "allowedProfitableExactFills": 0,
+    "blockedProfitableExactFills": 18,
+    "badAttemptReductionRate": 0.992958,
+    "profitableFillEliminationRate": 1
+  },
+  "directionality": {
+    "bottomHalfExactFillRate": 0.02069,
+    "topHalfExactFillRate": 0.02069,
+    "spread": 0,
+    "passed": false
+  },
+  "promotion": {
+    "passed": false,
+    "reasons": [
+      "predicted paired-fill buckets are not directionally valid by 0.1",
+      "simulated gate blocks 1.000 of profitable exact fills; max 0.5"
+    ]
+  }
+}
