@@ -88,6 +88,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveMinExpiryMs: 30_000,
     liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
+    liveKalshiMinCashDollars: 0,
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
@@ -658,7 +659,34 @@ test("Kalshi order client preflight blocks when cash cannot cover hedge collater
     placementMode: "polymarket_first_exact",
   }));
 
-  assert.match(reason ?? "", /Kalshi cash balance 0.03 is below required hedge collateral 4.41/);
+  assert.match(reason ?? "", /Kalshi cash balance 0.03 is below required operating cash 4.41/);
+});
+
+test("Kalshi order client preflight requires configured multi-trade operating cash floor", async () => {
+  const fetchFn = async (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "20.00" }), { status: 200 });
+    }
+    throw new Error("order submit should not run when Kalshi operating cash is below the configured floor");
+  };
+  const client = new KalshiOrderClient(config({ liveKalshiMinCashDollars: 30 }), fetchFn as typeof fetch);
+
+  const reason = await withKalshiEnv(() => client.preflightOrder({
+    venue: "kalshi",
+    contractId: "KXBTC15M-CASHFLOOR",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.5,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-cash-floor",
+    size: 8,
+    maxBuyPrice: 0.52,
+    requiredCollateral: 4.41,
+    placementMode: "polymarket_first_exact",
+  }));
+
+  assert.match(reason ?? "", /Kalshi cash balance 20 is below required operating cash 30/);
 });
 
 test("Kalshi order client uses aggressive GTC limit and cancels unfilled remainder", async () => {
@@ -2294,6 +2322,8 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
+  assert.equal(loadConfig({}).liveKalshiMinCashDollars, 30);
+  assert.equal(loadConfig({ LIVE_KALSHI_MIN_CASH_DOLLARS: "100" }).liveKalshiMinCashDollars, 100);
   assert.equal(loadConfig({}).liveFillQualityScoringEnabled, true);
   assert.equal(loadConfig({}).liveFillQualityGateEnabled, false);
   assert.equal(loadConfig({}).liveFillQualityMinExpectedEdge, 0.01);
@@ -2998,6 +3028,7 @@ test("polymarket_first_exact marks exposure when Kalshi misses after exact Polym
   assert.equal(kalshi.placed.length, 1);
   assert.match(result.liveLockReason ?? "", /venue fill mismatch/);
   assert.match(result.failureReason ?? "", /risk quarantined|venue fill mismatch|Kalshi FOK rejected/);
+  assert.equal(result.recoveryEvidence?.failureClassification && (result.recoveryEvidence.failureClassification as Record<string, unknown>).category, "liquidity_or_partial_fill");
 });
 
 test("live executor skips without submitting when preflight exceeds quote freshness window", async () => {
@@ -4164,7 +4195,7 @@ test("live executor does not submit Polymarket when Kalshi hedge collateral pref
   books.setKalshiContracts([higher]);
   class InsufficientKalshiCollateralClient extends FakeVenueClient {
     async preflightOrder(): Promise<string | null> {
-      return "Kalshi cash balance 0.03 is below required hedge collateral 4.41";
+      return "Kalshi cash balance 0.03 is below required operating cash 4.41";
     }
   }
   const kalshi = new InsufficientKalshiCollateralClient("kalshi");
@@ -4174,7 +4205,7 @@ test("live executor does not submit Polymarket when Kalshi hedge collateral pref
   const result = await executor.execute(candidate);
 
   assert.equal(result.action, "skipped");
-  assert.match(result.failureReason ?? "", /Kalshi cash balance 0.03 is below required hedge collateral/);
+  assert.match(result.failureReason ?? "", /Kalshi cash balance 0.03 is below required operating cash/);
   assert.equal(kalshi.placed.length, 0);
   assert.equal(polymarket.placed.length, 0);
 });

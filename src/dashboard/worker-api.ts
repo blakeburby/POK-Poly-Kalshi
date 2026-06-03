@@ -166,6 +166,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       liveMaxTradesPerWindow: runtime.config.liveMaxTradesPerWindow,
       liveOrderSize: runtime.config.liveOrderSize,
       liveTakerPriceCushionCents: runtime.config.liveTakerPriceCushionCents,
+      liveKalshiMinCashDollars: runtime.config.liveKalshiMinCashDollars,
       liveQuoteMaxAgeMs: runtime.config.liveQuoteMaxAgeMs,
       liveQuoteSyncMaxSkewMs: runtime.config.liveQuoteSyncMaxSkewMs,
       liveMinBookDepthShares: runtime.config.liveMinBookDepthShares,

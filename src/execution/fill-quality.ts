@@ -8,6 +8,7 @@ import type {
   QuoteSnapshotLeg,
   Venue,
   VenueConfirmations,
+  PairedFillConfidenceSnapshot,
 } from "../types";
 import { economicFillPriceForSignalVenue } from "./economic-prices";
 
@@ -172,6 +173,85 @@ function addPenalty(
   return currentProbability - amount;
 }
 
+function effectiveDepth(
+  leg: QuoteSnapshotLeg | null,
+  options: {
+    quoteMaxAgeMs: number;
+    quoteSkewMs: number | null;
+    quoteSyncMaxSkewMs: number;
+    rttP95Ms: number | null;
+    orderTimeoutMs: number;
+    mismatchRate: number | null;
+    adverseSelectionScore?: number | null;
+  },
+): number | null {
+  if (!leg) return null;
+  let multiplier = 1;
+  if ((leg.quoteAgeMs ?? 0) > options.quoteMaxAgeMs * 0.75) multiplier -= 0.2;
+  if ((options.quoteSkewMs ?? 0) > options.quoteSyncMaxSkewMs * 0.75) multiplier -= 0.15;
+  if ((leg.spread ?? 0) >= 0.08) multiplier -= 0.1;
+  if (options.rttP95Ms != null && options.rttP95Ms >= options.orderTimeoutMs * 0.85) multiplier -= 0.2;
+  if ((options.mismatchRate ?? 0) >= 0.35) multiplier -= 0.15;
+  if ((options.adverseSelectionScore ?? 0) >= 0.75) multiplier -= 0.15;
+  return roundMetric(leg.depth * bounded(multiplier, 0.35, 1));
+}
+
+function inRangePolymarketFillRate(samples: DashboardSignal[], minFill: number, maxFill: number): number | null {
+  if (samples.length === 0) return null;
+  const inRange = samples.filter((signal) => {
+    const count = signal.polymarketFillCount ?? 0;
+    const status = String(signal.polymarketStatus ?? "").toLowerCase();
+    return count >= minFill - EPSILON && count <= maxFill + EPSILON && !["failed", "unknown", "timeout", "not_submitted"].includes(status);
+  }).length;
+  return rate(inRange, samples.length);
+}
+
+function kalshiRejectRate(samples: DashboardSignal[]): number | null {
+  if (samples.length === 0) return null;
+  const rejects = samples.filter((signal) => {
+    const status = String(signal.kalshiStatus ?? "").toLowerCase();
+    const error = String(signal.kalshiError ?? "").toLowerCase();
+    return status === "failed" || error.includes("insufficient_balance") || error.includes("rejected") || error.includes("failed");
+  }).length;
+  return rate(rejects, samples.length);
+}
+
+function pairedFillConfidenceSnapshot(input: {
+  projectedEdgeAtLimit: number | null;
+  expectedExecutableEdge: number | null;
+  pairedFillProbability: number;
+  kalshiProbability: number;
+  polymarketProbability: number;
+  kalshiDepth: number | null;
+  polymarketDepth: number | null;
+  kalshiEffectiveDepth: number | null;
+  polymarketEffectiveDepth: number | null;
+  kalshiRecentRejectRate: number | null;
+  polymarketRecentInRangeFillRate: number | null;
+  avgMismatchCost: number | null;
+  mismatchRate: number | null;
+  timeoutRate: number | null;
+  penaltyReasons: string[];
+}): PairedFillConfidenceSnapshot {
+  return {
+    projectedEdgeAtLimit: input.projectedEdgeAtLimit == null ? null : roundMetric(input.projectedEdgeAtLimit),
+    expectedExecutableEdge: input.expectedExecutableEdge,
+    pairedFillProbability: input.pairedFillProbability,
+    kalshiExactFillProbability: input.kalshiProbability,
+    polymarketExactFillProbability: input.polymarketProbability,
+    kalshiDisplayedDepth: input.kalshiDepth,
+    polymarketDisplayedDepth: input.polymarketDepth,
+    kalshiEffectiveDepth: input.kalshiEffectiveDepth,
+    polymarketEffectiveDepth: input.polymarketEffectiveDepth,
+    kalshiRecentRejectRate: input.kalshiRecentRejectRate,
+    polymarketRecentInRangeFillRate: input.polymarketRecentInRangeFillRate,
+    recentMismatchCostDollars: input.avgMismatchCost,
+    recentMismatchRate: input.mismatchRate,
+    recentTimeoutRate: input.timeoutRate,
+    reasons: input.penaltyReasons.slice(0, 4),
+  };
+}
+
 function statusLabel(shadowMode: boolean, gatePassed: boolean): "shadow" | "pass" | "fail" {
   if (shadowMode) return "shadow";
   return gatePassed ? "pass" : "fail";
@@ -204,6 +284,8 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
   const timeoutRate = rate(recentTimeouts, sampleCount);
   const kalshiRecentExactFillRate = rate(kalshiExactFills, sampleCount);
   const polymarketRecentExactFillRate = rate(polymarketExactFills, sampleCount);
+  const kalshiRecentRejectRate = kalshiRejectRate(samples);
+  const polymarketRecentInRangeFillRate = inRangePolymarketFillRate(samples, config.livePolymarketFirstMinFillShares, config.livePolymarketFirstMaxFillShares);
   const sameExpiryAttemptCount = samples.filter((signal) => signal.expiryMs === candidate.expiryMs && signal.executionGroupId != null).length;
   const avgMismatchCost = average(samples.map(mismatchCost));
   const kalshiRtts = samples.map((signal) => signal.executionTimings?.kalshiOrderRttMs ?? signal.executionTimings?.kalshiRttMs ?? null);
@@ -269,6 +351,24 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
   const expectedExecutableEdge = projectedEdgeAtLimit == null
     ? null
     : roundMetric(projectedEdgeAtLimit * pairedFillProbability - expectedSlippage - expectedMismatchCost - timeoutCost);
+  const kalshiEffectiveDepth = effectiveDepth(quoteSnapshot.kalshi, {
+    quoteMaxAgeMs: config.liveQuoteMaxAgeMs,
+    quoteSkewMs: quoteSnapshot.quoteSkewMs,
+    quoteSyncMaxSkewMs: config.liveQuoteSyncMaxSkewMs,
+    rttP95Ms: kalshiRttP95,
+    orderTimeoutMs: config.liveOrderTimeoutMs,
+    mismatchRate,
+    adverseSelectionScore: leadLag?.adverseSelectionScore ?? null,
+  });
+  const polymarketEffectiveDepth = effectiveDepth(quoteSnapshot.polymarket, {
+    quoteMaxAgeMs: config.liveQuoteMaxAgeMs,
+    quoteSkewMs: quoteSnapshot.quoteSkewMs,
+    quoteSyncMaxSkewMs: config.liveQuoteSyncMaxSkewMs,
+    rttP95Ms: polymarketRttP95,
+    orderTimeoutMs: config.liveOrderTimeoutMs,
+    mismatchRate,
+    adverseSelectionScore: leadLag?.adverseSelectionScore ?? null,
+  });
   const gateEnabled = config.liveFillQualityGateEnabled;
   const shadowMode = !gateEnabled;
   const gatePassed = !gateEnabled || expectedExecutableEdge == null || expectedExecutableEdge >= config.liveFillQualityMinExpectedEdge;
@@ -293,6 +393,23 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
     expectedMismatchCost,
     timeoutCost,
     penaltyReasons,
+    pairedFillConfidence: pairedFillConfidenceSnapshot({
+      projectedEdgeAtLimit,
+      expectedExecutableEdge,
+      pairedFillProbability,
+      kalshiProbability,
+      polymarketProbability,
+      kalshiDepth: quoteSnapshot.kalshi?.depth ?? null,
+      polymarketDepth: quoteSnapshot.polymarket?.depth ?? null,
+      kalshiEffectiveDepth,
+      polymarketEffectiveDepth,
+      kalshiRecentRejectRate,
+      polymarketRecentInRangeFillRate,
+      avgMismatchCost,
+      mismatchRate,
+      timeoutRate,
+      penaltyReasons,
+    }),
     features: {
       sampleCount,
       minSamples,
@@ -301,6 +418,8 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
       placementMode,
       kalshiDepth: quoteSnapshot.kalshi?.depth ?? null,
       polymarketDepth: quoteSnapshot.polymarket?.depth ?? null,
+      kalshiEffectiveDepth,
+      polymarketEffectiveDepth,
       kalshiDepthRatio,
       polymarketDepthRatio,
       kalshiSpread: quoteSnapshot.kalshi?.spread ?? null,
@@ -315,6 +434,8 @@ export function scoreFillQuality(input: ScoreFillQualityInput): FillQualitySnaps
       recentTimeoutRate: timeoutRate,
       kalshiRecentExactFillRate,
       polymarketRecentExactFillRate,
+      kalshiRecentRejectRate,
+      polymarketRecentInRangeFillRate,
       kalshiRttP50Ms: percentile(kalshiRtts, 50),
       kalshiRttP95Ms: kalshiRttP95,
       polymarketRttP50Ms: percentile(polymarketRtts, 50),

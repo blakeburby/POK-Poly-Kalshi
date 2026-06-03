@@ -275,6 +275,7 @@ async function main(): Promise<void> {
           arbEnabled: config.arbEnabled,
           liveOrderPlacementMode: config.liveOrderPlacementMode,
           liveOrderSize: config.liveOrderSize,
+          liveKalshiMinCashDollars: config.liveKalshiMinCashDollars,
           liveMinBookDepthShares: config.liveMinBookDepthShares,
           scanHeartbeatMs: config.arbScanHeartbeatMs,
           lastScanAgeMs: scannerStatus.lastScanAt > 0 ? Math.max(0, Date.now() - scannerStatus.lastScanAt) : null,

@@ -468,6 +468,23 @@ test("signal details render compact fill-quality metadata", () => {
       expectedMismatchCost: 0.004,
       timeoutCost: 0.002,
       penaltyReasons: ["Polymarket p95 RTT is near timeout", "Recent mismatch rate is elevated"],
+      pairedFillConfidence: {
+        projectedEdgeAtLimit: 0.04,
+        expectedExecutableEdge: 0.0142,
+        pairedFillProbability: 0.61,
+        kalshiExactFillProbability: 0.91,
+        polymarketExactFillProbability: 0.67,
+        kalshiDisplayedDepth: 20,
+        polymarketDisplayedDepth: 20,
+        kalshiEffectiveDepth: 18,
+        polymarketEffectiveDepth: 14,
+        kalshiRecentRejectRate: 0.05,
+        polymarketRecentInRangeFillRate: 0.7,
+        recentMismatchCostDollars: 0.04,
+        recentMismatchRate: 0.3,
+        recentTimeoutRate: 0.1,
+        reasons: ["Polymarket p95 RTT is near timeout"],
+      },
       features: {
         sampleCount: 40,
         minSamples: 30,
@@ -505,6 +522,8 @@ test("signal details render compact fill-quality metadata", () => {
   const rendered = JSON.stringify(detail);
   assert.match(rendered, /Fill Quality/);
   assert.match(rendered, /shadow · XEV \+1c · Pair 61\.0%/);
+  assert.match(rendered, /Paired Confidence/);
+  assert.match(rendered, /K eff 18 \/ P eff 14/);
   assert.match(rendered, /Fill Penalty/);
   assert.match(rendered, /Polymarket p95 RTT is near timeout/);
 });

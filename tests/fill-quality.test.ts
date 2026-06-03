@@ -205,8 +205,54 @@ test("fill quality deterministically penalizes thin stale skewed high-latency bo
   });
 
   assert.ok(weak.pairedFillProbability < strong.pairedFillProbability);
+  assert.ok((weak.pairedFillConfidence?.kalshiEffectiveDepth ?? 0) < (weak.pairedFillConfidence?.kalshiDisplayedDepth ?? 0));
+  assert.ok((weak.pairedFillConfidence?.polymarketEffectiveDepth ?? 0) < (weak.pairedFillConfidence?.polymarketDisplayedDepth ?? 0));
   assert.ok(weak.penaltyReasons.some((reason) => reason.includes("thin")));
   assert.ok(weak.penaltyReasons.some((reason) => reason.includes("RTT")));
+});
+
+test("fill quality includes paired-fill confidence report with in-range Polymarket and Kalshi reject rates", () => {
+  const samples = [
+    signal({
+      id: 1,
+      kalshiFillCount: 8,
+      polymarketFillCount: 8,
+    }),
+    signal({
+      id: 2,
+      action: "failed",
+      partialFill: true,
+      kalshiStatus: "failed",
+      kalshiError: "Kalshi order failed 400: insufficient_balance",
+      kalshiFillCount: 0,
+      polymarketStatus: "filled",
+      polymarketFillCount: 8.4,
+    }),
+    signal({
+      id: 3,
+      action: "failed",
+      partialFill: true,
+      kalshiStatus: "not_submitted",
+      kalshiFillCount: 0,
+      polymarketStatus: "filled",
+      polymarketFillCount: 7.2,
+    }),
+  ];
+
+  const snapshot = scoreFillQuality({
+    candidate: candidate(),
+    quoteSnapshot: quote(0.04),
+    recentSignals: samples,
+    config: config({ liveOrderSize: 8, livePolymarketFirstMinFillShares: 7, livePolymarketFirstMaxFillShares: 9 }),
+    nowMs: now,
+    placementMode: "polymarket_first_exact",
+  });
+
+  assert.equal(snapshot.pairedFillConfidence?.kalshiDisplayedDepth, 20);
+  assert.equal(snapshot.pairedFillConfidence?.polymarketDisplayedDepth, 20);
+  assert.equal(snapshot.pairedFillConfidence?.polymarketRecentInRangeFillRate, 1);
+  assert.ok((snapshot.pairedFillConfidence?.kalshiRecentRejectRate ?? 0) > 0);
+  assert.equal(snapshot.pairedFillConfidence?.pairedFillProbability, snapshot.pairedFillProbability);
 });
 
 test("fill quality incorporates high-confidence adverse lead/lag risk", () => {

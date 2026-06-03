@@ -287,6 +287,8 @@ export interface FillQualityFeatures {
   placementMode: LiveOrderPlacementMode;
   kalshiDepth: number | null;
   polymarketDepth: number | null;
+  kalshiEffectiveDepth?: number | null;
+  polymarketEffectiveDepth?: number | null;
   kalshiDepthRatio: number | null;
   polymarketDepthRatio: number | null;
   kalshiSpread: number | null;
@@ -301,6 +303,8 @@ export interface FillQualityFeatures {
   recentTimeoutRate: number | null;
   kalshiRecentExactFillRate: number | null;
   polymarketRecentExactFillRate: number | null;
+  kalshiRecentRejectRate?: number | null;
+  polymarketRecentInRangeFillRate?: number | null;
   kalshiRttP50Ms: number | null;
   kalshiRttP95Ms: number | null;
   polymarketRttP50Ms: number | null;
@@ -315,6 +319,24 @@ export interface FillQualityFeatures {
   leadLagStalenessScore?: number | null;
   leadLagAdverseSelectionScore?: number | null;
   leadLagCheapLegIsLagging?: boolean | null;
+}
+
+export interface PairedFillConfidenceSnapshot {
+  projectedEdgeAtLimit: number | null;
+  expectedExecutableEdge: number | null;
+  pairedFillProbability: number;
+  kalshiExactFillProbability: number;
+  polymarketExactFillProbability: number;
+  kalshiDisplayedDepth: number | null;
+  polymarketDisplayedDepth: number | null;
+  kalshiEffectiveDepth: number | null;
+  polymarketEffectiveDepth: number | null;
+  kalshiRecentRejectRate: number | null;
+  polymarketRecentInRangeFillRate: number | null;
+  recentMismatchCostDollars: number | null;
+  recentMismatchRate: number | null;
+  recentTimeoutRate: number | null;
+  reasons: string[];
 }
 
 export interface FillQualitySnapshot {
@@ -334,6 +356,7 @@ export interface FillQualitySnapshot {
   expectedMismatchCost: number;
   timeoutCost: number;
   penaltyReasons: string[];
+  pairedFillConfidence?: PairedFillConfidenceSnapshot;
   features: FillQualityFeatures;
 }
 
@@ -766,6 +789,7 @@ export interface DashboardSnapshot {
     liveMaxTradesPerWindow: number;
     liveOrderSize: number;
     liveTakerPriceCushionCents?: number;
+    liveKalshiMinCashDollars: number;
     liveQuoteMaxAgeMs: number;
     liveQuoteSyncMaxSkewMs: number;
     liveMinBookDepthShares: number;

@@ -904,6 +904,14 @@ export function buildTradeDetailModel(source: TradeDetailSource, trade: ArbCandi
       if (fillQuality.penaltyReasons.length > 0) {
         metadata.push({ label: "Fill Penalty", value: fillQuality.penaltyReasons.slice(0, 2).join("; "), tone: "warn" });
       }
+      if (fillQuality.pairedFillConfidence) {
+        const confidence = fillQuality.pairedFillConfidence;
+        metadata.push({
+          label: "Paired Confidence",
+          value: `K eff ${confidence.kalshiEffectiveDepth ?? "--"} / P eff ${confidence.polymarketEffectiveDepth ?? "--"} · P range ${confidence.polymarketRecentInRangeFillRate == null ? "--" : formatPercent(confidence.polymarketRecentInRangeFillRate)} · K reject ${confidence.kalshiRecentRejectRate == null ? "--" : formatPercent(confidence.kalshiRecentRejectRate)}`,
+          tone: fillQuality.shadowMode ? "warn" : fillQuality.gatePassed ? "profit" : "loss",
+        });
+      }
     }
     const leadLag = signal.leadLagSnapshot ?? signal.quoteSnapshot?.leadLagSnapshot ?? null;
     if (leadLag) {

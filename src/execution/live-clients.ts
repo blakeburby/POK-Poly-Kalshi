@@ -441,7 +441,10 @@ export class KalshiOrderClient implements VenueOrderClient {
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
     return this.checkReadiness(now, {
-      requiredCollateral: roundPrice(this.config.liveOrderSize + this.config.liveCollateralBufferDollars),
+      requiredCollateral: roundPrice(Math.max(
+        this.config.liveOrderSize + this.config.liveCollateralBufferDollars,
+        this.config.liveKalshiMinCashDollars,
+      )),
     });
   }
 
@@ -457,7 +460,9 @@ export class KalshiOrderClient implements VenueOrderClient {
     now = Date.now(),
     options: { force?: boolean; requiredCollateral?: number } = {},
   ): Promise<VenueExecutionReadiness> {
-    const requiredCollateral = options.requiredCollateral;
+    const requiredCollateral = options.requiredCollateral == null
+      ? undefined
+      : roundPrice(Math.max(options.requiredCollateral, this.config.liveKalshiMinCashDollars));
     const configured = requireKalshiConfigured(now);
     if (!configured.ready || requiredCollateral == null) {
       const readiness = { ...configured, requiredCollateral };
@@ -486,7 +491,7 @@ export class KalshiOrderClient implements VenueOrderClient {
       const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
       const { balance, rawBalance, rawField } = kalshiCashBalanceFromPayload(payload);
       const reason = balance == null || balance + 1e-9 < requiredCollateral
-        ? `Kalshi cash balance ${balance ?? 0} is below required hedge collateral ${requiredCollateral}`
+        ? `Kalshi cash balance ${balance ?? 0} is below required operating cash ${requiredCollateral}`
         : null;
       const readiness: VenueExecutionReadiness = {
         configured: true,
@@ -526,7 +531,7 @@ export class KalshiOrderClient implements VenueOrderClient {
     context.preflight = {
       ...context.preflight,
       kalshiReadiness: readiness,
-      kalshiRequiredCollateral: requiredCollateral,
+      kalshiRequiredCollateral: readiness.requiredCollateral ?? requiredCollateral,
     };
     if (!readiness.ready) return readiness.reason ?? "Kalshi execution is not configured";
     if (!this.config.liveKalshiPrearmEnabled || context.placementMode !== "polymarket_first_exact") return null;
@@ -649,7 +654,7 @@ export class KalshiOrderClient implements VenueOrderClient {
         kalshiPrearmOriginalYesBookPrice: prepared?.originalYesBookPrice ?? null,
         kalshiSubmittedMaxBuyPrice: context.maxBuyPrice,
         kalshiSubmittedYesBookPrice: kalshiYesBookPrice(leg, context),
-        kalshiRequiredCollateral: requiredCollateral,
+        kalshiRequiredCollateral: readiness.requiredCollateral ?? requiredCollateral,
         kalshiCollateralBalance: readiness.balance,
       },
     };

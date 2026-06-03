@@ -1633,6 +1633,45 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
+  private postTradeFailureClassification(
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    partialFill: boolean,
+    realizedGuaranteedProfit: number | null,
+    metadata: ExecutionMetadata,
+  ): Record<string, unknown> | null {
+    const combined = `${kalshi.status} ${kalshi.error ?? ""} ${polymarket.status} ${polymarket.error ?? ""}`.toLowerCase();
+    const kalshiFillCount = kalshi.fillCount ?? 0;
+    const polymarketFillCount = polymarket.fillCount ?? 0;
+    const quoteFailure = metadata.quoteSnapshot?.failureReason ?? null;
+    let category: string | null = null;
+    if (combined.includes("insufficient_balance") || combined.includes("below required operating cash") || combined.includes("below required hedge collateral")) {
+      category = "insufficient_balance";
+    } else if (combined.includes("timeout") || kalshi.status === "unknown" || polymarket.status === "unknown") {
+      category = "timeout_or_unknown";
+    } else if (partialFill || kalshiFillCount !== polymarketFillCount) {
+      category = "liquidity_or_partial_fill";
+    } else if (realizedGuaranteedProfit != null && realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars) {
+      category = "negative_or_below_threshold_realized_edge";
+    } else if (quoteFailure || combined.includes("stale") || combined.includes("quote")) {
+      category = "stale_quote_or_edge_gate";
+    } else if (combined.includes("failed") || combined.includes("rejected")) {
+      category = "exchange_reject";
+    }
+    if (!category) return null;
+    return {
+      category,
+      kalshiStatus: kalshi.status,
+      polymarketStatus: polymarket.status,
+      kalshiFillCount,
+      polymarketFillCount,
+      kalshiError: kalshi.error ?? null,
+      polymarketError: polymarket.error ?? null,
+      quoteFailure,
+      classifiedAt: new Date(this.now()).toISOString(),
+    };
+  }
+
   private recoveryStatusForResult(
     liveLockReason: string | null,
     exactPairFilled: boolean,
@@ -1723,8 +1762,12 @@ export class LiveExecutor implements ArbExecutor {
       || metadata.recoveryStatus === "pretrade_retry";
     const recoveryStatus = metadata.recoveryStatus
       ?? (riskQuarantine ? "risk_quarantined" : this.recoveryStatusForResult(liveLockReason, exactPairFilled, hasAnyFill, recoveryEvidencePresent));
-    const recoveryEvidence = metadata.recoveryEvidence
+    const failureClassification = this.postTradeFailureClassification(kalshi, polymarket, partialFill, realizedGuaranteedProfit, metadata);
+    const baseRecoveryEvidence = metadata.recoveryEvidence
       ?? (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
+    const recoveryEvidence = failureClassification
+      ? { ...(baseRecoveryEvidence ?? {}), failureClassification }
+      : baseRecoveryEvidence;
     const finalizationMs = metadata.finalizationMs ?? metadata.executionTimings?.totalMs ?? null;
     const autoResolution = this.autoResolution(recoveryStatus, executionGroupId, recoveryEvidence);
     if (liveLockReason && this.config.liveAutoHardlocksEnabled) this.partialFillLocked = true;
