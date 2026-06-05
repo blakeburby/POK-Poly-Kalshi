@@ -35,6 +35,12 @@ run_app() {
   fi
 }
 
+ensure_app_git_writable() {
+  if [ "$RUN_AS_POK" = true ]; then
+    "${SUDO[@]}" chown -R pok:pok "$APP_DIR/.git"
+  fi
+}
+
 read_env_value() {
   local key="$1"
   "${SUDO[@]}" node - "$ENV_FILE" "$key" <<'NODE'
@@ -89,6 +95,8 @@ apply_deploy_env_policy() {
   set_env_value LIVE_EXECUTION_QUALITY_GATE_ENABLED true
   set_env_value LIVE_USER_STREAMS_ENABLED true
 }
+
+ensure_app_git_writable
 
 if ! run_app git -C "$APP_DIR" diff --quiet || ! run_app git -C "$APP_DIR" diff --cached --quiet; then
   echo "Remote worktree is dirty; refusing to deploy." >&2
