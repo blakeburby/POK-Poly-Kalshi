@@ -96,6 +96,24 @@ apply_deploy_env_policy() {
   set_env_value LIVE_USER_STREAMS_ENABLED true
 }
 
+wait_for_health() {
+  local attempts="${1:-30}"
+  local delay_seconds="${2:-2}"
+  local attempt
+
+  for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+    if curl -fsS http://127.0.0.1:8080/health; then
+      echo
+      return 0
+    fi
+    sleep "$delay_seconds"
+  done
+
+  echo "Worker health did not become available after $((attempts * delay_seconds)) seconds." >&2
+  "${SUDO[@]}" systemctl --no-pager --full status pok-worker >&2 || true
+  exit 12
+}
+
 ensure_app_tree_writable
 
 if ! run_app git -C "$APP_DIR" diff --quiet || ! run_app git -C "$APP_DIR" diff --cached --quiet; then
@@ -129,11 +147,9 @@ run_app npm run build:worker
 
 echo "Restarting worker; systemd ExecStartPre will run migrations with the service env."
 "${SUDO[@]}" systemctl restart pok-worker
-sleep 5
 
 echo "Health after deploy:"
-curl -fsS http://127.0.0.1:8080/health
-echo
+wait_for_health
 
 echo "Public readiness after deploy:"
 WORKER_API_BASE=http://127.0.0.1:8080 npm run readiness:public
@@ -151,7 +167,7 @@ if [ "$ARB_WAS_ENABLED" = "true" ]; then
   echo "Protected readiness is green; restoring ARB_ENABLED=true."
   set_env_value ARB_ENABLED true
   "${SUDO[@]}" systemctl restart pok-worker
-  sleep 5
+  wait_for_health
   DASHBOARD_API_TOKEN="$DASHBOARD_API_TOKEN" WORKER_API_BASE=http://127.0.0.1:8080 bash scripts/verify-live-readiness.sh
 else
   echo "ARB_ENABLED was not true before deploy; leaving entries paused."
