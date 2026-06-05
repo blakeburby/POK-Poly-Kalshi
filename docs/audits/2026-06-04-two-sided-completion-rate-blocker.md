@@ -38,6 +38,7 @@ Implemented changes:
 - Production config documentation and env examples match `LIVE_ORDER_SIZE=5`.
 - Public sanitized readiness instrumentation is available at `/health?readiness=1` after this branch is deployed.
 - Hostinger precheck and branch-deploy scripts use local worker health, protected dashboard readiness, and DB metrics from the VPS.
+- Hostinger branch deploy applies the exact-share safety env policy before restart: `LIVE_ORDER_SIZE=5`, exact Polymarket evidence bounds, `LIVE_KALSHI_MIN_CASH_DOLLARS=30`, hardlocks on, reconciliation on.
 - Root Railway worker deploy config has been removed so Hostinger remains the only worker deploy path.
 
 Verification before Hostinger deploy:

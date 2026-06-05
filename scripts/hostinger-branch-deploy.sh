@@ -75,10 +75,29 @@ fs.writeFileSync(envFile, next.join("\n"));
 NODE
 }
 
-if [ -n "$(run_app git -C "$APP_DIR" status --porcelain)" ]; then
+apply_deploy_env_policy() {
+  echo "Applying Hostinger exact-share safety env policy."
+  set_env_value LIVE_ORDER_PLACEMENT_MODE polymarket_first_exact
+  set_env_value POLYMARKET_ORDER_TYPE FAK
+  set_env_value LIVE_ORDER_SIZE 5
+  set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
+  set_env_value LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES ""
+  set_env_value LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES ""
+  set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 30
+  set_env_value LIVE_RECONCILE_BEFORE_TRADE true
+  set_env_value LIVE_AUTO_HARDLOCKS_ENABLED true
+  set_env_value LIVE_EXECUTION_QUALITY_GATE_ENABLED true
+  set_env_value LIVE_USER_STREAMS_ENABLED true
+}
+
+if ! run_app git -C "$APP_DIR" diff --quiet || ! run_app git -C "$APP_DIR" diff --cached --quiet; then
   echo "Remote worktree is dirty; refusing to deploy." >&2
   run_app git -C "$APP_DIR" status --short >&2
   exit 10
+fi
+if [ -n "$(run_app git -C "$APP_DIR" ls-files --others --exclude-standard)" ]; then
+  echo "Remote worktree has untracked files; leaving them in place:"
+  run_app git -C "$APP_DIR" ls-files --others --exclude-standard
 fi
 
 ARB_WAS_ENABLED="$(read_env_value ARB_ENABLED || true)"
@@ -86,6 +105,7 @@ BACKUP_FILE="${ENV_FILE}.backup.$(date -u +%Y%m%dT%H%M%SZ)"
 "${SUDO[@]}" cp "$ENV_FILE" "$BACKUP_FILE"
 "${SUDO[@]}" chmod 600 "$BACKUP_FILE"
 echo "Backed up env to $BACKUP_FILE"
+apply_deploy_env_policy
 
 if [ "$ARB_WAS_ENABLED" = "true" ]; then
   echo "Pausing live entries before deploy."

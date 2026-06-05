@@ -134,7 +134,7 @@ HOSTINGER_SSH_TARGET=user@host npm run hostinger:precheck
 HOSTINGER_SSH_TARGET=user@host DEPLOY_BRANCH=hostinger-exact-share-readiness npm run hostinger:deploy
 ```
 
-The deploy script backs up `/etc/pok-poly-kalshi/worker.env`, pauses `ARB_ENABLED` if it was true, checks out the branch in `/opt/pok-poly-kalshi`, runs `npm ci` and `npm run build:worker`, restarts `pok-worker` so systemd runs migrations with the service env, and restores `ARB_ENABLED=true` only after public and protected readiness are green. If readiness fails, leave entries paused and inspect the printed readiness summary before changing any safety setting.
+The deploy script backs up `/etc/pok-poly-kalshi/worker.env`, applies the exact-share safety env policy (`LIVE_ORDER_SIZE=5`, exact Polymarket evidence bounds, `LIVE_KALSHI_MIN_CASH_DOLLARS=30`, hardlocks on, reconciliation on), pauses `ARB_ENABLED` if it was true, checks out the branch in `/opt/pok-poly-kalshi`, runs `npm ci` and `npm run build:worker`, restarts `pok-worker` so systemd runs migrations with the service env, and restores `ARB_ENABLED=true` only after public and protected readiness are green. If readiness fails, leave entries paused and inspect the printed readiness summary before changing any safety setting.
 
 Deploy the dashboard separately with `npm run build:dashboard` or the Vercel production deploy flow only if dashboard code changed.
 

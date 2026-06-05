@@ -52,6 +52,83 @@ process.exit(1);
 NODE
 }
 
+protected_readiness_check() {
+  local token="$1"
+  local health_file
+  local snapshot_file
+  health_file="$(mktemp)"
+  snapshot_file="$(mktemp)"
+  trap 'rm -f "$health_file" "$snapshot_file"' RETURN
+
+  curl -fsS http://127.0.0.1:8080/health > "$health_file"
+  curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/dashboard/snapshot > "$snapshot_file"
+
+  node - "$health_file" "$snapshot_file" <<'NODE'
+const fs = require("node:fs");
+const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const snapshot = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const runtimeHealth = snapshot.health ?? {};
+const execution = snapshot.execution ?? {};
+const kalshi = execution.kalshi ?? {};
+const polymarket = execution.polymarket ?? {};
+const userStreams = execution.userStreams ?? {};
+const reconciliation = execution.reconciliation ?? {};
+const books = snapshot.books ?? {};
+
+const checks = [
+  ["health.ok", health.ok === true],
+  ["health.arbEnabled", health.arbEnabled === true],
+  ["health.liveTrading=true", health.liveTrading === true],
+  ["execution.partialFillLocked=false", execution.partialFillLocked === false],
+  ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
+  ["execution.kalshi.ready=true", kalshi.ready === true],
+  ["execution.polymarket.ready=true", polymarket.ready === true],
+  ["execution.polymarket.reason=null", polymarket.reason == null],
+  ["execution.polymarket.geoblockBlocked=false", polymarket.geoblockBlocked === false],
+  ["execution.polymarket.balance>0", Number(polymarket.balance) > 0],
+  ["execution.quoteMaxAgeMs<=750", Number(execution.quoteMaxAgeMs) <= 750],
+  ["execution.quoteSyncMaxSkewMs<=250", Number(execution.quoteSyncMaxSkewMs) <= 250],
+  ["execution.minBookDepthShares>=orderSize", Number(execution.minBookDepthShares) >= Number(execution.orderSize)],
+  ["execution.orderTimeoutMs<=2500", Number(execution.orderTimeoutMs) <= 2500],
+  ["snapshot.health.liveHotPathEnabled=true", runtimeHealth.liveHotPathEnabled === true],
+  ["snapshot.health.liveLowLatencyHttpEnabled=true", runtimeHealth.liveLowLatencyHttpEnabled === true],
+  ["execution.userStreams.ready=true", runtimeHealth.liveUserStreamsEnabled !== true || userStreams.ready === true],
+  ["execution.reconciliation.clean=true", runtimeHealth.liveReconcileBeforeTrade !== true || reconciliation.clean === true],
+  ["execution.userStreams.confirmTimeoutMs<=2500", runtimeHealth.liveUserStreamsEnabled !== true || Number(userStreams.confirmTimeoutMs) <= 2500],
+  ["books.kalshi.length>0", Array.isArray(books.kalshi) && books.kalshi.length > 0],
+  ["books.polymarket.length>0", Array.isArray(books.polymarket) && books.polymarket.length > 0],
+];
+
+console.log(JSON.stringify({
+  liveTrading: execution.liveTrading,
+  arbEnabled: health.arbEnabled,
+  liveOrderPlacementMode: health.liveOrderPlacementMode,
+  liveOrderSize: health.liveOrderSize,
+  livePolymarketFirstMinFillShares: health.livePolymarketFirstMinFillShares,
+  livePolymarketFirstMaxFillShares: health.livePolymarketFirstMaxFillShares,
+  liveAutoHardlocksEnabled: health.liveAutoHardlocksEnabled,
+  partialFillLocked: execution.partialFillLocked,
+  circuitBreakerLocked: execution.circuitBreakerLocked,
+  kalshiReady: kalshi.ready,
+  polymarketReady: polymarket.ready,
+  polymarketReason: polymarket.reason,
+  geoblockBlocked: polymarket.geoblockBlocked,
+  geoblockCountry: polymarket.geoblockCountry,
+  geoblockRegion: polymarket.geoblockRegion,
+  userStreamsReady: userStreams.ready,
+  reconciliationClean: reconciliation.clean,
+  kalshiBooks: books.kalshi?.length ?? 0,
+  polymarketBooks: books.polymarket?.length ?? 0,
+}, null, 2));
+
+const failed = checks.filter(([, ok]) => !ok);
+if (failed.length > 0) {
+  console.error(`Readiness failed: ${failed.map(([name]) => name).join(", ")}`);
+  process.exit(30);
+}
+NODE
+}
+
 echo "Hostinger worker systemd state:"
 systemctl is-active pok-worker
 systemctl is-enabled pok-worker
@@ -84,7 +161,7 @@ if [ -z "$DASHBOARD_API_TOKEN" ]; then
 fi
 
 echo "Protected readiness with current ARB requirement:"
-DASHBOARD_API_TOKEN="$DASHBOARD_API_TOKEN" WORKER_API_BASE=http://127.0.0.1:8080 bash scripts/verify-live-readiness.sh
+protected_readiness_check "$DASHBOARD_API_TOKEN"
 
 DATABASE_URL="$(read_env_value DATABASE_URL)"
 if [ -z "$DATABASE_URL" ]; then
@@ -94,5 +171,9 @@ fi
 
 echo "Completion-rate report:"
 cd "$APP_DIR"
-run_app env DATABASE_URL="$DATABASE_URL" npx tsx scripts/completion-rate-report.ts --limit=20
+if [ -f scripts/completion-rate-report.ts ]; then
+  run_app env DATABASE_URL="$DATABASE_URL" npx tsx scripts/completion-rate-report.ts --limit=20
+else
+  echo "Current checkout does not have scripts/completion-rate-report.ts; deploy branch will run it after checkout."
+fi
 REMOTE
