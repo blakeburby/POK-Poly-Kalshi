@@ -13,6 +13,7 @@ import { VenueOrderEventHub, VenueOrderEventStore } from "./db/venue-order-event
 import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
 import { LiveExecutor } from "./execution/executor";
+import { buildPublicWorkerHealth } from "./health";
 import { installLowLatencyHttpTransport, preconnectLiveHttpEndpoints } from "./execution/http-transport";
 import { CachedLiveExecutionLockStore, LiveExposureCache } from "./execution/live-hot-path";
 import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator } from "./execution/venue-confirmations";
@@ -267,47 +268,25 @@ async function main(): Promise<void> {
       });
       if (handled) return;
 
-      if (request.url === "/health") {
-        const scannerStatus = scanner.status();
-        sendJson(response, 200, {
-          ok: true,
-          liveTrading: true,
-          arbEnabled: config.arbEnabled,
-          liveOrderPlacementMode: config.liveOrderPlacementMode,
-          liveOrderSize: config.liveOrderSize,
-          liveKalshiMinCashDollars: config.liveKalshiMinCashDollars,
-          liveMinBookDepthShares: config.liveMinBookDepthShares,
-          scanHeartbeatMs: config.arbScanHeartbeatMs,
-          lastScanAgeMs: scannerStatus.lastScanAt > 0 ? Math.max(0, Date.now() - scannerStatus.lastScanAt) : null,
-          maxTradesPerWindow: config.liveMaxTradesPerWindow,
-          liveMaxTradesPerWindow: config.liveMaxTradesPerWindow,
-          liveTakerPriceCushionCents: config.liveTakerPriceCushionCents,
-          liveKalshiPrearmEnabled: config.liveKalshiPrearmEnabled,
-          liveKalshiPrearmMaxAgeMs: config.liveKalshiPrearmMaxAgeMs,
-          liveKalshiPrearmPricePolicy: config.liveKalshiPrearmPricePolicy,
-          livePolymarketFirstMinFillShares: config.livePolymarketFirstMinFillShares,
-          livePolymarketFirstMaxFillShares: config.livePolymarketFirstMaxFillShares,
-          liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
-          liveExactExposureRequired: config.liveExactExposureRequired,
-          liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,
-          liveExecutionQualityLookbackMs: config.liveExecutionQualityLookbackMs,
-          liveExecutionQualitySampleLimit: config.liveExecutionQualitySampleLimit,
-          liveExecutionQualityMinSamples: config.liveExecutionQualityMinSamples,
-          liveExecutionQualityMinExactFillRate: config.liveExecutionQualityMinExactFillRate,
-          liveFillQualityScoringEnabled: config.liveFillQualityScoringEnabled,
-          liveFillQualityGateEnabled: config.liveFillQualityGateEnabled,
-          liveFillQualityMinExpectedEdge: config.liveFillQualityMinExpectedEdge,
-          liveFillQualityLookbackMs: config.liveFillQualityLookbackMs,
-          liveFillQualitySampleLimit: config.liveFillQualitySampleLimit,
-          liveFillQualityMinSamples: config.liveFillQualityMinSamples,
-          liveFillQualityModelVersion: config.liveFillQualityModelVersion,
-          liveLeadLagScoringEnabled: config.liveLeadLagScoringEnabled,
-          liveLeadLagGateEnabled: config.liveLeadLagGateEnabled,
-          liveLeadLagModelVersion: config.liveLeadLagModelVersion,
-          liveLeadLagWindowsMs: config.liveLeadLagWindowsMs,
-          liveLeadLagMinConfidence: config.liveLeadLagMinConfidence,
-          liveLeadLagMaxAdverseSelectionScore: config.liveLeadLagMaxAdverseSelectionScore,
-        });
+      const requestUrl = new URL(request.url ?? "/", "http://worker.local");
+      if (requestUrl.pathname === "/health") {
+        const now = Date.now();
+        let readiness = null;
+        let readinessError: unknown = null;
+        if (["1", "true", "yes"].includes((requestUrl.searchParams.get("readiness") ?? "").toLowerCase())) {
+          try {
+            readiness = await liveReadinessProbe.readiness(now);
+          } catch (error) {
+            readinessError = error;
+          }
+        }
+        sendJson(response, 200, buildPublicWorkerHealth({
+          config,
+          scannerStatus: scanner.status(),
+          now,
+          readiness,
+          readinessError,
+        }));
         return;
       }
       if (request.url === "/status") {

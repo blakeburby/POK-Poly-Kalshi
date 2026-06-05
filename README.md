@@ -24,7 +24,8 @@ Execution is live-capable only. Use `ARB_ENABLED=false` to keep the worker onlin
 
 ## Processes
 
-- Worker: `npm run migrate && npm run worker`
+- Production worker: Hostinger VPS systemd service `pok-worker`
+- Local worker: `npm run migrate && npm run worker`
 - Vercel dashboard: `npm run build:dashboard`
 - Worker-only typecheck: `npm run build:worker`
 

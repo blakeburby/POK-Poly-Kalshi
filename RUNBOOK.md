@@ -2,7 +2,7 @@
 
 ## Runtime Model
 
-POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates protected BTC 15-minute spreads, and records only real live execution attempts and venue evidence. To pause new entries without taking the process down, set `ARB_ENABLED=false` and restart `pok-worker`.
+POK is live-only. The production worker runs on the Hostinger VPS as the systemd service `pok-worker`. It monitors Kalshi and Polymarket books, evaluates protected BTC 15-minute spreads, and records only real live execution attempts and venue evidence. To pause new entries without taking the process down, set `ARB_ENABLED=false` in `/etc/pok-poly-kalshi/worker.env` and restart `pok-worker`.
 
 ## Required Environment
 
@@ -28,15 +28,15 @@ POK is live-only. The worker monitors Kalshi and Polymarket books, evaluates pro
 - `POLYMARKET_ORDER_TYPE=FAK`: Polymarket immediate order type used by the first leg.
 - `LIVE_ORDER_PLACEMENT_MODE=parallel_market`: alternative capped market mode that submits Kalshi IOC-style and Polymarket market FAK concurrently.
 - `LIVE_ORDER_PLACEMENT_MODE=parallel_limit_rest`: rollback to the preserved aggressive GTC limit-rest/cancel path with `LIVE_AGGRESSIVE_LIMIT_REST_MS`.
-- `LIVE_ORDER_SIZE=8`: venue share size.
-- `LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES=7` and `LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES=9`: inclusive Polymarket fill range that triggers the fixed 8-contract Kalshi hedge; non-8 Polymarket fills remain partial/mismatch audit records.
+- `LIVE_ORDER_SIZE=5`: venue share size.
+- `LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES` and `LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES`: optional exact-fill evidence bounds for `polymarket_first_exact`. Leave both unset to require the Polymarket fill count to match `LIVE_ORDER_SIZE`.
 - `LIVE_TAKER_PRICE_CUSHION_CENTS=2`: per-leg taker cushion included in the edge gate before entry.
 - `LIVE_MIN_EXPIRY_MS=60000`: skip entries inside the final minute.
 - `LIVE_MAX_TRADES_PER_WINDOW=3`: max real submitted live attempts per 15-minute expiry window.
 - `LIVE_COLLATERAL_BUFFER_DOLLARS=0.25`: extra collateral required before entry.
 - `LIVE_QUOTE_MAX_AGE_MS=750`: max individual book age.
 - `LIVE_QUOTE_SYNC_MAX_SKEW_MS=250`: max cross-venue book skew.
-- `LIVE_MIN_BOOK_DEPTH_SHARES=10`: minimum executable depth. With `LIVE_ORDER_SIZE=8`, this requires at least 10 executable shares/contracts before entry.
+- `LIVE_MIN_BOOK_DEPTH_SHARES=10`: minimum executable depth. With `LIVE_ORDER_SIZE=5`, this requires at least 10 executable shares/contracts before entry.
 - `LIVE_ORDER_TIMEOUT_MS=2500`: REST order timeout.
 - `LIVE_HOT_PATH_ENABLED=true`: keep readiness, metadata, locks, and exposure state warm in memory.
 - `LIVE_LOW_LATENCY_HTTP_ENABLED=true`: enable keep-alive order transports.
@@ -116,15 +116,27 @@ The dashboard has one live surface:
 
 The browser never receives venue secrets or the worker bearer token. It is read-only and cannot arm, disarm, clear locks, or place orders.
 
-## Deploy Flow
+## Hostinger Deploy Flow
 
-1. Back up Postgres before migrations that remove legacy rows or columns.
-2. Pull the target commit on the worker host.
-3. Confirm `/etc/pok-poly-kalshi/worker.env` has the live credentials and `ARB_ENABLED=true` only when entries should be allowed.
-4. Run `npm install`, `npm run build:worker`, and `npm run migrate`.
-5. Restart `pok-worker`.
-6. Verify `/health`, `/dashboard/snapshot`, venue readiness, user streams, reconciliation state, active locks, and recent live signal tape.
-7. Deploy the dashboard with `npm run build:dashboard` or the Vercel production deploy flow.
+Railway worker deploys are not the production path. Keep Railway only as a possible Postgres provider through `DATABASE_URL`.
+
+1. Create and push a dedicated branch, normally `hostinger-exact-share-readiness`.
+2. Set `HOSTINGER_SSH_TARGET` to the Hostinger SSH target.
+3. Run the read-only precheck:
+
+```bash
+HOSTINGER_SSH_TARGET=user@host npm run hostinger:precheck
+```
+
+4. Deploy the branch:
+
+```bash
+HOSTINGER_SSH_TARGET=user@host DEPLOY_BRANCH=hostinger-exact-share-readiness npm run hostinger:deploy
+```
+
+The deploy script backs up `/etc/pok-poly-kalshi/worker.env`, pauses `ARB_ENABLED` if it was true, checks out the branch in `/opt/pok-poly-kalshi`, runs `npm ci` and `npm run build:worker`, restarts `pok-worker` so systemd runs migrations with the service env, and restores `ARB_ENABLED=true` only after public and protected readiness are green. If readiness fails, leave entries paused and inspect the printed readiness summary before changing any safety setting.
+
+Deploy the dashboard separately with `npm run build:dashboard` or the Vercel production deploy flow only if dashboard code changed.
 
 ## Operational Checks
 
@@ -140,6 +152,14 @@ Healthy live state requires:
 - `execution.circuitBreakerLocked=false`.
 - `execution.partialFillLocked=false`.
 - No active rows in `live_execution_locks`.
+
+When protected dashboard access is unavailable, use the public sanitized readiness probe from the Hostinger VPS or its worker endpoint:
+
+```bash
+WORKER_API_BASE=http://127.0.0.1:8080 npm run readiness:public
+```
+
+This calls `/health?readiness=1` and intentionally excludes balances, allowances, addresses, and control actions. Treat `executionReadiness.safeToPlaceOrders=false`, `executionReadiness.polymarket.geoblockBlocked=true`, or either venue `ready=false` as authoritative not-safe evidence. Do not bypass this with config overrides.
 
 If `ARB_ENABLED=false`, the worker remains online for discovery/readiness but will not submit new entries.
 

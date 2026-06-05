@@ -2,6 +2,7 @@
 set -euo pipefail
 
 WORKER_API_BASE="${WORKER_API_BASE:-http://127.0.0.1:8080}"
+REQUIRE_ARB_ENABLED="${REQUIRE_ARB_ENABLED:-true}"
 
 if [ -z "${DASHBOARD_API_TOKEN:-}" ]; then
   echo "DASHBOARD_API_TOKEN must be set in your shell for readiness verification." >&2
@@ -19,10 +20,11 @@ echo
 echo "Checking protected dashboard snapshot..."
 curl -fsS -H "Authorization: Bearer $DASHBOARD_API_TOKEN" "$WORKER_API_BASE/dashboard/snapshot" > "$SNAPSHOT_FILE"
 
-node - "$HEALTH_FILE" "$SNAPSHOT_FILE" <<'NODE'
+REQUIRE_ARB_ENABLED="$REQUIRE_ARB_ENABLED" node - "$HEALTH_FILE" "$SNAPSHOT_FILE" <<'NODE'
 const fs = require("node:fs");
 const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const snapshot = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const requireArbEnabled = !["0", "false", "no", "off"].includes(String(process.env.REQUIRE_ARB_ENABLED ?? "true").toLowerCase());
 const runtimeHealth = snapshot.health ?? {};
 const execution = snapshot.execution ?? {};
 const kalshi = execution.kalshi ?? {};
@@ -33,7 +35,7 @@ const books = snapshot.books ?? {};
 
 const checks = [
   ["health.ok", health.ok === true],
-  ["health.arbEnabled", health.arbEnabled === true],
+  ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
@@ -58,6 +60,8 @@ const checks = [
 const failed = checks.filter(([, ok]) => !ok);
 console.log(JSON.stringify({
   liveTrading: execution.liveTrading,
+  arbEnabled: health.arbEnabled,
+  requireArbEnabled,
   partialFillLocked: execution.partialFillLocked,
   circuitBreakerLocked: execution.circuitBreakerLocked,
   circuitBreakerReason: execution.circuitBreakerReason,

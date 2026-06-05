@@ -64,6 +64,8 @@ export interface LiveOrderPreflight {
   polymarketSignedOrderTokenId?: string;
   polymarketSignedOrderPrice?: number;
   polymarketSignedOrderSpend?: number;
+  polymarketSignedOrderSize?: number;
+  polymarketSignedOrderKind?: "market" | "share_limit";
   polymarketSignedOrderType?: OrderType.FOK | OrderType.FAK;
   polymarketSignedOrderSalt?: string | null;
 }
@@ -968,6 +970,8 @@ function preflightSignedOrderFallbackReason(
   tokenId: string,
   price: number,
   spend: number,
+  size: number,
+  kind: "market" | "share_limit",
   orderType: OrderType.FOK | OrderType.FAK,
   requestedAt: number,
   ttlMs: number,
@@ -978,9 +982,11 @@ function preflightSignedOrderFallbackReason(
     : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
   if (ageMs > ttlMs) return `expired_${ageMs}ms`;
   if (preflight.polymarketSignedOrderTokenId !== tokenId) return "token_changed";
+  if (preflight.polymarketSignedOrderKind !== kind) return "kind_changed";
   if (preflight.polymarketSignedOrderType !== orderType) return "order_type_changed";
   if (Math.abs((preflight.polymarketSignedOrderPrice ?? Number.NaN) - price) > 0.000001) return "price_changed";
-  if (Math.abs((preflight.polymarketSignedOrderSpend ?? Number.NaN) - spend) > 0.000001) return "spend_changed";
+  if (kind === "market" && Math.abs((preflight.polymarketSignedOrderSpend ?? Number.NaN) - spend) > 0.000001) return "spend_changed";
+  if (kind === "share_limit" && Math.abs((preflight.polymarketSignedOrderSize ?? Number.NaN) - size) > 0.000001) return "size_changed";
   return null;
 }
 
@@ -1005,6 +1011,10 @@ function isExactFillCount(fillCount: number | null, requestedSize: number): bool
 
 function isLimitRestMode(context: LiveOrderContext): boolean {
   return context.placementMode === "parallel_limit_rest";
+}
+
+function polymarketSignedOrderKind(context: LiveOrderContext): "market" | "share_limit" {
+  return context.placementMode === "polymarket_first_exact" ? "share_limit" : "market";
 }
 
 function kalshiTimeInForce(context: LiveOrderContext): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {
@@ -1364,6 +1374,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const orderType = polymarketImmediateOrderType(this.config.polymarketOrderType, context);
     const requestedSpend = polymarketMarketBuySpend(context);
     const worstPrice = roundPrice(context.maxBuyPrice);
+    const signedOrderKind = polymarketSignedOrderKind(context);
     const preflight = context.preflight;
     const preflightSignedOrderAgeMs = preflight?.polymarketSignedOrderCreatedAt == null
       ? Number.POSITIVE_INFINITY
@@ -1373,26 +1384,39 @@ export class PolymarketOrderClient implements VenueOrderClient {
       tokenId,
       worstPrice,
       requestedSpend,
+      context.size,
+      signedOrderKind,
       orderType,
       requestedAt,
       this.config.livePolymarketSignedOrderTtlMs,
     );
     const preflightSignedOrder = preflightFallbackReason == null ? preflight?.polymarketSignedOrder ?? null : null;
-    if (!preflightSignedOrder && !client.createMarketOrder) {
+    if (!preflightSignedOrder && signedOrderKind === "market" && !client.createMarketOrder) {
       throw new Error(`Polymarket market ${orderType} order creation is not supported by the configured CLOB client`);
     }
     const signStartedAt = Date.now();
-    const signedOrder = preflightSignedOrder ?? await client.createMarketOrder!({
-      tokenID: tokenId,
-      price: worstPrice,
-      amount: requestedSpend,
-      side: Side.BUY,
-      orderType,
-      metadata: metadataFromClientOrderId(context.clientOrderId),
-    }, {
-      tickSize: book.tick_size as TickSize,
-      negRisk: Boolean(book.neg_risk),
-    });
+    const signedOrder = preflightSignedOrder ?? (signedOrderKind === "share_limit"
+      ? await client.createOrder({
+        tokenID: tokenId,
+        price: worstPrice,
+        size: context.size,
+        side: Side.BUY,
+        metadata: metadataFromClientOrderId(context.clientOrderId),
+      }, {
+        tickSize: book.tick_size as TickSize,
+        negRisk: Boolean(book.neg_risk),
+      })
+      : await client.createMarketOrder!({
+        tokenID: tokenId,
+        price: worstPrice,
+        amount: requestedSpend,
+        side: Side.BUY,
+        orderType,
+        metadata: metadataFromClientOrderId(context.clientOrderId),
+      }, {
+        tickSize: book.tick_size as TickSize,
+        negRisk: Boolean(book.neg_risk),
+      }));
     const signMs = preflightSignedOrder
       ? preflight?.polymarketSignMs ?? 0
       : Math.max(0, Date.now() - signStartedAt);
@@ -1423,6 +1447,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
           polymarketOrderType: orderType,
           polymarketMarketOrderStatus: timeoutLike ? "unknown" : "failed",
           polymarketFokStatus: timeoutLike ? "unknown" : "failed",
+          polymarketOrderKind: signedOrderKind,
           polymarketRequestedSpend: requestedSpend,
           polymarketWorstPrice: worstPrice,
           polymarketRequestedShares: context.size,
@@ -1492,6 +1517,7 @@ export class PolymarketOrderClient implements VenueOrderClient {
         polymarketOrderType: orderType,
         polymarketMarketOrderStatus: status || (success ? "unknown" : "rejected"),
         polymarketFokStatus: status || (success ? "unknown" : "rejected"),
+        polymarketOrderKind: signedOrderKind,
         polymarketRequestedSpend: requestedSpend,
         polymarketWorstPrice: worstPrice,
         polymarketRequestedShares: context.size,
@@ -1993,18 +2019,32 @@ export class PolymarketOrderClient implements VenueOrderClient {
         const signStartedAt = Date.now();
         const { client } = await this.client();
         const orderType = polymarketImmediateOrderType(this.config.polymarketOrderType, context);
-        if (!client.createMarketOrder) return `Polymarket market ${orderType} order creation is not supported by the configured CLOB client`;
-        const signedOrder = await client.createMarketOrder({
-          tokenID: leg.tokenId,
-          price: roundPrice(context.maxBuyPrice),
-          amount: polymarketMarketBuySpend(context),
-          side: Side.BUY,
-          orderType,
-          metadata: metadataFromClientOrderId(context.clientOrderId),
-        }, {
-          tickSize: book.tick_size as TickSize,
-          negRisk: Boolean(book.neg_risk),
-        });
+        const signedOrderKind = polymarketSignedOrderKind(context);
+        if (signedOrderKind === "market" && !client.createMarketOrder) {
+          return `Polymarket market ${orderType} order creation is not supported by the configured CLOB client`;
+        }
+        const signedOrder = signedOrderKind === "share_limit"
+          ? await client.createOrder({
+            tokenID: leg.tokenId,
+            price: roundPrice(context.maxBuyPrice),
+            size: context.size,
+            side: Side.BUY,
+            metadata: metadataFromClientOrderId(context.clientOrderId),
+          }, {
+            tickSize: book.tick_size as TickSize,
+            negRisk: Boolean(book.neg_risk),
+          })
+          : await client.createMarketOrder!({
+            tokenID: leg.tokenId,
+            price: roundPrice(context.maxBuyPrice),
+            amount: polymarketMarketBuySpend(context),
+            side: Side.BUY,
+            orderType,
+            metadata: metadataFromClientOrderId(context.clientOrderId),
+          }, {
+            tickSize: book.tick_size as TickSize,
+            negRisk: Boolean(book.neg_risk),
+          });
         const signMs = Math.max(0, Date.now() - signStartedAt);
         context.preflight = {
           ...context.preflight,
@@ -2014,6 +2054,8 @@ export class PolymarketOrderClient implements VenueOrderClient {
           polymarketSignedOrderTokenId: leg.tokenId,
           polymarketSignedOrderPrice: roundPrice(context.maxBuyPrice),
           polymarketSignedOrderSpend: polymarketMarketBuySpend(context),
+          polymarketSignedOrderSize: context.size,
+          polymarketSignedOrderKind: signedOrderKind,
           polymarketSignedOrderType: orderType,
           polymarketSignedOrderSalt: signedOrderSalt(signedOrder),
         };

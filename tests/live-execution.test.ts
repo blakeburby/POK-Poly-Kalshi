@@ -1017,8 +1017,9 @@ test("Polymarket order client uses FAK market order in parallel_market mode", as
   assert.equal(result.metadata?.polymarketOrderType, OrderType.FAK);
 });
 
-test("Polymarket order client uses FAK market order in polymarket_first_exact mode", async () => {
+test("Polymarket order client uses share-sized FAK limit order in polymarket_first_exact mode", async () => {
   class FakeClob implements PolymarketClobLike {
+    createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
     createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
     postedType: OrderType | undefined;
 
@@ -1027,6 +1028,7 @@ test("Polymarket order client uses FAK market order in polymarket_first_exact mo
     }
 
     async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      this.createdOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
@@ -1067,12 +1069,18 @@ test("Polymarket order client uses FAK market order in polymarket_first_exact mo
     placementMode: "polymarket_first_exact",
   });
 
-  assert.equal(fake.createdMarketOrder?.orderType, OrderType.FAK);
+  assert.equal(fake.createdOrder?.tokenID, "yes-token");
+  assert.equal(fake.createdOrder?.price, 0.8);
+  assert.equal(fake.createdOrder?.size, 5);
+  assert.equal(fake.createdOrder?.side, Side.BUY);
+  assert.equal(fake.createdMarketOrder, null);
   assert.equal(fake.postedType, OrderType.FAK);
   assert.equal(result.status, "matched");
   assert.equal(result.fillCount, 5);
   assert.equal(result.metadata?.orderPlacementMode, "polymarket_first_exact");
   assert.equal(result.metadata?.polymarketOrderType, OrderType.FAK);
+  assert.equal(result.metadata?.polymarketOrderKind, "share_limit");
+  assert.equal(result.metadata?.polymarketRequestedShares, 5);
 });
 
 test("Polymarket order client builds aggressive GTC limit and cancels unfilled remainder", async () => {
@@ -1363,6 +1371,77 @@ test("Polymarket optional pre-sign stores signed order for hot-path placement", 
   assert.equal(result.metadata?.polymarketSignedOrderFallbackReason, null);
   assert.equal(result.metadata?.polymarketPostOrderMs != null, true);
   assert.equal(result.metadata?.polymarketSignedOrderSalt, "1");
+});
+
+test("Polymarket exact-first pre-sign stores share-sized FAK limit order", async () => {
+  const now = 1_800_000_000_000;
+  class PresignFakeClob implements PolymarketClobLike {
+    createOrderCalls = 0;
+    createMarketOrderCalls = 0;
+    createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      this.createOrderCalls += 1;
+      this.createdOrder = order;
+      return { tokenId: order.tokenID, salt: this.createOrderCalls } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      this.createMarketOrderCalls += 1;
+      return { tokenId: order.tokenID, salt: this.createMarketOrderCalls } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new PresignFakeClob();
+  const client = new PolymarketOrderClient(config({
+    liveHotPathEnabled: true,
+    livePolymarketPresignEnabled: true,
+  }), async () => fake, allowedGeoblock);
+  await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.41,
+    requiredCollateral: 2.3,
+    requestedAt: now + 100,
+    placementMode: "polymarket_first_exact",
+  };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
+
+  assert.equal(await client.preflightOrder(leg, context), null);
+  assert.equal(fake.createOrderCalls, 1);
+  assert.equal(fake.createMarketOrderCalls, 0);
+  assert.equal(fake.createdOrder?.size, 5);
+  assert.equal(context.preflight?.polymarketSignedOrderKind, "share_limit");
+  assert.equal(context.preflight?.polymarketSignedOrderSize, 5);
+
+  const result = await client.placeOrder(leg, context);
+
+  assert.equal(result.fillCount, 5);
+  assert.equal(fake.createOrderCalls, 1);
+  assert.equal(result.metadata?.polymarketSignedOrderReused, true);
+  assert.equal(result.metadata?.polymarketOrderKind, "share_limit");
 });
 
 test("Polymarket expired pre-signed order falls back to live signing", async () => {
@@ -2339,8 +2418,10 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveLeadLagMaxAdverseSelectionScore, 0.75);
   assert.equal(loadConfig({}).liveOrderSize, 8);
   assert.equal(loadConfig({}).liveMinBookDepthShares, 10);
-  assert.equal(loadConfig({}).livePolymarketFirstMinFillShares, 7);
-  assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 9);
+  assert.equal(loadConfig({}).livePolymarketFirstMinFillShares, 8);
+  assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 8);
+  assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMinFillShares, 5);
+  assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMaxFillShares, 5);
   assert.equal(loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "4.5", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "5.5" }).livePolymarketFirstMinFillShares, 4.5);
   assert.throws(
     () => loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "6.1", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "6" }),
