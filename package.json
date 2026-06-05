@@ -16,6 +16,7 @@
     "typecheck": "npm run build:worker",
     "hostinger:precheck": "bash scripts/hostinger-predeploy-check.sh",
     "hostinger:deploy": "bash scripts/hostinger-branch-deploy.sh",
+    "hostinger:resume": "bash scripts/hostinger-resume-if-ready.sh",
     "readiness:public": "bash scripts/verify-public-readiness.sh",
     "vps:preflight": "bash scripts/vps-preflight.sh",
     "vps:verify": "bash scripts/verify-live-readiness.sh"
