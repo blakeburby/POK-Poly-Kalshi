@@ -35,9 +35,9 @@ run_app() {
   fi
 }
 
-ensure_app_git_writable() {
+ensure_app_tree_writable() {
   if [ "$RUN_AS_POK" = true ]; then
-    "${SUDO[@]}" chown -R pok:pok "$APP_DIR/.git"
+    "${SUDO[@]}" chown -R pok:pok "$APP_DIR"
   fi
 }
 
@@ -96,7 +96,7 @@ apply_deploy_env_policy() {
   set_env_value LIVE_USER_STREAMS_ENABLED true
 }
 
-ensure_app_git_writable
+ensure_app_tree_writable
 
 if ! run_app git -C "$APP_DIR" diff --quiet || ! run_app git -C "$APP_DIR" diff --cached --quiet; then
   echo "Remote worktree is dirty; refusing to deploy." >&2
