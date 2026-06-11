@@ -205,7 +205,7 @@ async function main(): Promise<void> {
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND execution_strategy = 'polymarket_first_exact'
-      ORDER BY updated_at DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT $1
     `, [Math.max(limit, 20)]);
     const attempts = result.rows.map(classify);

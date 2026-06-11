@@ -663,8 +663,8 @@ export class SignalStore {
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND action IN ('filled', 'failed')
-        AND updated_at >= to_timestamp($1 / 1000.0)
-      ORDER BY updated_at DESC
+        AND created_at >= to_timestamp($1 / 1000.0)
+      ORDER BY created_at DESC, id DESC
       LIMIT $2
     `, [sinceMs, limit]);
     return result.rows.map(signalFromRow);

@@ -17,6 +17,9 @@
     "hostinger:precheck": "bash scripts/hostinger-predeploy-check.sh",
     "hostinger:deploy": "bash scripts/hostinger-branch-deploy.sh",
     "hostinger:resume": "bash scripts/hostinger-resume-if-ready.sh",
+    "hostinger:pause-ui-capture": "bash scripts/hostinger-pause-for-kalshi-ui-capture.sh",
+    "hostinger:reconcile-quarantines": "bash scripts/hostinger-reconcile-historical-quarantines.sh",
+    "kalshi:ui-har:sanitize": "tsx scripts/sanitize-kalshi-ui-har.ts",
     "readiness:public": "bash scripts/verify-public-readiness.sh",
     "vps:preflight": "bash scripts/vps-preflight.sh",
     "vps:verify": "bash scripts/verify-live-readiness.sh"

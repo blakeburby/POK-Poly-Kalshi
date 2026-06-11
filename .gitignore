@@ -8,3 +8,7 @@ out/
 coverage/
 *.log
 .vercel
+tmp/
+captures/
+*.har
+*.har.json

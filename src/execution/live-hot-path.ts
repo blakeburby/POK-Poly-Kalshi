@@ -292,8 +292,8 @@ export class LiveExposureCache {
     const since = now - Math.max(0, options.lookbackMs);
     const samples = this.executionQualitySignals
       .filter((signal) => {
-        const updatedAt = Date.parse(signal.updatedAt);
-        return Number.isFinite(updatedAt) && updatedAt >= since;
+        const createdAt = Date.parse(signal.createdAt);
+        return Number.isFinite(createdAt) && createdAt >= since;
       })
       .slice(0, Math.max(1, Math.floor(options.sampleLimit)));
     return buildLiveExecutionQualityStatus(samples, null, options);
@@ -305,8 +305,8 @@ export class LiveExposureCache {
     const since = now - Math.max(0, lookbackMs);
     return this.executionQualitySignals
       .filter((signal) => {
-        const updatedAt = Date.parse(signal.updatedAt);
-        return Number.isFinite(updatedAt) && updatedAt >= since;
+        const createdAt = Date.parse(signal.createdAt);
+        return Number.isFinite(createdAt) && createdAt >= since;
       })
       .slice(0, Math.max(1, Math.floor(limit)));
   }
@@ -317,8 +317,8 @@ export class LiveExposureCache {
     const since = now - Math.max(0, options.lookbackMs);
     const samples = this.executionQualitySignals
       .filter((signal) => {
-        const updatedAt = Date.parse(signal.updatedAt);
-        return Number.isFinite(updatedAt) && updatedAt >= since;
+        const createdAt = Date.parse(signal.createdAt);
+        return Number.isFinite(createdAt) && createdAt >= since;
       })
       .slice(0, Math.max(1, Math.floor(options.sampleLimit)));
     return liveExecutionQualityBlockReason(buildLiveExecutionQualityStatus(samples, candidate, options));

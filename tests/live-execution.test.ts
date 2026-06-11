@@ -3607,6 +3607,59 @@ test("live exposure cache blocks when recent execution quality is poor", async (
   assert.match(reason ?? "", /Polymarket exact paired fill rate 0.0% below 40.0%/);
 });
 
+test("live exposure cache ignores old execution quality rows touched by later reconciliation", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const oldButTouched = (id: number): DashboardSignal => ({
+    id,
+    createdAt: new Date(now - 24 * 60 * 60_000).toISOString(),
+    updatedAt: new Date(now - id * 1_000).toISOString(),
+    pairKey: `old-miss-${id}`,
+    expiryMs: candidate.expiryMs,
+    kalshiContractId: `kalshi-${id}`,
+    polymarketContractId: `poly-${id}`,
+    lower: { venue: "polymarket", contractId: `poly-${id}`, strike: 1500, direction: "yes", ask: 0.4 },
+    higher: { venue: "kalshi", contractId: `kalshi-${id}`, strike: 1502, direction: "no", ask: 0.5 },
+    premium: 0.9,
+    guaranteedProfit: 0.1,
+    overlapProfit: 1.1,
+    threshold: 0.05,
+    action: "failed",
+    failureReason: "historical miss reconciled by operator",
+    kalshiFillId: null,
+    polymarketFillId: null,
+    kalshiFillPrice: null,
+    polymarketFillPrice: null,
+    kalshiFillCount: 0,
+    polymarketFillCount: 0,
+    partialFill: false,
+    executionGroupId: `group-${id}`,
+  });
+  const cache = new LiveExposureCache({
+    listLiveExposureSignals: async () => [],
+    listLiveExecutionQualitySignals: async () => [1, 2, 3, 4, 5].map(oldButTouched),
+  }, 5_000, 10, () => now);
+
+  await cache.refresh(now);
+
+  const status = await cache.liveExecutionQualityStatus(now, {
+    enabled: true,
+    lookbackMs: 30 * 60 * 1_000,
+    sampleLimit: 50,
+    minSamples: 5,
+    minExactFillRate: 0.4,
+  });
+  assert.equal(status.sampleCount, 0);
+  assert.equal(status.ok, true);
+  assert.equal(await cache.liveExecutionQualityBlockReason(candidate, now, {
+    enabled: true,
+    lookbackMs: 30 * 60 * 1_000,
+    sampleLimit: 50,
+    minSamples: 5,
+    minExactFillRate: 0.4,
+  }), null);
+});
+
 test("live executor hard-locks quarantined fills when exposure cap would be exceeded", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);

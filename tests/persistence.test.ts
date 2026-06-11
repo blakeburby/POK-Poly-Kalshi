@@ -83,7 +83,7 @@ class FakeDb implements Queryable {
     }
     if (/RETURNING id/.test(sql)) return { rows: [{ id: 42 } as T] };
     if (/GROUP BY pair_key/.test(sql)) return { rows: [{ pair_key: "pair", filled_at_ms: "123000" } as T] };
-    if (/updated_at >= to_timestamp/.test(sql)) {
+    if (/(updated_at|created_at) >= to_timestamp/.test(sql)) {
       return {
         rows: [{
           id: 7,
@@ -342,6 +342,12 @@ test("signal persistence readers query live execution records without mode filte
   assert.doesNotMatch(db.calls[1].sql, /execution_mode/);
   assert.match(db.calls[1].sql, /execution_group_id IS NOT NULL/);
   assert.deepEqual(db.calls[1].values, [1_800_000_000_000, 50]);
+
+  await store.listLiveExecutionQualitySignals(1_800_001_800_000, 30 * 60 * 1_000, 50);
+  assert.match(db.calls[2].sql, /created_at >= to_timestamp/);
+  assert.doesNotMatch(db.calls[2].sql, /updated_at >= to_timestamp/);
+  assert.match(db.calls[2].sql, /ORDER BY created_at DESC/);
+  assert.deepEqual(db.calls[2].values, [1_800_000_000_000, 50]);
 });
 
 test("live-only cleanup migration removes legacy non-live rows and drops the mode column", () => {
