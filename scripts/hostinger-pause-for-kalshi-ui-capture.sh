@@ -156,6 +156,7 @@ database_guard() {
     return 0
   fi
 
+  cd "$APP_DIR"
   run_app env DATABASE_URL="$database_url" node <<'NODE'
 const { Client } = require("pg");
 
