@@ -8,12 +8,14 @@ fi
 
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
+REQUIRE_ARB_ENABLED="${REQUIRE_ARB_ENABLED:-true}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$REQUIRE_ARB_ENABLED" <<'REMOTE'
 set -euo pipefail
 
 APP_DIR="$1"
 ENV_FILE="$2"
+REQUIRE_ARB_ENABLED="$3"
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
@@ -54,6 +56,7 @@ NODE
 
 protected_readiness_check() {
   local token="$1"
+  local require_arb_enabled="$2"
   local health_file
   local snapshot_file
   health_file="$(mktemp)"
@@ -63,10 +66,11 @@ protected_readiness_check() {
   curl -fsS http://127.0.0.1:8080/health > "$health_file"
   curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/dashboard/snapshot > "$snapshot_file"
 
-  node - "$health_file" "$snapshot_file" <<'NODE'
+  REQUIRE_ARB_ENABLED="$require_arb_enabled" node - "$health_file" "$snapshot_file" <<'NODE'
 const fs = require("node:fs");
 const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const snapshot = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const requireArbEnabled = String(process.env.REQUIRE_ARB_ENABLED ?? "true") === "true";
 const runtimeHealth = snapshot.health ?? {};
 const execution = snapshot.execution ?? {};
 const kalshi = execution.kalshi ?? {};
@@ -77,7 +81,7 @@ const books = snapshot.books ?? {};
 
 const checks = [
   ["health.ok", health.ok === true],
-  ["health.arbEnabled", health.arbEnabled === true],
+  ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
@@ -102,8 +106,11 @@ const checks = [
 console.log(JSON.stringify({
   liveTrading: execution.liveTrading,
   arbEnabled: health.arbEnabled,
+  requireArbEnabled,
   liveOrderPlacementMode: health.liveOrderPlacementMode,
   liveOrderSize: health.liveOrderSize,
+  kalshiHedgeOrderMode: health.kalshiHedgeOrderMode ?? null,
+  kalshiUiQuickOrderCapValidated: health.kalshiUiQuickOrderCapValidated ?? null,
   livePolymarketFirstMinFillShares: health.livePolymarketFirstMinFillShares,
   livePolymarketFirstMaxFillShares: health.livePolymarketFirstMaxFillShares,
   liveAutoHardlocksEnabled: health.liveAutoHardlocksEnabled,
@@ -145,7 +152,7 @@ npm --version
 
 echo "Sanitized worker env:"
 "${SUDO[@]}" awk -F= '
-  $1 ~ /^(ARB_ENABLED|LIVE_ORDER_PLACEMENT_MODE|LIVE_ORDER_SIZE|LIVE_MIN_BOOK_DEPTH_SHARES|LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES|LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES|LIVE_RECONCILE_BEFORE_TRADE|LIVE_AUTO_HARDLOCKS_ENABLED|LIVE_EXACT_EXPOSURE_REQUIRED|LIVE_EXECUTION_QUALITY_GATE_ENABLED)$/ {
+  $1 ~ /^(ARB_ENABLED|LIVE_ORDER_PLACEMENT_MODE|LIVE_ORDER_SIZE|LIVE_MIN_BOOK_DEPTH_SHARES|LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES|LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES|LIVE_RECONCILE_BEFORE_TRADE|LIVE_AUTO_HARDLOCKS_ENABLED|LIVE_EXACT_EXPOSURE_REQUIRED|LIVE_EXECUTION_QUALITY_GATE_ENABLED|KALSHI_HEDGE_ORDER_MODE|KALSHI_UI_SESSION_PATH|KALSHI_UI_QUICK_ORDER_CAP_VALIDATED)$/ {
     print $1 "=" $2
   }
 ' "$ENV_FILE"
@@ -160,8 +167,8 @@ if [ -z "$DASHBOARD_API_TOKEN" ]; then
   exit 3
 fi
 
-echo "Protected readiness with current ARB requirement:"
-protected_readiness_check "$DASHBOARD_API_TOKEN"
+echo "Protected readiness with REQUIRE_ARB_ENABLED=$REQUIRE_ARB_ENABLED:"
+protected_readiness_check "$DASHBOARD_API_TOKEN" "$REQUIRE_ARB_ENABLED"
 
 DATABASE_URL="$(read_env_value DATABASE_URL)"
 if [ -z "$DATABASE_URL" ]; then

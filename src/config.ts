@@ -1,4 +1,4 @@
-import type { LiveKalshiPrearmPricePolicy, LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
+import type { LiveKalshiHedgeOrderMode, LiveKalshiPrearmPricePolicy, LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
 
 export interface AppConfig {
   port: number;
@@ -15,6 +15,10 @@ export interface AppConfig {
   executionConcurrency: number;
   discoveryBoundaryRefreshEnabled: boolean;
   kalshiApiBase: string;
+  kalshiUiApiBase: string;
+  kalshiUiSessionPath: string;
+  kalshiUiMarketIdCacheTtlMs: number;
+  kalshiUiQuickOrderCapValidated: boolean;
   kalshiWsUrl: string;
   kalshiSeriesTicker: string;
   polymarketWsUrl: string;
@@ -47,6 +51,7 @@ export interface AppConfig {
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
   liveOrderPlacementMode: LiveOrderPlacementMode;
+  kalshiHedgeOrderMode: LiveKalshiHedgeOrderMode;
   liveAggressiveLimitRestMs: number;
   liveParallelExecutionEnabled: boolean;
   liveHotPathEnabled: boolean;
@@ -138,6 +143,12 @@ function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMo
   throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
 }
 
+function envLiveKalshiHedgeOrderMode(env: NodeJS.ProcessEnv): LiveKalshiHedgeOrderMode {
+  const value = envString(env, "KALSHI_HEDGE_ORDER_MODE", "public_v2").toLowerCase();
+  if (value === "public_v2" || value === "ui_quick_order") return value;
+  throw new Error("KALSHI_HEDGE_ORDER_MODE must be public_v2 or ui_quick_order");
+}
+
 function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLockMode {
   const value = envString(env, "LIVE_PARTIAL_FILL_LOCK_MODE", "quarantine").toLowerCase();
   if (value === "lock" || value === "quarantine") return value;
@@ -172,6 +183,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 2),
     discoveryBoundaryRefreshEnabled: envBoolean(env, "DISCOVERY_BOUNDARY_REFRESH_ENABLED", true),
     kalshiApiBase: envString(env, "KALSHI_API_BASE", "https://api.elections.kalshi.com/trade-api/v2"),
+    kalshiUiApiBase: envString(env, "KALSHI_UI_API_BASE", "https://api.elections.kalshi.com"),
+    kalshiUiSessionPath: envString(env, "KALSHI_UI_SESSION_PATH", "/etc/pok-poly-kalshi/kalshi-ui-session.json"),
+    kalshiUiMarketIdCacheTtlMs: envNumber(env, "KALSHI_UI_MARKET_ID_CACHE_TTL_MS", 60_000),
+    kalshiUiQuickOrderCapValidated: envBoolean(env, "KALSHI_UI_QUICK_ORDER_CAP_VALIDATED", false),
     kalshiWsUrl: envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
     kalshiSeriesTicker: envString(env, "KALSHI_SERIES_TICKER", "KXBTC15M"),
     polymarketWsUrl: envString(env, "POLYMARKET_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
@@ -208,6 +223,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
     liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),
     liveOrderPlacementMode: envLiveOrderPlacementMode(env),
+    kalshiHedgeOrderMode: envLiveKalshiHedgeOrderMode(env),
     liveAggressiveLimitRestMs: envNumber(env, "LIVE_AGGRESSIVE_LIMIT_REST_MS", 500),
     liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", true),
     liveHotPathEnabled: envBoolean(env, "LIVE_HOT_PATH_ENABLED", true),

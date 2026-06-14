@@ -132,6 +132,9 @@ const books = snapshot.books ?? {};
 const quarantinedExposure = Number(reconciliation.quarantinedExposureDollars ?? 0);
 const quarantineCap = Number(reconciliation.quarantineCapDollars ?? Number.POSITIVE_INFINITY);
 const riskState = execution.riskState ?? "unknown";
+const kalshiHedgeOrderMode = health.kalshiHedgeOrderMode ?? runtimeHealth.kalshiHedgeOrderMode ?? null;
+const kalshiUiQuickOrderCapValidated =
+  health.kalshiUiQuickOrderCapValidated ?? runtimeHealth.kalshiUiQuickOrderCapValidated ?? null;
 
 const checks = [
   ["health.ok", health.ok === true],
@@ -144,6 +147,10 @@ const checks = [
   ["health.livePolymarketFirstMinFillShares=5", Number(health.livePolymarketFirstMinFillShares) === 5],
   ["health.livePolymarketFirstMaxFillShares=5", Number(health.livePolymarketFirstMaxFillShares) === 5],
   ["health.liveAutoHardlocksEnabled=true", health.liveAutoHardlocksEnabled === true],
+  [
+    "health.kalshiUiQuickOrderCapValidated=true when ui_quick_order",
+    kalshiHedgeOrderMode !== "ui_quick_order" || kalshiUiQuickOrderCapValidated === true,
+  ],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
   ["execution.riskState not blocked", !["blocked", "hard_locked", "auto_hardlocks_disabled"].includes(riskState)],
@@ -174,6 +181,8 @@ console.log(JSON.stringify({
   liveOrderSize: health.liveOrderSize,
   liveMinBookDepthShares: health.liveMinBookDepthShares,
   liveKalshiMinCashDollars: health.liveKalshiMinCashDollars,
+  kalshiHedgeOrderMode,
+  kalshiUiQuickOrderCapValidated,
   riskState,
   riskStateReason: execution.riskStateReason ?? null,
   partialFillLocked: execution.partialFillLocked,

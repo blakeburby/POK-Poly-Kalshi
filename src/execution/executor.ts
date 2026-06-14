@@ -8,7 +8,7 @@ import type { ArbCandidate, ArbLeg, BinaryContract, DashboardSignal, ExecutionRe
 import {
   failedVenueResult,
   generatedClientOrderId,
-  KalshiOrderClient,
+  createKalshiOrderClient,
   PolymarketOrderClient,
   type LiveOrderContext,
   type VenueOrderClient,
@@ -228,7 +228,7 @@ export class LiveExecutor implements ArbExecutor {
   constructor(
     private readonly config: AppConfig = loadConfig(),
     private readonly books?: LiveExecutionBookReader,
-    private readonly kalshiClient: VenueOrderClient = new KalshiOrderClient(config),
+    private readonly kalshiClient: VenueOrderClient = createKalshiOrderClient(config),
     private readonly polymarketClient: VenueOrderClient = new PolymarketOrderClient(config),
     private readonly now: () => number = Date.now,
     private readonly liveLocks?: LiveExecutionLockWriter,

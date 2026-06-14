@@ -9,13 +9,15 @@ fi
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-hostinger-exact-share-readiness}"
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
+RESTORE_ARB_AFTER_DEPLOY="${RESTORE_ARB_AFTER_DEPLOY:-true}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$DEPLOY_BRANCH" "$APP_DIR" "$ENV_FILE" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$DEPLOY_BRANCH" "$APP_DIR" "$ENV_FILE" "$RESTORE_ARB_AFTER_DEPLOY" <<'REMOTE'
 set -euo pipefail
 
 DEPLOY_BRANCH="$1"
 APP_DIR="$2"
 ENV_FILE="$3"
+RESTORE_ARB_AFTER_DEPLOY="$4"
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
@@ -163,12 +165,14 @@ fi
 echo "Protected readiness while entries are paused:"
 DASHBOARD_API_TOKEN="$DASHBOARD_API_TOKEN" REQUIRE_ARB_ENABLED=false WORKER_API_BASE=http://127.0.0.1:8080 bash scripts/verify-live-readiness.sh
 
-if [ "$ARB_WAS_ENABLED" = "true" ]; then
+if [ "$ARB_WAS_ENABLED" = "true" ] && [ "$RESTORE_ARB_AFTER_DEPLOY" = "true" ]; then
   echo "Protected readiness is green; restoring ARB_ENABLED=true."
   set_env_value ARB_ENABLED true
   "${SUDO[@]}" systemctl restart pok-worker
   wait_for_health
   DASHBOARD_API_TOKEN="$DASHBOARD_API_TOKEN" WORKER_API_BASE=http://127.0.0.1:8080 bash scripts/verify-live-readiness.sh
+elif [ "$ARB_WAS_ENABLED" = "true" ]; then
+  echo "RESTORE_ARB_AFTER_DEPLOY=false; leaving entries paused."
 else
   echo "ARB_ENABLED was not true before deploy; leaving entries paused."
 fi

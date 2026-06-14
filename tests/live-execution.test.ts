@@ -1,16 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AssetType, OrderType, Side, type BalanceAllowanceResponse, type SignedOrder } from "@polymarket/clob-client-v2";
 import type { AppConfig } from "../src/config";
 import { loadConfig } from "../src/config";
 import { BookStore } from "../src/books/book-store";
 import { LiveExecutor } from "../src/execution/executor";
 import {
+  buildKalshiUiQuickOrderBody,
   buildKalshiV2OrderBody,
   checkPolymarketGeoblock,
+  createKalshiOrderClient,
   deriveOrCreatePolymarketApiCreds,
   KalshiOrderClient,
+  KalshiUiQuickOrderClient,
   polymarketApiCredsFromConfig,
   PolymarketOrderClient,
   type LiveOrderContext,
@@ -64,6 +70,10 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     executionConcurrency: 1,
     discoveryBoundaryRefreshEnabled: true,
     kalshiApiBase: "https://api.elections.kalshi.com/trade-api/v2",
+    kalshiUiApiBase: "https://api.elections.kalshi.com",
+    kalshiUiSessionPath: "/etc/pok-poly-kalshi/kalshi-ui-session.json",
+    kalshiUiMarketIdCacheTtlMs: 60_000,
+    kalshiUiQuickOrderCapValidated: false,
     kalshiWsUrl: "",
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
@@ -96,6 +106,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,
     liveOrderPlacementMode: "parallel_limit_rest",
+    kalshiHedgeOrderMode: "public_v2",
     liveAggressiveLimitRestMs: 500,
     liveParallelExecutionEnabled: false,
     liveHotPathEnabled: false,
@@ -147,6 +158,19 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     dashboardApiToken: "token",
     ...input,
   };
+}
+
+function kalshiUiSessionFile(input: Record<string, unknown> = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "kalshi-ui-session-"));
+  const path = join(dir, "session.json");
+  writeFileSync(path, JSON.stringify({
+    userId: "user-123",
+    cookie: "kalshi_session=test-session",
+    csrfToken: "csrf-test",
+    ...input,
+  }));
+  chmodSync(path, 0o600);
+  return path;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -494,6 +518,171 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     placementMode: "parallel_market",
   });
   assert.equal(market.time_in_force, "immediate_or_cancel");
+});
+
+test("Kalshi UI Quick Order body maps YES and NO legs onto user-side market orders", () => {
+  const yes = buildKalshiUiQuickOrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-YES",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, { executionGroupId: "group", clientOrderId: "client-yes", size: 5, maxBuyPrice: 0.61 }, "market-yes");
+
+  assert.equal(yes.market_id, "market-yes");
+  assert.equal(yes.count_fp, "5.00");
+  assert.equal(yes.side, "yes");
+  assert.equal(yes.user_side, "yes");
+  assert.equal(yes.order_action, "buy");
+  assert.equal(yes.order_type, "market");
+  assert.equal(yes.time_in_force, "immediate_or_cancel");
+  assert.equal(yes.post_only, false);
+  assert.equal(yes.price_dollars, "0.6100");
+  assert.equal(yes.max_cost_cents, 305);
+
+  const no = buildKalshiUiQuickOrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-NO",
+    direction: "no",
+    strike: 1502,
+    ask: 0.5,
+  }, { executionGroupId: "group", clientOrderId: "client-no", size: 1.77, maxBuyPrice: 0.54 }, "market-no");
+
+  assert.equal(no.side, "no");
+  assert.equal(no.user_side, "no");
+  assert.equal(no.price_dollars, "0.5400");
+  assert.equal(no.max_cost_cents, 95);
+});
+
+test("Kalshi UI Quick Order readiness fails closed until cap behavior is validated", async () => {
+  const sessionPath = kalshiUiSessionFile();
+  const client = new KalshiUiQuickOrderClient(config({
+    kalshiHedgeOrderMode: "ui_quick_order",
+    kalshiUiSessionPath: sessionPath,
+    kalshiUiQuickOrderCapValidated: false,
+  }), (async (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
+    throw new Error("readiness should not call private UI endpoints when cap validation is false");
+  }) as typeof fetch);
+
+  const readiness = await withKalshiEnv(() => client.readiness(1_800_000_000_000));
+
+  assert.equal(readiness.ready, false);
+  assert.match(readiness.reason ?? "", /CAP_VALIDATED/);
+});
+
+test("Kalshi UI Quick Order client refuses non-polymarket_first_exact placement modes", async () => {
+  const client = new KalshiUiQuickOrderClient(config({
+    kalshiHedgeOrderMode: "ui_quick_order",
+  }));
+  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-MARKET", direction: "yes", strike: 1500, ask: 0.5 };
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client-ui",
+    size: 1,
+    maxBuyPrice: 0.5,
+    placementMode: "parallel_market",
+  };
+
+  assert.match(await client.preflightOrder(leg, context) ?? "", /only supported/);
+  await assert.rejects(() => client.placeOrder(leg, context), /only supported/);
+});
+
+test("Kalshi UI Quick Order client resolves UI market id and posts market IOC order", async () => {
+  const sessionPath = kalshiUiSessionFile();
+  const calls: Array<{ method: string; path: string; body?: Record<string, unknown>; cookie?: string | null; csrf?: string | null }> = [];
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    const parsed = new URL(String(url));
+    const method = init?.method ?? "GET";
+    const headers = init?.headers as Record<string, string> | undefined;
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+    calls.push({ method, path: parsed.pathname, body, cookie: headers?.Cookie ?? null, csrf: headers?.["X-CSRF-Token"] ?? null });
+    if (parsed.pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
+    if (parsed.pathname.endsWith("/event_positions/KXBTC15M-26JUN140300")) {
+      return new Response(JSON.stringify({
+        event_position: {
+          market_positions: [{
+            market_id: "ui-market-123",
+            market_ticker: "KXBTC15M-26JUN140300-00",
+          }],
+        },
+      }), { status: 200 });
+    }
+    if (method === "POST" && parsed.pathname.endsWith("/orders")) {
+      assert.equal(body?.order_type, "market");
+      assert.equal(body?.time_in_force, "immediate_or_cancel");
+      assert.equal(body?.market_id, "ui-market-123");
+      return new Response(JSON.stringify({
+        order: {
+          order_id: "ui-order-1",
+          market_id: "ui-market-123",
+          market_ticker: "KXBTC15M-26JUN140300-00",
+          status: "pending",
+          order_type: "market",
+          user_side: "yes",
+          price_dollars: "0.5400",
+          fill_count_fp: "1.00",
+          remaining_count_fp: "0.00",
+        },
+      }), { status: 201 });
+    }
+    if (method === "GET" && parsed.pathname.endsWith("/orders/ui-order-1")) {
+      return new Response(JSON.stringify({
+        order: {
+          order_id: "ui-order-1",
+          market_id: "ui-market-123",
+          market_ticker: "KXBTC15M-26JUN140300-00",
+          status: "executed",
+          order_type: "market",
+          user_side: "yes",
+          price_dollars: "0.5400",
+          fill_count_fp: "1.00",
+          remaining_count_fp: "0.00",
+          taker_fill_cost_dollars: "0.5400",
+          taker_fees_dollars: "0.0100",
+          updated_ts: "2026-06-14T06:49:27.93588Z",
+        },
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
+  };
+  const client = new KalshiUiQuickOrderClient(config({
+    kalshiHedgeOrderMode: "ui_quick_order",
+    kalshiUiSessionPath: sessionPath,
+    kalshiUiQuickOrderCapValidated: true,
+  }), fetchFn as typeof fetch);
+  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-26JUN140300-00", direction: "yes", strike: 1500, ask: 0.54 };
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client-ui",
+    size: 1,
+    maxBuyPrice: 0.54,
+    placementMode: "polymarket_first_exact",
+  };
+
+  const result = await withKalshiEnv(async () => {
+    assert.equal(await client.preflightOrder(leg, context), null);
+    return client.placeOrder(leg, context);
+  });
+
+  const post = calls.find((call) => call.method === "POST" && call.path.endsWith("/orders"));
+  assert.ok(post);
+  assert.equal(post.cookie, "kalshi_session=test-session");
+  assert.equal(post.csrf, "csrf-test");
+  assert.equal(result.status, "filled");
+  assert.equal(result.fillPrice, 0.54);
+  assert.equal(result.fee, 0.01);
+  assert.equal(result.metadata?.kalshiOrderRoute, "ui_quick_order");
+  assert.equal(result.metadata?.kalshiUiFinalRecordUsed, true);
+});
+
+test("Kalshi order client factory selects UI Quick Order mode only when configured", () => {
+  assert.ok(createKalshiOrderClient(config()) instanceof KalshiOrderClient);
+  assert.ok(createKalshiOrderClient(config({ kalshiHedgeOrderMode: "ui_quick_order" })) instanceof KalshiUiQuickOrderClient);
 });
 
 test("Kalshi order client pre-arms request during preflight and patches final price", async () => {
@@ -2613,6 +2802,100 @@ test("live executor uses polymarket_first_exact and submits Kalshi after Polymar
   assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, 8);
   assert.equal(result.executionTimings?.polymarketHedgeTriggerExact, true);
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
+});
+
+test("polymarket_first_exact routes Kalshi hedge through UI Quick Order only after Polymarket fill evidence", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const sessionPath = kalshiUiSessionFile();
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
+  let uiPostSawPolymarketFill = false;
+  const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+    const parsed = new URL(String(url));
+    const method = init?.method ?? "GET";
+    if (parsed.pathname.endsWith("/portfolio/balance")) {
+      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+    }
+    if (parsed.pathname.endsWith("/event_positions/kalshi")) {
+      return new Response(JSON.stringify({
+        event_position: {
+          market_positions: [{
+            market_id: "ui-market-kalshi",
+            market_ticker: "kalshi",
+          }],
+        },
+      }), { status: 200 });
+    }
+    if (method === "POST" && parsed.pathname.endsWith("/orders")) {
+      uiPostSawPolymarketFill = polymarket.placed.length === 1;
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      assert.equal(body.order_type, "market");
+      assert.equal(body.time_in_force, "immediate_or_cancel");
+      assert.equal(body.price_dollars, "0.6100");
+      return new Response(JSON.stringify({
+        order: {
+          order_id: "ui-hedge-order",
+          market_id: "ui-market-kalshi",
+          market_ticker: "kalshi",
+          status: "pending",
+          order_type: "market",
+          user_side: "no",
+          price_dollars: "0.5000",
+          fill_count_fp: "8.00",
+          remaining_count_fp: "0.00",
+        },
+      }), { status: 201 });
+    }
+    if (method === "GET" && parsed.pathname.endsWith("/orders/ui-hedge-order")) {
+      return new Response(JSON.stringify({
+        order: {
+          order_id: "ui-hedge-order",
+          market_id: "ui-market-kalshi",
+          market_ticker: "kalshi",
+          status: "executed",
+          order_type: "market",
+          user_side: "no",
+          price_dollars: "0.5000",
+          fill_count_fp: "8.00",
+          remaining_count_fp: "0.00",
+          taker_fill_cost_dollars: "4.0000",
+          taker_fees_dollars: "0.0000",
+        },
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
+  };
+  const kalshi = new KalshiUiQuickOrderClient(config({
+    liveOrderSize: 8,
+    liveOrderPlacementMode: "polymarket_first_exact",
+    kalshiHedgeOrderMode: "ui_quick_order",
+    kalshiUiSessionPath: sessionPath,
+    kalshiUiQuickOrderCapValidated: true,
+  }), fetchFn as typeof fetch);
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiSessionPath: sessionPath,
+      kalshiUiQuickOrderCapValidated: true,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await withKalshiEnv(() => executor.execute(candidate));
+
+  assert.equal(result.action, "filled");
+  assert.equal(result.kalshiFillId, "ui-hedge-order");
+  assert.equal(result.kalshiStatus, "filled");
+  assert.equal(uiPostSawPolymarketFill, true);
+  assert.equal(polymarket.placed.length, 1);
 });
 
 test("live executor persists fill-quality snapshot in shadow mode without blocking submission", async () => {

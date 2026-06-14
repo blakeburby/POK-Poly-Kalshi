@@ -174,6 +174,8 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       liveHedgeMaxLossDollars: runtime.config.liveHedgeMaxLossDollars,
       liveHedgeFeeBufferDollars: runtime.config.liveHedgeFeeBufferDollars,
       liveOrderPlacementMode: runtime.config.liveOrderPlacementMode,
+      kalshiHedgeOrderMode: runtime.config.kalshiHedgeOrderMode,
+      kalshiUiQuickOrderCapValidated: runtime.config.kalshiUiQuickOrderCapValidated,
       liveAggressiveLimitRestMs: runtime.config.liveAggressiveLimitRestMs,
       liveParallelExecutionEnabled: runtime.config.liveParallelExecutionEnabled,
       liveHotPathEnabled: runtime.config.liveHotPathEnabled,

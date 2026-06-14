@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   AssetType,
   type ApiKeyCreds,
@@ -55,6 +56,10 @@ export interface LiveOrderPreflight {
   kalshiPreparedOrderFallbackReason?: string | null;
   kalshiReadiness?: VenueExecutionReadiness;
   kalshiRequiredCollateral?: number;
+  kalshiUiMarketId?: string;
+  kalshiUiMarketTicker?: string;
+  kalshiUiMarketIdResolvedAt?: number;
+  kalshiUiMarketIdSource?: string;
   polymarketReadiness?: VenueExecutionReadiness;
   polymarketRequiredCollateral?: number;
   polymarketOrderBook?: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">;
@@ -133,6 +138,25 @@ export interface PolymarketApiKeyProvider {
   createApiKey(): Promise<ApiKeyCreds>;
 }
 
+export interface KalshiUiQuickOrderSession {
+  userId: string;
+  cookie: string;
+  csrfToken: string;
+  userAgent?: string;
+  headers?: Record<string, string>;
+  marketIds?: Record<string, string>;
+  marketIdByTicker?: Record<string, string>;
+  markets?: Array<Record<string, unknown>>;
+  allowStaticMarketIdMap?: boolean;
+}
+
+interface KalshiUiMarketIdResolution {
+  marketId: string;
+  ticker: string;
+  resolvedAt: number;
+  source: string;
+}
+
 function isoFromMs(value: number): string {
   return new Date(value).toISOString();
 }
@@ -173,7 +197,11 @@ function roundPrice(value: number): number {
 
 function sanitizeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/0x[a-fA-F0-9]{32,}/g, "0x[redacted]").slice(0, 500);
+  return message
+    .replace(/0x[a-fA-F0-9]{32,}/g, "0x[redacted]")
+    .replace(/\/v1\/users\/[^/"'\s]+/g, "/v1/users/[redacted]")
+    .replace(/(cookie|x-csrf-token|csrf|authorization)\s*[:=]\s*[^,;}\]\s]+/gi, "$1=[redacted]")
+    .slice(0, 500);
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -433,6 +461,207 @@ function kalshiOrderStatus(record: Record<string, unknown>, fillCount: number | 
   const status = String(record.status ?? "").trim();
   if (isExactFillCount(fillCount, requestedSize)) return "filled";
   return status || "unfilled";
+}
+
+function stringRecordOrNull(value: unknown): Record<string, string> | null {
+  const record = recordOrNull(value);
+  if (!record) return null;
+  const result: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(record)) {
+    if (typeof raw === "string" && raw.trim()) result[key] = raw.trim();
+  }
+  return result;
+}
+
+function normalizeKalshiUiSession(raw: unknown): KalshiUiQuickOrderSession | null {
+  const record = recordOrNull(raw);
+  if (!record) return null;
+  const userId = stringOrNull(record.userId ?? record.user_id ?? record.userID);
+  const cookie = stringOrNull(record.cookie ?? record.sessionCookie ?? record.session_cookie);
+  const csrfToken = stringOrNull(record.csrfToken ?? record.csrf_token ?? record.xCsrfToken ?? record["x-csrf-token"]);
+  if (!userId || !cookie || !csrfToken) return null;
+  return {
+    userId,
+    cookie,
+    csrfToken,
+    userAgent: stringOrNull(record.userAgent ?? record.user_agent) ?? undefined,
+    headers: stringRecordOrNull(record.headers) ?? undefined,
+    marketIds: stringRecordOrNull(record.marketIds) ?? undefined,
+    marketIdByTicker: stringRecordOrNull(record.marketIdByTicker) ?? undefined,
+    markets: Array.isArray(record.markets)
+      ? record.markets.map((market) => recordOrNull(market)).filter((market): market is Record<string, unknown> => market != null)
+      : undefined,
+    allowStaticMarketIdMap: record.allowStaticMarketIdMap === true,
+  };
+}
+
+function readKalshiUiQuickOrderSession(path: string): { session: KalshiUiQuickOrderSession | null; reason: string | null } {
+  const trimmedPath = path.trim();
+  if (!trimmedPath) return { session: null, reason: "KALSHI_UI_SESSION_PATH is required for UI Quick Order mode" };
+  try {
+    if (!existsSync(trimmedPath)) return { session: null, reason: `Kalshi UI session file not found at ${trimmedPath}` };
+    const stat = statSync(trimmedPath);
+    if (!stat.isFile()) return { session: null, reason: "Kalshi UI session path is not a file" };
+    if ((stat.mode & 0o077) !== 0) return { session: null, reason: "Kalshi UI session file must not be readable, writable, or executable by group/other" };
+    const session = normalizeKalshiUiSession(JSON.parse(readFileSync(trimmedPath, "utf8")));
+    if (!session) return { session: null, reason: "Kalshi UI session file must include userId, cookie, and csrfToken" };
+    return { session, reason: null };
+  } catch (error) {
+    return { session: null, reason: `Kalshi UI session file could not be read: ${sanitizeError(error)}` };
+  }
+}
+
+function eventTickerFromKalshiMarketTicker(ticker: string): string {
+  const trimmed = ticker.trim();
+  const index = trimmed.lastIndexOf("-");
+  return index > 0 ? trimmed.slice(0, index) : trimmed;
+}
+
+function marketIdFromSessionMap(session: KalshiUiQuickOrderSession, ticker: string): string | null {
+  const mapped = session.marketIds?.[ticker] ?? session.marketIdByTicker?.[ticker];
+  if (mapped?.trim()) return mapped.trim();
+  for (const market of session.markets ?? []) {
+    const marketTicker = stringOrNull(market.market_ticker ?? market.marketTicker ?? market.ticker);
+    const marketId = stringOrNull(market.market_id ?? market.marketId ?? market.id);
+    if (marketTicker === ticker && marketId) return marketId;
+  }
+  return null;
+}
+
+function kalshiUiBaseUrl(config: AppConfig): URL {
+  const base = new URL(config.kalshiUiApiBase);
+  base.pathname = base.pathname.replace(/\/$/, "");
+  return base;
+}
+
+function kalshiUiUrl(config: AppConfig, path: string): URL {
+  const url = kalshiUiBaseUrl(config);
+  const basePath = url.pathname.replace(/\/$/, "");
+  url.pathname = `${basePath}${path}`;
+  return url;
+}
+
+function safeKalshiUiHeaderExtras(headers: Record<string, string> | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    const normalized = key.toLowerCase();
+    if (["cookie", "authorization", "x-csrf-token", "csrf", "content-type", "accept"].includes(normalized)) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
+function kalshiUiHeaders(session: KalshiUiQuickOrderSession, contentType = false): Record<string, string> {
+  return {
+    ...safeKalshiUiHeaderExtras(session.headers),
+    Accept: "application/json",
+    ...(contentType ? { "Content-Type": "application/json" } : {}),
+    Origin: "https://kalshi.com",
+    Referer: "https://kalshi.com/",
+    ...(session.userAgent ? { "User-Agent": session.userAgent } : {}),
+    Cookie: session.cookie,
+    "X-CSRF-Token": session.csrfToken,
+  };
+}
+
+function kalshiUiMaxCostCents(context: LiveOrderContext): number {
+  const cappedCostDollars = Math.max(0, context.size * context.maxBuyPrice);
+  return Math.floor(cappedCostDollars * 100 + 1e-9);
+}
+
+export function buildKalshiUiQuickOrderBody(
+  leg: ArbLeg,
+  context: LiveOrderContext,
+  marketId: string,
+): Record<string, string | number | boolean> {
+  return {
+    market_id: marketId,
+    count_fp: fixedCount(context.size),
+    side: leg.direction,
+    price_dollars: fixedDollars(context.maxBuyPrice),
+    max_cost_cents: kalshiUiMaxCostCents(context),
+    sell_position_capped: false,
+    expiration_unix_ts: 0,
+    time_in_force: "immediate_or_cancel",
+    order_action: "buy",
+    user_side: leg.direction,
+    order_type: "market",
+    post_only: false,
+  };
+}
+
+function kalshiUiOrderRecord(payload: Record<string, unknown>): Record<string, unknown> {
+  return recordOrNull(payload.order) ?? payload;
+}
+
+function kalshiUiFillCount(record: Record<string, unknown>): number | null {
+  return finiteOrNull(record.fill_count_fp ?? record.fill_count);
+}
+
+function kalshiUiRemainingCount(record: Record<string, unknown>): number | null {
+  return finiteOrNull(record.remaining_count_fp ?? record.remaining_count);
+}
+
+function kalshiUiDollars(record: Record<string, unknown>, dollarKeys: string[], centsKeys: string[]): number | null {
+  for (const key of dollarKeys) {
+    const value = finiteOrNull(record[key]);
+    if (value != null) return value;
+  }
+  for (const key of centsKeys) {
+    const value = finiteOrNull(record[key]);
+    if (value != null) return roundPrice(value / 100);
+  }
+  return null;
+}
+
+function kalshiUiFillPrice(record: Record<string, unknown>): number | null {
+  const fillCount = kalshiUiFillCount(record);
+  const takerCost = kalshiUiDollars(record, ["taker_fill_cost_dollars", "maker_fill_cost_dollars"], ["taker_fill_cost", "maker_fill_cost"]);
+  if (fillCount != null && fillCount > 0 && takerCost != null) return roundPrice(takerCost / fillCount);
+  return kalshiUiDollars(record, ["average_fill_price", "price_dollars"], ["price"]);
+}
+
+function kalshiUiFee(record: Record<string, unknown>): number | null {
+  return kalshiUiDollars(record, ["average_fee_paid", "taker_fees_dollars", "maker_fees_dollars"], ["taker_fees", "maker_fees"]);
+}
+
+function kalshiUiOrderStatus(record: Record<string, unknown>, fillCount: number | null, requestedSize: number): string {
+  if (isExactFillCount(fillCount, requestedSize)) return "filled";
+  const status = String(record.status ?? "").trim();
+  const remaining = kalshiUiRemainingCount(record);
+  if ((fillCount ?? 0) <= 0 && remaining === 0) return status || "canceled";
+  return status || "unfilled";
+}
+
+function kalshiUiExchangeTimestampMs(record: Record<string, unknown>): number | null {
+  const tsMs = finiteOrNull(record.ts_ms);
+  if (tsMs != null) return tsMs;
+  for (const key of ["updated_ts", "create_ts", "created_time"]) {
+    const value = record[key];
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function kalshiUiMarketPositionRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const eventPosition = recordOrNull(payload.event_position) ?? payload;
+  const rows = Array.isArray(eventPosition.market_positions) ? eventPosition.market_positions : [];
+  return rows.map((row) => recordOrNull(row)).filter((row): row is Record<string, unknown> => row != null);
+}
+
+function kalshiUiOrderRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const wrapped = recordOrNull(payload.order);
+  if (wrapped) return [wrapped];
+  const candidates = [payload.orders, payload.order_history, payload.results];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.map((row) => recordOrNull(row)).filter((row): row is Record<string, unknown> => row != null);
+    }
+  }
+  return [];
 }
 
 export class KalshiOrderClient implements VenueOrderClient {
@@ -875,6 +1104,344 @@ export class KalshiOrderClient implements VenueOrderClient {
     if (!response.ok) throw new Error(`Kalshi order cancel failed ${response.status}: ${sanitizeError(text)}`);
     return "canceled";
   }
+}
+
+export class KalshiUiQuickOrderClient implements VenueOrderClient {
+  readonly venue = "kalshi" as const;
+  private readonly publicClient: KalshiOrderClient;
+  private readonly marketIdCache = new Map<string, KalshiUiMarketIdResolution>();
+
+  constructor(private readonly config: AppConfig, private readonly fetchFn: typeof fetch = fetch) {
+    this.publicClient = new KalshiOrderClient(config, fetchFn);
+  }
+
+  async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
+    const publicReadiness = await this.publicClient.readiness(now);
+    if (!publicReadiness.ready) return publicReadiness;
+    const { reason } = readKalshiUiQuickOrderSession(this.config.kalshiUiSessionPath);
+    if (reason) {
+      return {
+        ...publicReadiness,
+        configured: false,
+        ready: false,
+        reason,
+        lastCheckedAt: now,
+      };
+    }
+    if (!this.config.kalshiUiQuickOrderCapValidated) {
+      return {
+        ...publicReadiness,
+        ready: false,
+        reason: "KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true is required before UI Quick Order hedges can be enabled",
+        lastCheckedAt: now,
+      };
+    }
+    return {
+      ...publicReadiness,
+      configured: true,
+      ready: true,
+      reason: null,
+      lastCheckedAt: now,
+    };
+  }
+
+  async warm(options: { now?: number; requiredCollateral?: number } = {}): Promise<void> {
+    await this.publicClient.warm(options);
+  }
+
+  async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
+    if (context.placementMode !== "polymarket_first_exact") {
+      return "Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges";
+    }
+    const now = context.requestedAt ?? Date.now();
+    const readiness = await this.readiness(now);
+    context.preflight = {
+      ...context.preflight,
+      kalshiReadiness: readiness,
+      kalshiRequiredCollateral: readiness.requiredCollateral ?? context.requiredCollateral,
+    };
+    if (!readiness.ready) return readiness.reason ?? "Kalshi UI Quick Order readiness failed";
+    const { session, reason } = readKalshiUiQuickOrderSession(this.config.kalshiUiSessionPath);
+    if (!session) return reason ?? "Kalshi UI session is unavailable";
+    try {
+      const resolution = await this.resolveMarketId(leg.contractId, session, context.signal);
+      context.preflight = {
+        ...context.preflight,
+        kalshiUiMarketId: resolution.marketId,
+        kalshiUiMarketTicker: resolution.ticker,
+        kalshiUiMarketIdResolvedAt: resolution.resolvedAt,
+        kalshiUiMarketIdSource: resolution.source,
+      };
+      return null;
+    } catch (error) {
+      return `Kalshi UI Quick Order market-id preflight failed: ${sanitizeError(error)}`;
+    }
+  }
+
+  async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+    if (context.placementMode !== "polymarket_first_exact") {
+      throw new Error("Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges");
+    }
+    const requestedAt = context.requestedAt ?? Date.now();
+    const readiness = context.preflight?.kalshiReadiness?.ready
+      ? context.preflight.kalshiReadiness
+      : await this.readiness(requestedAt);
+    if (!readiness.ready) throw new Error(readiness.reason ?? "Kalshi UI Quick Order readiness failed");
+
+    const { session, reason } = readKalshiUiQuickOrderSession(this.config.kalshiUiSessionPath);
+    if (!session) throw new Error(reason ?? "Kalshi UI session is unavailable");
+    const resolution = context.preflight?.kalshiUiMarketId && context.preflight.kalshiUiMarketTicker === leg.contractId
+      ? {
+        marketId: context.preflight.kalshiUiMarketId,
+        ticker: context.preflight.kalshiUiMarketTicker,
+        resolvedAt: context.preflight.kalshiUiMarketIdResolvedAt ?? requestedAt,
+        source: context.preflight.kalshiUiMarketIdSource ?? "preflight",
+      }
+      : await this.resolveMarketId(leg.contractId, session, context.signal);
+    const body = buildKalshiUiQuickOrderBody(leg, context, resolution.marketId);
+    const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/orders`);
+    const response = await this.fetchFn(url, {
+      method: "POST",
+      headers: kalshiUiHeaders(session, true),
+      body: JSON.stringify(body),
+      signal: context.signal,
+    });
+    const respondedAt = Date.now();
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    if (!response.ok) throw new Error(`Kalshi UI Quick Order failed ${response.status}: ${sanitizeError(text)}`);
+
+    const initialRecord = kalshiUiOrderRecord(payload);
+    const orderId = stringOrNull(initialRecord.order_id);
+    let finalRecord: Record<string, unknown> | null = null;
+    let finalFetchError: string | null = null;
+    if (orderId) {
+      try {
+        finalRecord = await this.fetchUiOrder(session, orderId, context.signal);
+      } catch (error) {
+        finalFetchError = sanitizeError(error);
+      }
+    }
+    return this.resultFromUiRecord(leg, context, finalRecord ?? initialRecord, {
+      requestedAt,
+      respondedAt,
+      orderId,
+      resolution,
+      body,
+      readiness,
+      finalFetchError,
+      finalRecordUsed: Boolean(finalRecord),
+    });
+  }
+
+  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+    const { session } = readKalshiUiQuickOrderSession(this.config.kalshiUiSessionPath);
+    if (!session) return null;
+    try {
+      const resolution = context.preflight?.kalshiUiMarketId && context.preflight.kalshiUiMarketTicker === leg.contractId
+        ? {
+          marketId: context.preflight.kalshiUiMarketId,
+          ticker: context.preflight.kalshiUiMarketTicker,
+          resolvedAt: context.preflight.kalshiUiMarketIdResolvedAt ?? Date.parse(timedOutResult.requestedAt),
+          source: context.preflight.kalshiUiMarketIdSource ?? "preflight",
+        }
+        : await this.resolveMarketId(leg.contractId, session, context.signal);
+      const recovered = await this.findRecentUiOrder(session, leg, context, resolution);
+      if (!recovered) {
+        return {
+          ...timedOutResult,
+          metadata: {
+            ...timedOutResult.metadata,
+            kalshiUiTimeoutRecoveryAttempted: true,
+            kalshiUiTimeoutRecoveryStatus: "not_found",
+          },
+        };
+      }
+      return this.resultFromUiRecord(leg, context, recovered, {
+        requestedAt: Date.parse(timedOutResult.requestedAt),
+        respondedAt: Date.now(),
+        orderId: stringOrNull(recovered.order_id),
+        resolution,
+        body: buildKalshiUiQuickOrderBody(leg, context, resolution.marketId),
+        readiness: context.preflight?.kalshiReadiness ?? null,
+        finalFetchError: null,
+        finalRecordUsed: true,
+        timeoutRecovery: true,
+      });
+    } catch (error) {
+      return {
+        ...timedOutResult,
+        metadata: {
+          ...timedOutResult.metadata,
+          kalshiUiTimeoutRecoveryAttempted: true,
+          kalshiUiTimeoutRecoveryStatus: "error",
+          kalshiUiTimeoutRecoveryError: sanitizeError(error),
+        },
+      };
+    }
+  }
+
+  private async resolveMarketId(ticker: string, session: KalshiUiQuickOrderSession, signal?: AbortSignal): Promise<KalshiUiMarketIdResolution> {
+    const now = Date.now();
+    const cached = this.marketIdCache.get(ticker);
+    if (cached && now - cached.resolvedAt <= Math.max(0, this.config.kalshiUiMarketIdCacheTtlMs)) return cached;
+    const resolvedFromUi = await this.resolveMarketIdFromEventPositions(ticker, session, signal);
+    if (resolvedFromUi) {
+      this.marketIdCache.set(ticker, resolvedFromUi);
+      return resolvedFromUi;
+    }
+    const staticMarketId = marketIdFromSessionMap(session, ticker);
+    if (staticMarketId && session.allowStaticMarketIdMap) {
+      const resolved = { marketId: staticMarketId, ticker, resolvedAt: now, source: "session_static_map" };
+      this.marketIdCache.set(ticker, resolved);
+      return resolved;
+    }
+    throw new Error(`No verified Kalshi UI market_id found for ticker ${ticker}`);
+  }
+
+  private async resolveMarketIdFromEventPositions(
+    ticker: string,
+    session: KalshiUiQuickOrderSession,
+    signal?: AbortSignal,
+  ): Promise<KalshiUiMarketIdResolution | null> {
+    const eventTicker = eventTickerFromKalshiMarketTicker(ticker);
+    const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/event_positions/${encodeURIComponent(eventTicker)}`);
+    const response = await this.fetchFn(url, {
+      method: "GET",
+      headers: kalshiUiHeaders(session),
+      signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      if (response.status === 404) return null;
+      throw new Error(`Kalshi UI event-position lookup failed ${response.status}: ${sanitizeError(text)}`);
+    }
+    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    for (const row of kalshiUiMarketPositionRecords(payload)) {
+      const marketTicker = stringOrNull(row.market_ticker ?? row.marketTicker ?? row.ticker);
+      const marketId = stringOrNull(row.market_id ?? row.marketId ?? row.id);
+      if (marketTicker === ticker && marketId) {
+        return { marketId, ticker, resolvedAt: Date.now(), source: "event_positions" };
+      }
+    }
+    return null;
+  }
+
+  private async fetchUiOrder(session: KalshiUiQuickOrderSession, orderId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/orders/${encodeURIComponent(orderId)}`);
+    const response = await this.fetchFn(url, {
+      method: "GET",
+      headers: kalshiUiHeaders(session),
+      signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Kalshi UI order query failed ${response.status}: ${sanitizeError(text)}`);
+    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    return kalshiUiOrderRecord(payload);
+  }
+
+  private async findRecentUiOrder(
+    session: KalshiUiQuickOrderSession,
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    resolution: KalshiUiMarketIdResolution,
+  ): Promise<Record<string, unknown> | null> {
+    const requestedAt = context.requestedAt ?? Date.now();
+    const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/orders`);
+    url.searchParams.set("limit", "20");
+    url.searchParams.set("market_id", resolution.marketId);
+    const response = await this.fetchFn(url, {
+      method: "GET",
+      headers: kalshiUiHeaders(session),
+      signal: context.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Kalshi UI orders query failed ${response.status}: ${sanitizeError(text)}`);
+    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const matches = kalshiUiOrderRecords(payload).filter((record) => {
+      const marketId = stringOrNull(record.market_id ?? record.marketId);
+      const marketTicker = stringOrNull(record.market_ticker ?? record.marketTicker ?? record.ticker);
+      const orderAction = stringOrNull(record.order_action ?? record.orderAction);
+      const userSide = stringOrNull(record.user_side ?? record.userSide ?? record.side);
+      const orderType = stringOrNull(record.order_type ?? record.orderType);
+      const created = kalshiUiExchangeTimestampMs(record);
+      return marketId === resolution.marketId
+        && (!marketTicker || marketTicker === leg.contractId)
+        && (!orderAction || orderAction === "buy")
+        && (!userSide || userSide === leg.direction)
+        && (!orderType || orderType === "market")
+        && (created == null || created + 1_000 >= requestedAt);
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  private resultFromUiRecord(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    record: Record<string, unknown>,
+    options: {
+      requestedAt: number;
+      respondedAt: number;
+      orderId: string | null;
+      resolution: KalshiUiMarketIdResolution;
+      body: Record<string, string | number | boolean>;
+      readiness: VenueExecutionReadiness | null;
+      finalFetchError: string | null;
+      finalRecordUsed: boolean;
+      timeoutRecovery?: boolean;
+    },
+  ): VenueOrderResult {
+    const fillCount = kalshiUiFillCount(record);
+    const fillPrice = kalshiUiFillPrice(record);
+    const fee = kalshiUiFee(record);
+    const exchangeTimestampMs = kalshiUiExchangeTimestampMs(record);
+    const capBreached = fillPrice != null && fillPrice > context.maxBuyPrice + 0.000001;
+    const exactFillErrorText = exactFillError(this.venue, fillCount, context.size);
+    const status = capBreached
+      ? "unknown"
+      : kalshiUiOrderStatus(record, fillCount, context.size);
+    const error = capBreached
+      ? `Kalshi UI Quick Order safety breach: fill price ${fillPrice?.toFixed(4)} exceeded hedge cap ${context.maxBuyPrice.toFixed(4)}`
+      : exactFillErrorText;
+    return {
+      venue: this.venue,
+      clientOrderId: context.clientOrderId,
+      orderId: stringOrNull(record.order_id) ?? options.orderId,
+      status,
+      fillPrice,
+      fillCount,
+      requestedAt: isoFromMs(options.requestedAt),
+      respondedAt: isoFromMs(Date.now()),
+      error,
+      fee,
+      exchangeTimestampMs,
+      metadata: {
+        orderPlacementMode: context.placementMode ?? "parallel_market",
+        kalshiOrderRoute: "ui_quick_order",
+        kalshiUiOrderType: String(record.order_type ?? options.body.order_type ?? "market"),
+        kalshiUiTimeInForce: String(options.body.time_in_force),
+        kalshiUiMarketIdResolved: true,
+        kalshiUiMarketIdSource: options.resolution.source,
+        kalshiUiMarketTicker: options.resolution.ticker,
+        kalshiUiSubmittedPriceDollars: options.body.price_dollars,
+        kalshiUiSubmittedMaxCostCents: options.body.max_cost_cents,
+        kalshiUiInitialRespondedAt: isoFromMs(options.respondedAt),
+        kalshiUiInitialStatus: String(record.status ?? initialResultStatus(fillCount, context.size)),
+        kalshiUiFinalFetchError: options.finalFetchError,
+        kalshiUiFinalRecordUsed: options.finalRecordUsed,
+        kalshiUiTimeoutRecovery: options.timeoutRecovery === true,
+        kalshiRequiredCollateral: options.readiness?.requiredCollateral ?? context.requiredCollateral ?? null,
+        kalshiCollateralBalance: options.readiness?.balance ?? null,
+        safetyBreach: capBreached,
+      },
+    };
+  }
+}
+
+export function createKalshiOrderClient(config: AppConfig, fetchFn: typeof fetch = fetch): VenueOrderClient {
+  return config.kalshiHedgeOrderMode === "ui_quick_order"
+    ? new KalshiUiQuickOrderClient(config, fetchFn)
+    : new KalshiOrderClient(config, fetchFn);
 }
 
 function initialResultStatus(fillCount: number | null, requestedSize: number): string {

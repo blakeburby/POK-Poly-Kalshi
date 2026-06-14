@@ -4,6 +4,7 @@ export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 export type LiveOrderPlacementMode = "parallel_market" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
+export type LiveKalshiHedgeOrderMode = "public_v2" | "ui_quick_order";
 export type LiveKalshiPrearmPricePolicy = "patch_after_fill";
 export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
@@ -797,6 +798,8 @@ export interface DashboardSnapshot {
     liveHedgeMaxLossDollars: number;
     liveHedgeFeeBufferDollars: number;
     liveOrderPlacementMode?: LiveOrderPlacementMode;
+    kalshiHedgeOrderMode?: LiveKalshiHedgeOrderMode;
+    kalshiUiQuickOrderCapValidated?: boolean;
     liveAggressiveLimitRestMs?: number;
     liveParallelExecutionEnabled: boolean;
     liveHotPathEnabled: boolean;

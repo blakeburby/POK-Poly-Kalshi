@@ -77,6 +77,8 @@ export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Rec
     liveTrading: true,
     arbEnabled: config.arbEnabled,
     liveOrderPlacementMode: config.liveOrderPlacementMode,
+    kalshiHedgeOrderMode: config.kalshiHedgeOrderMode,
+    kalshiUiQuickOrderCapValidated: config.kalshiUiQuickOrderCapValidated,
     liveOrderSize: config.liveOrderSize,
     liveKalshiMinCashDollars: config.liveKalshiMinCashDollars,
     liveMinBookDepthShares: config.liveMinBookDepthShares,
