@@ -10,14 +10,16 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-hostinger-exact-share-readiness}"
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
 RESTORE_ARB_AFTER_DEPLOY="${RESTORE_ARB_AFTER_DEPLOY:-true}"
+REQUIRE_DEPLOY_READINESS="${REQUIRE_DEPLOY_READINESS:-true}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$DEPLOY_BRANCH" "$APP_DIR" "$ENV_FILE" "$RESTORE_ARB_AFTER_DEPLOY" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$DEPLOY_BRANCH" "$APP_DIR" "$ENV_FILE" "$RESTORE_ARB_AFTER_DEPLOY" "$REQUIRE_DEPLOY_READINESS" <<'REMOTE'
 set -euo pipefail
 
 DEPLOY_BRANCH="$1"
 APP_DIR="$2"
 ENV_FILE="$3"
 RESTORE_ARB_AFTER_DEPLOY="$4"
+REQUIRE_DEPLOY_READINESS="$5"
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
@@ -163,9 +165,19 @@ if [ -z "$DASHBOARD_API_TOKEN" ]; then
 fi
 
 echo "Protected readiness while entries are paused:"
+set +e
 DASHBOARD_API_TOKEN="$DASHBOARD_API_TOKEN" REQUIRE_ARB_ENABLED=false WORKER_API_BASE=http://127.0.0.1:8080 bash scripts/verify-live-readiness.sh
+READINESS_STATUS=$?
+set -e
+if [ "$READINESS_STATUS" -ne 0 ]; then
+  if [ "$REQUIRE_DEPLOY_READINESS" = "true" ] || [ "$RESTORE_ARB_AFTER_DEPLOY" = "true" ]; then
+    echo "Protected readiness failed and is required for this deploy; leaving entries paused." >&2
+    exit "$READINESS_STATUS"
+  fi
+  echo "Protected readiness failed; continuing because REQUIRE_DEPLOY_READINESS=false and RESTORE_ARB_AFTER_DEPLOY=false."
+fi
 
-if [ "$ARB_WAS_ENABLED" = "true" ] && [ "$RESTORE_ARB_AFTER_DEPLOY" = "true" ]; then
+if [ "$READINESS_STATUS" -eq 0 ] && [ "$ARB_WAS_ENABLED" = "true" ] && [ "$RESTORE_ARB_AFTER_DEPLOY" = "true" ]; then
   echo "Protected readiness is green; restoring ARB_ENABLED=true."
   set_env_value ARB_ENABLED true
   "${SUDO[@]}" systemctl restart pok-worker
