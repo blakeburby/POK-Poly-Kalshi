@@ -1,0 +1,12 @@
+[Unit]
+Description=Run POK disk guard hourly
+
+[Timer]
+OnBootSec=5min
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5min
+Unit=pok-disk-guard.service
+
+[Install]
+WantedBy=timers.target

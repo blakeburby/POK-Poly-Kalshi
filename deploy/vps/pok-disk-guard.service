@@ -1,0 +1,11 @@
+[Unit]
+Description=POK disk guard cleanup and alert check
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/pok-disk-guard
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
