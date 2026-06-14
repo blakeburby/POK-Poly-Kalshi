@@ -49,13 +49,18 @@ if [ -n "$stage_session_source" ]; then
   scp -q "$stage_session_source" "$HOSTINGER_SSH_TARGET:$SESSION_STAGED_TMP"
 fi
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$SESSION_PATH" "$SESSION_STAGED_TMP" <<'REMOTE'
+SESSION_STAGED_TMP_ARG="${SESSION_STAGED_TMP:-__none__}"
+
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$SESSION_PATH" "$SESSION_STAGED_TMP_ARG" <<'REMOTE'
 set -euo pipefail
 
 APP_DIR="$1"
 ENV_FILE="$2"
 SESSION_PATH="$3"
 SESSION_STAGED_TMP="$4"
+if [ "$SESSION_STAGED_TMP" = "__none__" ]; then
+  SESSION_STAGED_TMP=""
+fi
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
