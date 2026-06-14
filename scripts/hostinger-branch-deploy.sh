@@ -156,7 +156,17 @@ echo "Health after deploy:"
 wait_for_health
 
 echo "Public readiness after deploy:"
+set +e
 WORKER_API_BASE=http://127.0.0.1:8080 npm run readiness:public
+PUBLIC_READINESS_STATUS=$?
+set -e
+if [ "$PUBLIC_READINESS_STATUS" -ne 0 ]; then
+  if [ "$REQUIRE_DEPLOY_READINESS" = "true" ] || [ "$RESTORE_ARB_AFTER_DEPLOY" = "true" ]; then
+    echo "Public readiness failed and is required for this deploy; leaving entries paused." >&2
+    exit "$PUBLIC_READINESS_STATUS"
+  fi
+  echo "Public readiness failed; continuing because REQUIRE_DEPLOY_READINESS=false and RESTORE_ARB_AFTER_DEPLOY=false."
+fi
 
 DASHBOARD_API_TOKEN="$(read_env_value DASHBOARD_API_TOKEN)"
 if [ -z "$DASHBOARD_API_TOKEN" ]; then
