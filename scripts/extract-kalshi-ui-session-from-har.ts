@@ -7,12 +7,18 @@ interface HarHeader {
   value?: string;
 }
 
+interface HarCookie {
+  name?: string;
+  value?: string;
+}
+
 interface HarEntry {
   startedDateTime?: string;
   request?: {
     method?: string;
     url?: string;
     headers?: HarHeader[];
+    cookies?: HarCookie[];
   };
   response?: {
     status?: number;
@@ -53,6 +59,45 @@ function headerMap(headers: HarHeader[] | undefined): Map<string, string> {
   return map;
 }
 
+function cookieHeaderFromHarCookies(cookies: HarCookie[] | undefined): string | null {
+  const pairs = [];
+  for (const cookie of cookies ?? []) {
+    const name = cookie.name?.trim();
+    const value = cookie.value?.trim();
+    if (name && value) pairs.push(`${name}=${value}`);
+  }
+  return pairs.length > 0 ? pairs.join("; ") : null;
+}
+
+function safeExtraHeaders(headers: Map<string, string>): Record<string, string> | undefined {
+  const blocked = new Set([
+    "accept",
+    "authorization",
+    "connection",
+    "content-length",
+    "content-type",
+    "cookie",
+    "host",
+    "origin",
+    "referer",
+    "x-csrf-token",
+    "x-xsrf-token",
+  ]);
+  const keepPatterns = [
+    /^accept-language$/,
+    /^priority$/,
+    /^sec-/,
+    /^x-aws-waf-token$/,
+  ];
+  const result: Record<string, string> = {};
+  for (const [key, value] of headers) {
+    if (blocked.has(key)) continue;
+    if (!keepPatterns.some((pattern) => pattern.test(key))) continue;
+    result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function isUsefulKalshiUiRequest(entry: HarEntry): boolean {
   try {
     const url = new URL(entry.request?.url ?? "");
@@ -77,16 +122,17 @@ function extractSessionFromEntry(entry: HarEntry): ExtractedSession | null {
   const headers = headerMap(entry.request?.headers);
   const userId = extractUserId(url);
   const csrfToken = headers.get("x-csrf-token") ?? headers.get("x-xsrf-token");
-  const cookie = headers.get("cookie");
+  const cookie = headers.get("cookie") ?? cookieHeaderFromHarCookies(entry.request?.cookies) ?? undefined;
   const wafToken = headers.get("x-aws-waf-token");
   if (!userId || !csrfToken) return null;
   if (!cookie && !wafToken) return null;
+  const extraHeaders = safeExtraHeaders(headers);
   return {
     userId,
     csrfToken,
     ...(cookie ? { cookie } : {}),
     ...(headers.get("user-agent") ? { userAgent: headers.get("user-agent") } : {}),
-    ...(wafToken ? { headers: { "x-aws-waf-token": wafToken } } : {}),
+    ...(extraHeaders ? { headers: extraHeaders } : {}),
   };
 }
 
@@ -118,6 +164,7 @@ function main(): void {
     csrfHash: hash(selected.csrfToken),
     cookiePresent: Boolean(selected.cookie),
     cookieHash: hash(selected.cookie),
+    cookiePartCount: selected.cookie?.split(/;\s*/).filter(Boolean).length ?? 0,
     wafTokenPresent: Boolean(selected.headers?.["x-aws-waf-token"]),
     wafTokenHash: hash(selected.headers?.["x-aws-waf-token"]),
     userAgentPresent: Boolean(selected.userAgent),
