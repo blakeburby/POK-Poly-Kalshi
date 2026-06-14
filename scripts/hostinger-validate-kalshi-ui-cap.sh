@@ -13,14 +13,16 @@ CAP_TEST_MAX_PRICE_CENTS="${KALSHI_UI_CAP_TEST_MAX_PRICE_CENTS:-1}"
 CAP_TEST_TICKER="${KALSHI_UI_CAP_TEST_TICKER:-}"
 CAP_TEST_SIDE="${KALSHI_UI_CAP_TEST_SIDE:-}"
 CAP_TEST_REPORT_DIR="${KALSHI_UI_CAP_TEST_REPORT_DIR:-/opt/pok-poly-kalshi/tmp/kalshi-ui-cap-validation}"
+CAP_TEST_TICKER_ARG="${CAP_TEST_TICKER:-__empty__}"
+CAP_TEST_SIDE_ARG="${CAP_TEST_SIDE:-__empty__}"
 
 ssh "$HOSTINGER_SSH_TARGET" bash -s -- \
   "$APP_DIR" \
   "$ENV_FILE" \
   "$CAP_TEST_COUNT" \
   "$CAP_TEST_MAX_PRICE_CENTS" \
-  "$CAP_TEST_TICKER" \
-  "$CAP_TEST_SIDE" \
+  "$CAP_TEST_TICKER_ARG" \
+  "$CAP_TEST_SIDE_ARG" \
   "$CAP_TEST_REPORT_DIR" <<'REMOTE'
 set -euo pipefail
 
@@ -31,6 +33,12 @@ CAP_TEST_MAX_PRICE_CENTS="$4"
 CAP_TEST_TICKER="$5"
 CAP_TEST_SIDE="$6"
 CAP_TEST_REPORT_DIR="$7"
+if [ "$CAP_TEST_TICKER" = "__empty__" ]; then
+  CAP_TEST_TICKER=""
+fi
+if [ "$CAP_TEST_SIDE" = "__empty__" ]; then
+  CAP_TEST_SIDE=""
+fi
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
