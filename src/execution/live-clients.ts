@@ -140,7 +140,7 @@ export interface PolymarketApiKeyProvider {
 
 export interface KalshiUiQuickOrderSession {
   userId: string;
-  cookie: string;
+  cookie?: string;
   csrfToken: string;
   userAgent?: string;
   headers?: Record<string, string>;
@@ -479,13 +479,15 @@ function normalizeKalshiUiSession(raw: unknown): KalshiUiQuickOrderSession | nul
   const userId = stringOrNull(record.userId ?? record.user_id ?? record.userID);
   const cookie = stringOrNull(record.cookie ?? record.sessionCookie ?? record.session_cookie);
   const csrfToken = stringOrNull(record.csrfToken ?? record.csrf_token ?? record.xCsrfToken ?? record["x-csrf-token"]);
-  if (!userId || !cookie || !csrfToken) return null;
+  const headers = stringRecordOrNull(record.headers) ?? undefined;
+  if (!userId || !csrfToken) return null;
+  if (!cookie && !headers?.["x-aws-waf-token"] && !headers?.["X-AWS-WAF-Token"]) return null;
   return {
     userId,
-    cookie,
+    ...(cookie ? { cookie } : {}),
     csrfToken,
     userAgent: stringOrNull(record.userAgent ?? record.user_agent) ?? undefined,
-    headers: stringRecordOrNull(record.headers) ?? undefined,
+    headers,
     marketIds: stringRecordOrNull(record.marketIds) ?? undefined,
     marketIdByTicker: stringRecordOrNull(record.marketIdByTicker) ?? undefined,
     markets: Array.isArray(record.markets)
@@ -504,7 +506,7 @@ function readKalshiUiQuickOrderSession(path: string): { session: KalshiUiQuickOr
     if (!stat.isFile()) return { session: null, reason: "Kalshi UI session path is not a file" };
     if ((stat.mode & 0o077) !== 0) return { session: null, reason: "Kalshi UI session file must not be readable, writable, or executable by group/other" };
     const session = normalizeKalshiUiSession(JSON.parse(readFileSync(trimmedPath, "utf8")));
-    if (!session) return { session: null, reason: "Kalshi UI session file must include userId, cookie, and csrfToken" };
+    if (!session) return { session: null, reason: "Kalshi UI session file must include userId, csrfToken, and cookie or x-aws-waf-token header" };
     return { session, reason: null };
   } catch (error) {
     return { session: null, reason: `Kalshi UI session file could not be read: ${sanitizeError(error)}` };
@@ -559,7 +561,7 @@ function kalshiUiHeaders(session: KalshiUiQuickOrderSession, contentType = false
     Origin: "https://kalshi.com",
     Referer: "https://kalshi.com/",
     ...(session.userAgent ? { "User-Agent": session.userAgent } : {}),
-    Cookie: session.cookie,
+    ...(session.cookie ? { Cookie: session.cookie } : {}),
     "X-CSRF-Token": session.csrfToken,
   };
 }

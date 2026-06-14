@@ -132,7 +132,7 @@ install_session_file() {
 validate_session_file() {
   if ! "${SUDO[@]}" test -f "$SESSION_PATH"; then
     echo "Kalshi UI session file is missing: $SESSION_PATH" >&2
-    echo "Provide one with KALSHI_UI_SESSION_LOCAL_PATH=/path/to/session.json or KALSHI_UI_SESSION_JSON='{\"userId\":\"...\",\"cookie\":\"...\",\"csrfToken\":\"...\"}'." >&2
+    echo "Provide one with KALSHI_UI_SESSION_LOCAL_PATH=/path/to/session.json or KALSHI_UI_SESSION_JSON='{\"userId\":\"...\",\"csrfToken\":\"...\",\"headers\":{\"x-aws-waf-token\":\"...\"}}'." >&2
     return 21
   fi
 
@@ -150,19 +150,25 @@ try {
   process.exit(22);
 }
 
-const requiredKeys = ["userId", "cookie", "csrfToken"];
+const requiredKeys = ["userId", "csrfToken"];
 const missing = requiredKeys.filter((key) => String(parsed[key] ?? "").trim().length === 0);
+const headers = parsed && typeof parsed.headers === "object" && !Array.isArray(parsed.headers) ? parsed.headers : {};
+const hasCookie = String(parsed.cookie ?? "").trim().length > 0;
+const hasWafToken =
+  String(headers["x-aws-waf-token"] ?? headers["X-AWS-WAF-Token"] ?? "").trim().length > 0;
 const failures = [];
 if ((mode & 0o077) !== 0) failures.push(`mode ${mode.toString(8)} is not root-only`);
 if (stat.uid !== 0) failures.push("owner is not root");
 if (missing.length > 0) failures.push(`missing required keys: ${missing.join(", ")}`);
+if (!hasCookie && !hasWafToken) failures.push("missing cookie or x-aws-waf-token header");
 
 console.log(JSON.stringify({
   kalshiUiSessionPath: sessionPath,
   mode: mode.toString(8).padStart(4, "0"),
   rootOwned: stat.uid === 0,
   userIdPresent: String(parsed.userId ?? "").trim().length > 0,
-  cookiePresent: String(parsed.cookie ?? "").trim().length > 0,
+  cookiePresent: hasCookie,
+  wafTokenPresent: hasWafToken,
   csrfTokenPresent: String(parsed.csrfToken ?? "").trim().length > 0,
   userAgentPresent: String(parsed.userAgent ?? "").trim().length > 0,
 }, null, 2));
