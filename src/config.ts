@@ -135,12 +135,13 @@ function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMo
   const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "polymarket_first_exact").toLowerCase();
   if (
     value === "parallel_market"
+    || value === "parallel_quick"
     || value === "parallel_fok"
     || value === "parallel_fak"
     || value === "parallel_limit_rest"
     || value === "polymarket_first_exact"
   ) return value;
-  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
+  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_quick, parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
 }
 
 function envLiveKalshiHedgeOrderMode(env: NodeJS.ProcessEnv): LiveKalshiHedgeOrderMode {

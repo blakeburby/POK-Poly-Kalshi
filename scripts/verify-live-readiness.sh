@@ -32,11 +32,23 @@ const polymarket = execution.polymarket ?? {};
 const userStreams = execution.userStreams ?? {};
 const reconciliation = execution.reconciliation ?? {};
 const books = snapshot.books ?? {};
+const liveOrderPlacementMode = health.liveOrderPlacementMode ?? runtimeHealth.liveOrderPlacementMode ?? null;
+const kalshiHedgeOrderMode = health.kalshiHedgeOrderMode ?? runtimeHealth.kalshiHedgeOrderMode ?? null;
+const kalshiUiQuickOrderCapValidated =
+  health.kalshiUiQuickOrderCapValidated ?? runtimeHealth.kalshiUiQuickOrderCapValidated ?? null;
 
 const checks = [
   ["health.ok", health.ok === true],
   ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
+  [
+    "health.kalshiHedgeOrderMode=ui_quick_order when parallel_quick",
+    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order",
+  ],
+  [
+    "health.kalshiUiQuickOrderCapValidated=true when parallel_quick",
+    liveOrderPlacementMode !== "parallel_quick" || kalshiUiQuickOrderCapValidated === true,
+  ],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
   ["execution.kalshi.ready=true", kalshi.ready === true],
@@ -62,6 +74,9 @@ console.log(JSON.stringify({
   liveTrading: execution.liveTrading,
   arbEnabled: health.arbEnabled,
   requireArbEnabled,
+  liveOrderPlacementMode,
+  kalshiHedgeOrderMode,
+  kalshiUiQuickOrderCapValidated,
   partialFillLocked: execution.partialFillLocked,
   circuitBreakerLocked: execution.circuitBreakerLocked,
   circuitBreakerReason: execution.circuitBreakerReason,

@@ -573,7 +573,7 @@ test("Kalshi UI Quick Order readiness fails closed until cap behavior is validat
   assert.match(readiness.reason ?? "", /CAP_VALIDATED/);
 });
 
-test("Kalshi UI Quick Order client refuses non-polymarket_first_exact placement modes", async () => {
+test("Kalshi UI Quick Order client refuses unsupported placement modes", async () => {
   const client = new KalshiUiQuickOrderClient(config({
     kalshiHedgeOrderMode: "ui_quick_order",
   }));
@@ -680,7 +680,7 @@ test("Kalshi UI Quick Order client resolves UI market id and posts market IOC or
   assert.equal(result.metadata?.kalshiUiFinalRecordUsed, true);
 });
 
-test("Kalshi UI Quick Order client supports captured WAF-header session without cookie", async () => {
+test("Kalshi UI Quick Order client supports captured WAF-header session without cookie in parallel_quick", async () => {
   const sessionPath = kalshiUiSessionFile({
     cookie: null,
     headers: { "x-aws-waf-token": "waf-test" },
@@ -751,7 +751,7 @@ test("Kalshi UI Quick Order client supports captured WAF-header session without 
     clientOrderId: "client-ui",
     size: 1,
     maxBuyPrice: 0.54,
-    placementMode: "polymarket_first_exact",
+    placementMode: "parallel_quick",
   };
 
   const result = await withKalshiEnv(() => client.placeOrder(leg, context));
@@ -762,6 +762,7 @@ test("Kalshi UI Quick Order client supports captured WAF-header session without 
   assert.equal(post.csrf, "csrf-test");
   assert.equal(post.waf, "waf-test");
   assert.equal(result.status, "filled");
+  assert.equal(result.metadata?.orderPlacementMode, "parallel_quick");
 });
 
 test("Kalshi order client factory selects UI Quick Order mode only when configured", () => {
@@ -1354,6 +1355,70 @@ test("Polymarket order client uses share-sized FAK limit order in polymarket_fir
   assert.equal(result.metadata?.polymarketOrderType, OrderType.FAK);
   assert.equal(result.metadata?.polymarketOrderKind, "share_limit");
   assert.equal(result.metadata?.polymarketRequestedShares, 5);
+});
+
+test("Polymarket order client uses exact-share FAK limit order in parallel_quick mode", async () => {
+  class FakeClob implements PolymarketClobLike {
+    createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
+    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    postedType: OrderType | undefined;
+
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+      this.createdOrder = order;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+      this.createdMarketOrder = order;
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(_order: SignedOrder, orderType?: OrderType): Promise<unknown> {
+      this.postedType = orderType;
+      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5", makingAmount: "4.00" };
+    }
+
+    async cancelOrder(): Promise<unknown> {
+      throw new Error("matched FAK should not cancel");
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const fake = new FakeClob();
+  const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
+  const result = await client.placeOrder({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.78,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.8,
+    placementMode: "parallel_quick",
+  });
+
+  assert.equal(fake.createdOrder?.tokenID, "yes-token");
+  assert.equal(fake.createdOrder?.price, 0.8);
+  assert.equal(fake.createdOrder?.size, 5);
+  assert.equal(fake.createdMarketOrder, null);
+  assert.equal(fake.postedType, OrderType.FAK);
+  assert.equal(result.status, "matched");
+  assert.equal(result.metadata?.orderPlacementMode, "parallel_quick");
+  assert.equal(result.metadata?.polymarketOrderKind, "share_limit");
+  assert.equal(result.metadata?.polymarketRequestedShares, 5);
+  assert.equal(result.metadata?.polymarketRequestedSpend, 4);
 });
 
 test("Polymarket order client builds aggressive GTC limit and cancels unfilled remainder", async () => {
@@ -2666,6 +2731,7 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(defaults.liveOrderPlacementMode, "polymarket_first_exact");
   assert.equal(defaults.polymarketOrderType, "FAK");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_market" }).liveOrderPlacementMode, "parallel_market");
+  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_quick" }).liveOrderPlacementMode, "parallel_quick");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_limit_rest" }).liveOrderPlacementMode, "parallel_limit_rest");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_fak" }).liveOrderPlacementMode, "parallel_fak");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "polymarket_first_exact" }).liveOrderPlacementMode, "polymarket_first_exact");
@@ -2750,6 +2816,136 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_market");
   assert.equal(polymarket.placed[0]?.context.placementMode, "parallel_market");
   assert.equal(polymarket.placed[0]?.context.limitRestMs, undefined);
+});
+
+test("live executor synchronizes parallel_quick dispatch after both refreshed preflights", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const events: string[] = [];
+  class TrackingClient extends FakeVenueClient {
+    async preflightOrder(): Promise<string | null> {
+      events.push(`${this.venue}:preflight`);
+      return null;
+    }
+
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      events.push(`${this.venue}:place`);
+      return super.placeOrder(leg, context);
+    }
+  }
+  const kalshi = new TrackingClient("kalshi");
+  const polymarket = new TrackingClient("polymarket");
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 1,
+      liveOrderPlacementMode: "parallel_quick",
+      liveParallelExecutionEnabled: false,
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiQuickOrderCapValidated: true,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_quick");
+  assert.equal(result.action, "filled");
+  assert.equal(result.executionTimings?.firstVenue, null);
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /Kalshi UI Quick Order and Polymarket exact-share FAK/);
+  assert.deepEqual(events, [
+    "kalshi:preflight",
+    "polymarket:preflight",
+    "kalshi:preflight",
+    "polymarket:preflight",
+    "kalshi:place",
+    "polymarket:place",
+  ]);
+  assert.equal(kalshi.placed[0]?.context.placementMode, "parallel_quick");
+  assert.equal(polymarket.placed[0]?.context.placementMode, "parallel_quick");
+  assert.equal(kalshi.placed[0]?.context.requestedAt, polymarket.placed[0]?.context.requestedAt);
+  assert.equal(result.executionTimings?.venueSubmitSkewMs, 0);
+  assert.equal(result.executionTimings?.parallelDispatchAtMs, now);
+  assert.equal(result.executionTimings?.parallelDispatchCallSkewMs, 0);
+  assert.equal(result.executionTimings?.parallelSettledAtMs, now);
+});
+
+test("live executor fails closed for parallel_quick without UI mode or cap validation", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+
+  const wrongMode = new LiveExecutor(
+    config({ liveOrderSize: 1, liveOrderPlacementMode: "parallel_quick" }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+  const wrongModeResult = await wrongMode.execute(candidate);
+  assert.equal(wrongModeResult.action, "skipped");
+  assert.match(wrongModeResult.failureReason ?? "", /KALSHI_HEDGE_ORDER_MODE=ui_quick_order/);
+
+  const unvalidatedCap = new LiveExecutor(
+    config({
+      liveOrderSize: 1,
+      liveOrderPlacementMode: "parallel_quick",
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiQuickOrderCapValidated: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+  const unvalidatedCapResult = await unvalidatedCap.execute(candidate);
+  assert.equal(unvalidatedCapResult.action, "skipped");
+  assert.match(unvalidatedCapResult.failureReason ?? "", /KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+});
+
+test("live executor hardlocks one-sided parallel_quick fills instead of auto-unwinding", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { status: "failed", fillCount: 0, error: "venue rejected" });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveOrderPlacementMode: "parallel_quick",
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiQuickOrderCapValidated: true,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_quick");
+  assert.equal(result.action, "failed");
+  assert.equal(result.partialFill, true);
+  assert.match(result.liveLockReason ?? "", /venue fill mismatch/);
+  assert.equal(locks.engageCalls, 1);
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
 });
 
 test("live executor keeps parallel aggressive limit available when configured", async () => {

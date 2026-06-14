@@ -75,7 +75,12 @@ NODE
 
 apply_safety_env_policy() {
   echo "Applying Hostinger exact-share safety env policy."
-  set_env_value LIVE_ORDER_PLACEMENT_MODE polymarket_first_exact
+  local placement_mode
+  placement_mode="$(read_env_value LIVE_ORDER_PLACEMENT_MODE || true)"
+  if [ "$placement_mode" != "parallel_quick" ]; then
+    placement_mode=polymarket_first_exact
+  fi
+  set_env_value LIVE_ORDER_PLACEMENT_MODE "$placement_mode"
   set_env_value POLYMARKET_ORDER_TYPE FAK
   set_env_value LIVE_ORDER_SIZE 5
   set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
@@ -132,6 +137,7 @@ const books = snapshot.books ?? {};
 const quarantinedExposure = Number(reconciliation.quarantinedExposureDollars ?? 0);
 const quarantineCap = Number(reconciliation.quarantineCapDollars ?? Number.POSITIVE_INFINITY);
 const riskState = execution.riskState ?? "unknown";
+const liveOrderPlacementMode = health.liveOrderPlacementMode ?? null;
 const kalshiHedgeOrderMode = health.kalshiHedgeOrderMode ?? runtimeHealth.kalshiHedgeOrderMode ?? null;
 const kalshiUiQuickOrderCapValidated =
   health.kalshiUiQuickOrderCapValidated ?? runtimeHealth.kalshiUiQuickOrderCapValidated ?? null;
@@ -140,7 +146,11 @@ const checks = [
   ["health.ok", health.ok === true],
   ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
-  ["health.liveOrderPlacementMode=polymarket_first_exact", health.liveOrderPlacementMode === "polymarket_first_exact"],
+  ["health.liveOrderPlacementMode supported", liveOrderPlacementMode === "polymarket_first_exact" || liveOrderPlacementMode === "parallel_quick"],
+  [
+    "health.kalshiHedgeOrderMode=ui_quick_order when parallel_quick",
+    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order",
+  ],
   ["health.liveOrderSize=5", Number(health.liveOrderSize) === 5],
   ["health.liveMinBookDepthShares>=10", Number(health.liveMinBookDepthShares) >= 10],
   ["health.liveKalshiMinCashDollars>=30", Number(health.liveKalshiMinCashDollars) >= 30],
@@ -177,7 +187,7 @@ const failed = checks.filter(([, ok]) => !ok);
 console.log(JSON.stringify({
   arbEnabled: health.arbEnabled,
   requireArbEnabled,
-  liveOrderPlacementMode: health.liveOrderPlacementMode,
+  liveOrderPlacementMode,
   liveOrderSize: health.liveOrderSize,
   liveMinBookDepthShares: health.liveMinBookDepthShares,
   liveKalshiMinCashDollars: health.liveKalshiMinCashDollars,

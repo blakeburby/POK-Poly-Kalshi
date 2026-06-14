@@ -26,6 +26,7 @@ type ClassifiedAttempt = {
   createdAt: string;
   updatedAt: string;
   action: string;
+  executionStrategy: string | null;
   completedTwoSided: boolean;
   firstLegFilled: boolean;
   hedgeFilled: boolean;
@@ -132,6 +133,7 @@ function classify(row: AttemptRow): ClassifiedAttempt {
   const hedgeFilled = kalshiFillCount > 0;
   const base = {
     action: row.action,
+    executionStrategy: row.execution_strategy,
     completedTwoSided,
     firstLegFilled,
     hedgeFilled,
@@ -145,6 +147,7 @@ function classify(row: AttemptRow): ClassifiedAttempt {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     action: row.action,
+    executionStrategy: row.execution_strategy,
     completedTwoSided,
     firstLegFilled,
     hedgeFilled,
@@ -204,7 +207,7 @@ async function main(): Promise<void> {
         reconciliation_resolved_at
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
-        AND execution_strategy = 'polymarket_first_exact'
+        AND execution_strategy IN ('polymarket_first_exact', 'parallel_quick')
       ORDER BY created_at DESC, id DESC
       LIMIT $1
     `, [Math.max(limit, 20)]);
@@ -215,9 +218,15 @@ async function main(): Promise<void> {
       counts[attempt.failureClass] = (counts[attempt.failureClass] ?? 0) + 1;
       return counts;
     }, {});
+    const strategyBreakdown = lastN.reduce<Record<string, number>>((counts, attempt) => {
+      const strategy = attempt.executionStrategy ?? "unknown";
+      counts[strategy] = (counts[strategy] ?? 0) + 1;
+      return counts;
+    }, {});
 
     const report = {
       generatedAt: new Date().toISOString(),
+      executionStrategies: ["polymarket_first_exact", "parallel_quick"],
       qualifiedCountSampled: lastN.length,
       last2CompletionRate: roundMetric(rate(attempts.slice(0, 2).map((attempt) => attempt.completedTwoSided))),
       completionRate: roundMetric(rate(lastN.map((attempt) => attempt.completedTwoSided))),
@@ -232,6 +241,7 @@ async function main(): Promise<void> {
       avgExpectedExecutableEdge: roundMetric(average(lastN.map((attempt) => attempt.expectedExecutableEdge))),
       avgRealizedGuaranteedProfit: roundMetric(average(lastN.map((attempt) => attempt.realizedGuaranteedProfit))),
       failureBreakdown,
+      strategyBreakdown,
       last2: attempts.slice(0, 2),
       recentAttempts: lastN.slice(0, Math.min(limit, 12)),
     };

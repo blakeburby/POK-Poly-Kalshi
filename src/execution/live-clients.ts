@@ -1151,9 +1151,13 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     await this.publicClient.warm(options);
   }
 
+  private supportsPlacementMode(mode: LiveOrderContext["placementMode"]): boolean {
+    return mode === "polymarket_first_exact" || mode === "parallel_quick";
+  }
+
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
-    if (context.placementMode !== "polymarket_first_exact") {
-      return "Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges";
+    if (!this.supportsPlacementMode(context.placementMode)) {
+      return "Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges or parallel_quick synchronized dispatch";
     }
     const now = context.requestedAt ?? Date.now();
     const readiness = await this.readiness(now);
@@ -1181,8 +1185,8 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
   }
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
-    if (context.placementMode !== "polymarket_first_exact") {
-      throw new Error("Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges");
+    if (!this.supportsPlacementMode(context.placementMode)) {
+      throw new Error("Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges or parallel_quick synchronized dispatch");
     }
     const requestedAt = context.requestedAt ?? Date.now();
     const readiness = context.preflight?.kalshiReadiness?.ready
@@ -1507,6 +1511,7 @@ function polymarketOrderType(value: string): OrderType.FOK | OrderType.FAK {
 
 function polymarketImmediateOrderType(configuredValue: string, context: LiveOrderContext): OrderType.FOK | OrderType.FAK {
   if (context.placementMode === "parallel_market") return OrderType.FAK;
+  if (context.placementMode === "parallel_quick") return OrderType.FAK;
   if (context.placementMode === "polymarket_first_exact") return OrderType.FAK;
   if (context.placementMode === "parallel_fak") return OrderType.FAK;
   if (context.placementMode === "parallel_fok") return OrderType.FOK;
@@ -1583,7 +1588,7 @@ function isLimitRestMode(context: LiveOrderContext): boolean {
 }
 
 function polymarketSignedOrderKind(context: LiveOrderContext): "market" | "share_limit" {
-  return context.placementMode === "polymarket_first_exact" ? "share_limit" : "market";
+  return context.placementMode === "polymarket_first_exact" || context.placementMode === "parallel_quick" ? "share_limit" : "market";
 }
 
 function kalshiTimeInForce(context: LiveOrderContext): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {

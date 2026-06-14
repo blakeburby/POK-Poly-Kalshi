@@ -380,6 +380,14 @@ test("parallel market migration allows the default execution strategy", () => {
   assert.match(sql, /polymarket_first_exact/);
 });
 
+test("parallel quick migration allows synchronized UI quick execution strategy", () => {
+  const sql = readFileSync("src/db/migrations/021_allow_parallel_quick_execution_strategy.sql", "utf8");
+  assert.match(sql, /DROP CONSTRAINT IF EXISTS cross_venue_arb_signals_execution_strategy_check/);
+  assert.match(sql, /parallel_quick/);
+  assert.match(sql, /parallel_market/);
+  assert.match(sql, /polymarket_first_exact/);
+});
+
 test("fill quality migration adds candidate-level scoring columns", () => {
   const sql = readFileSync("src/db/migrations/018_add_fill_quality_snapshot.sql", "utf8");
   assert.match(sql, /ADD COLUMN IF NOT EXISTS fill_quality_snapshot JSONB/);

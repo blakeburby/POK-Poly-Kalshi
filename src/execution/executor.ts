@@ -162,6 +162,14 @@ interface VenueExecutionPlan {
   clientOrderId: string;
 }
 
+interface SynchronizedVenueOrderResults {
+  kalshi: VenueOrderResult;
+  polymarket: VenueOrderResult;
+  dispatchAtMs: number;
+  settledAtMs: number;
+  dispatchCallSkewMs: number;
+}
+
 interface ExecutionMetadata {
   quoteSnapshot?: QuoteSnapshot | null;
   leadLagSnapshot?: LeadLagSnapshot | null;
@@ -410,9 +418,17 @@ export class LiveExecutor implements ArbExecutor {
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
-    const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact" || this.config.liveOrderPlacementMode === "parallel_market"
+    const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact"
+      || this.config.liveOrderPlacementMode === "parallel_market"
+      || this.config.liveOrderPlacementMode === "parallel_quick"
       ? this.config.liveOrderPlacementMode
       : this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
+    if (placementMode === "parallel_quick" && this.config.kalshiHedgeOrderMode !== "ui_quick_order") {
+      return skipped("parallel_quick requires KALSHI_HEDGE_ORDER_MODE=ui_quick_order");
+    }
+    if (placementMode === "parallel_quick" && !this.config.kalshiUiQuickOrderCapValidated) {
+      return skipped("parallel_quick requires KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true");
+    }
     const limitRestMs = placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
     let kalshiContext: LiveOrderContext = {
       executionGroupId,
@@ -517,13 +533,21 @@ export class LiveExecutor implements ArbExecutor {
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
       requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
     };
-    const refreshedKalshiPreflight = await this.preflightVenueOrders([
-      { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
-    ]);
+    const refreshedPreflightOrders = placementMode === "parallel_quick"
+      ? [
+        { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
+        { client: this.polymarketClient, leg: prepared.polymarket.leg, context: polymarketContext },
+      ]
+      : [
+        { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
+      ];
+    const refreshedKalshiPreflight = await this.preflightVenueOrders(refreshedPreflightOrders);
     if (refreshedKalshiPreflight) {
       const blockedAt = this.now();
       return this.skippedWithQuoteQuality(
-        `live Kalshi hedge collateral revalidation failed: ${refreshedKalshiPreflight}`,
+        placementMode === "parallel_quick"
+          ? `live parallel_quick refreshed preflight failed: ${refreshedKalshiPreflight}`
+          : `live Kalshi hedge collateral revalidation failed: ${refreshedKalshiPreflight}`,
         prepared.quoteSnapshot,
         this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
         fillQualitySnapshot,
@@ -538,6 +562,16 @@ export class LiveExecutor implements ArbExecutor {
 
     if (placementMode === "polymarket_first_exact") {
       return await this.executePolymarketFirstExact(candidate, executionGroupId, prepared, kalshiContext, polymarketContext, {
+        executeStartedAt,
+        preflightStartedAt,
+        preflightCompletedAt,
+        hotGateStartedAt,
+        hotGateCompletedAt,
+      }, fillQualityMetadata);
+    }
+
+    if (placementMode === "parallel_quick") {
+      return await this.executeParallelQuick(executionGroupId, prepared, kalshiContext, polymarketContext, {
         executeStartedAt,
         preflightStartedAt,
         preflightCompletedAt,
@@ -720,6 +754,54 @@ export class LiveExecutor implements ArbExecutor {
       executionStrategy: "sequential_hedge",
       riskHedge: true,
       hedgeCapPrice: hedge.hedgeCapPrice,
+    });
+  }
+
+  private async executeParallelQuick(
+    executionGroupId: string,
+    prepared: PreparedExecution,
+    kalshiContext: LiveOrderContext,
+    polymarketContext: LiveOrderContext,
+    timings: {
+      executeStartedAt: number;
+      preflightStartedAt: number;
+      preflightCompletedAt: number;
+      hotGateStartedAt: number;
+      hotGateCompletedAt: number;
+    },
+    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge">,
+  ): Promise<ExecutionResult> {
+    const submitted = await this.submitSynchronizedVenueOrders(prepared, kalshiContext, polymarketContext);
+    const venueConfirmations = await this.confirmVenueOrders(executionGroupId, [
+      { result: submitted.kalshi, leg: prepared.kalshi.leg, submittedAtMs: Date.parse(submitted.kalshi.requestedAt) },
+      { result: submitted.polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(submitted.polymarket.requestedAt) },
+    ]);
+    const confirmed = this.applyVenueConfirmations(
+      submitted.kalshi,
+      submitted.polymarket,
+      venueConfirmations,
+      prepared.kalshi.leg,
+      prepared.polymarket.leg,
+    );
+    return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
+      quoteSnapshot: prepared.quoteSnapshot,
+      ...fillQualityMetadata,
+      executionTimings: this.executionTimings(timings.executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
+        preflightStartedAt: timings.preflightStartedAt,
+        preflightCompletedAt: timings.preflightCompletedAt,
+        firstVenue: null,
+        firstVenueReason: "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
+        firstVenueVwap: null,
+        hotGateStartedAt: timings.hotGateStartedAt,
+        hotGateCompletedAt: timings.hotGateCompletedAt,
+        venueConfirmations,
+        parallelDispatchAtMs: submitted.dispatchAtMs,
+        parallelDispatchCallSkewMs: submitted.dispatchCallSkewMs,
+        parallelSettledAtMs: submitted.settledAtMs,
+      }),
+      venueConfirmations,
+      executionStrategy: "parallel_quick",
+      riskHedge: false,
     });
   }
 
@@ -1178,6 +1260,40 @@ export class LiveExecutor implements ArbExecutor {
       }
     }
     return result;
+  }
+
+  private async submitSynchronizedVenueOrders(
+    prepared: PreparedExecution,
+    kalshiContext: LiveOrderContext,
+    polymarketContext: LiveOrderContext,
+  ): Promise<SynchronizedVenueOrderResults> {
+    const dispatchAtMs = this.now();
+    const kalshiCallStartedAt = this.now();
+    const kalshiPromise = this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, {
+      ...kalshiContext,
+      requestedAt: dispatchAtMs,
+    });
+    const polymarketCallStartedAt = this.now();
+    const polymarketPromise = this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, {
+      ...polymarketContext,
+      requestedAt: dispatchAtMs,
+    });
+    const [kalshiSettled, polymarketSettled] = await Promise.allSettled([kalshiPromise, polymarketPromise]);
+    const settledAtMs = this.now();
+    const resultFromSettled = (
+      venue: Venue,
+      clientOrderId: string,
+      settled: PromiseSettledResult<VenueOrderResult>,
+    ): VenueOrderResult => settled.status === "fulfilled"
+      ? settled.value
+      : failedVenueResult(venue, clientOrderId, settled.reason, dispatchAtMs);
+    return {
+      kalshi: resultFromSettled("kalshi", kalshiContext.clientOrderId, kalshiSettled),
+      polymarket: resultFromSettled("polymarket", polymarketContext.clientOrderId, polymarketSettled),
+      dispatchAtMs,
+      settledAtMs,
+      dispatchCallSkewMs: Math.abs(polymarketCallStartedAt - kalshiCallStartedAt),
+    };
   }
 
   private async preflightVenueOrders(
@@ -2013,6 +2129,9 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt?: number;
       hotGateCompletedAt?: number;
       venueConfirmations?: VenueConfirmations | null;
+      parallelDispatchAtMs?: number | null;
+      parallelDispatchCallSkewMs?: number | null;
+      parallelSettledAtMs?: number | null;
     } = {},
   ): ExecutionTimings {
     const timing = (result: VenueOrderResult | null): number | null => {
@@ -2089,6 +2208,9 @@ export class LiveExecutor implements ArbExecutor {
       postFillHedgeDecisionMs: metadata.postFillHedgeDecisionMs ?? null,
       polymarketOrderRttMs,
       venueSubmitSkewMs,
+      parallelDispatchAtMs: metadata.parallelDispatchAtMs ?? null,
+      parallelDispatchCallSkewMs: metadata.parallelDispatchCallSkewMs ?? null,
+      parallelSettledAtMs: metadata.parallelSettledAtMs ?? null,
       totalMs: Number.isFinite(completedAt) ? Math.max(0, completedAt - startedAt) : null,
       firstVenue: metadata.firstVenue ?? null,
       firstVenueReason: metadata.firstVenueReason ?? null,

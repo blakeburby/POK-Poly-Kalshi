@@ -14,6 +14,7 @@ fi
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
 SESSION_PATH="${KALSHI_UI_SESSION_PATH:-/etc/pok-poly-kalshi/kalshi-ui-session.json}"
+STAGE_PLACEMENT_MODE="${HOSTINGER_STAGE_PLACEMENT_MODE:-polymarket_first_exact}"
 SESSION_STAGED_TMP=""
 LOCAL_SESSION_TMP=""
 
@@ -51,13 +52,14 @@ fi
 
 SESSION_STAGED_TMP_ARG="${SESSION_STAGED_TMP:-__none__}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$SESSION_PATH" "$SESSION_STAGED_TMP_ARG" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$SESSION_PATH" "$SESSION_STAGED_TMP_ARG" "$STAGE_PLACEMENT_MODE" <<'REMOTE'
 set -euo pipefail
 
 APP_DIR="$1"
 ENV_FILE="$2"
 SESSION_PATH="$3"
 SESSION_STAGED_TMP="$4"
+STAGE_PLACEMENT_MODE="$5"
 if [ "$SESSION_STAGED_TMP" = "__none__" ]; then
   SESSION_STAGED_TMP=""
 fi
@@ -189,11 +191,12 @@ verify_staged_health() {
   node - "$health_file" <<'NODE'
 const fs = require("node:fs");
 const health = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const expectedPlacementMode = process.env.EXPECTED_PLACEMENT_MODE ?? "polymarket_first_exact";
 const checks = [
   ["health.ok", health.ok === true],
   ["health.arbEnabled=false", health.arbEnabled === false],
   ["health.liveTrading=true", health.liveTrading === true],
-  ["health.liveOrderPlacementMode=polymarket_first_exact", health.liveOrderPlacementMode === "polymarket_first_exact"],
+  [`health.liveOrderPlacementMode=${expectedPlacementMode}`, health.liveOrderPlacementMode === expectedPlacementMode],
   ["health.kalshiHedgeOrderMode=ui_quick_order", health.kalshiHedgeOrderMode === "ui_quick_order"],
   ["health.kalshiUiQuickOrderCapValidated=false", health.kalshiUiQuickOrderCapValidated === false],
   ["health.liveOrderSize=5", Number(health.liveOrderSize) === 5],
@@ -234,7 +237,7 @@ validate_session_file
 
 echo "Staging Kalshi UI Quick Order mode with live entries paused."
 set_env_value ARB_ENABLED false
-set_env_value LIVE_ORDER_PLACEMENT_MODE polymarket_first_exact
+set_env_value LIVE_ORDER_PLACEMENT_MODE "$STAGE_PLACEMENT_MODE"
 set_env_value LIVE_ORDER_SIZE 5
 set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
 set_env_value KALSHI_HEDGE_ORDER_MODE ui_quick_order
@@ -245,7 +248,7 @@ set_env_value KALSHI_UI_QUICK_ORDER_CAP_VALIDATED false
 wait_for_health
 
 echo "Public health after UI Quick Order staging:"
-verify_staged_health
+EXPECTED_PLACEMENT_MODE="$STAGE_PLACEMENT_MODE" verify_staged_health
 
 echo "UI Quick Order mode is staged with ARB_ENABLED=false. Do not resume until cap validation is proven."
 REMOTE
