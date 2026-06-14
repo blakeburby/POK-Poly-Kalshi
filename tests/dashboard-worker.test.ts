@@ -53,7 +53,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveMinExpiryMs: 30_000,
     liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
-    liveKalshiMinCashDollars: 30,
+    liveKalshiMinCashDollars: 5,
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
@@ -275,7 +275,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
   assert.equal(snapshot.health.scanHeartbeatMs, 250);
   assert.equal(snapshot.health.liveMaxTradesPerWindow, 3);
   assert.equal(snapshot.health.liveOrderSize, 1);
-  assert.equal(snapshot.health.liveKalshiMinCashDollars, 30);
+  assert.equal(snapshot.health.liveKalshiMinCashDollars, 5);
   assert.equal(snapshot.health.livePolymarketFirstMinFillShares, 7);
   assert.equal(snapshot.health.livePolymarketFirstMaxFillShares, 9);
   assert.equal(snapshot.health.liveLeadLagScoringEnabled, true);

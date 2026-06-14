@@ -2740,7 +2740,7 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
-  assert.equal(loadConfig({}).liveKalshiMinCashDollars, 30);
+  assert.equal(loadConfig({}).liveKalshiMinCashDollars, 5);
   assert.equal(loadConfig({ LIVE_KALSHI_MIN_CASH_DOLLARS: "100" }).liveKalshiMinCashDollars, 100);
   assert.equal(loadConfig({}).liveFillQualityScoringEnabled, true);
   assert.equal(loadConfig({}).liveFillQualityGateEnabled, false);

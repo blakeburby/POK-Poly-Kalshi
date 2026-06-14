@@ -70,7 +70,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveMinExpiryMs: 30_000,
     liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
-    liveKalshiMinCashDollars: 30,
+    liveKalshiMinCashDollars: 5,
     liveQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,

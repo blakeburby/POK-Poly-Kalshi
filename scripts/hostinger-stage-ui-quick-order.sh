@@ -240,6 +240,7 @@ set_env_value ARB_ENABLED false
 set_env_value LIVE_ORDER_PLACEMENT_MODE "$STAGE_PLACEMENT_MODE"
 set_env_value LIVE_ORDER_SIZE 5
 set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
+set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 5
 set_env_value KALSHI_HEDGE_ORDER_MODE ui_quick_order
 set_env_value KALSHI_UI_SESSION_PATH "$SESSION_PATH"
 set_env_value KALSHI_UI_QUICK_ORDER_CAP_VALIDATED false

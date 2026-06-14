@@ -86,7 +86,7 @@ apply_safety_env_policy() {
   set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
   set_env_value LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES ""
   set_env_value LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES ""
-  set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 30
+  set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 5
   set_env_value LIVE_RECONCILE_BEFORE_TRADE true
   set_env_value LIVE_AUTO_HARDLOCKS_ENABLED true
   set_env_value LIVE_EXECUTION_QUALITY_GATE_ENABLED true
@@ -153,7 +153,7 @@ const checks = [
   ],
   ["health.liveOrderSize=5", Number(health.liveOrderSize) === 5],
   ["health.liveMinBookDepthShares>=10", Number(health.liveMinBookDepthShares) >= 10],
-  ["health.liveKalshiMinCashDollars>=30", Number(health.liveKalshiMinCashDollars) >= 30],
+  ["health.liveKalshiMinCashDollars>=5", Number(health.liveKalshiMinCashDollars) >= 5],
   ["health.livePolymarketFirstMinFillShares=5", Number(health.livePolymarketFirstMinFillShares) === 5],
   ["health.livePolymarketFirstMaxFillShares=5", Number(health.livePolymarketFirstMaxFillShares) === 5],
   ["health.liveAutoHardlocksEnabled=true", health.liveAutoHardlocksEnabled === true],

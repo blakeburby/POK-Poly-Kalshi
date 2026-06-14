@@ -195,7 +195,7 @@ function roundPrice(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
-function sanitizeError(error: unknown): string {
+export function sanitizeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
     .replace(/0x[a-fA-F0-9]{32,}/g, "0x[redacted]")
@@ -497,7 +497,7 @@ function normalizeKalshiUiSession(raw: unknown): KalshiUiQuickOrderSession | nul
   };
 }
 
-function readKalshiUiQuickOrderSession(path: string): { session: KalshiUiQuickOrderSession | null; reason: string | null } {
+export function readKalshiUiQuickOrderSession(path: string): { session: KalshiUiQuickOrderSession | null; reason: string | null } {
   const trimmedPath = path.trim();
   if (!trimmedPath) return { session: null, reason: "KALSHI_UI_SESSION_PATH is required for UI Quick Order mode" };
   try {
@@ -513,7 +513,7 @@ function readKalshiUiQuickOrderSession(path: string): { session: KalshiUiQuickOr
   }
 }
 
-function eventTickerFromKalshiMarketTicker(ticker: string): string {
+export function eventTickerFromKalshiMarketTicker(ticker: string): string {
   const trimmed = ticker.trim();
   const index = trimmed.lastIndexOf("-");
   return index > 0 ? trimmed.slice(0, index) : trimmed;
@@ -536,7 +536,7 @@ function kalshiUiBaseUrl(config: AppConfig): URL {
   return base;
 }
 
-function kalshiUiUrl(config: AppConfig, path: string): URL {
+export function kalshiUiUrl(config: AppConfig, path: string): URL {
   const url = kalshiUiBaseUrl(config);
   const basePath = url.pathname.replace(/\/$/, "");
   url.pathname = `${basePath}${path}`;
@@ -553,7 +553,7 @@ function safeKalshiUiHeaderExtras(headers: Record<string, string> | undefined): 
   return result;
 }
 
-function kalshiUiHeaders(session: KalshiUiQuickOrderSession, contentType = false): Record<string, string> {
+export function kalshiUiHeaders(session: KalshiUiQuickOrderSession, contentType = false): Record<string, string> {
   return {
     ...safeKalshiUiHeaderExtras(session.headers),
     Accept: "application/json",
@@ -592,15 +592,15 @@ export function buildKalshiUiQuickOrderBody(
   };
 }
 
-function kalshiUiOrderRecord(payload: Record<string, unknown>): Record<string, unknown> {
+export function kalshiUiOrderRecord(payload: Record<string, unknown>): Record<string, unknown> {
   return recordOrNull(payload.order) ?? payload;
 }
 
-function kalshiUiFillCount(record: Record<string, unknown>): number | null {
+export function kalshiUiFillCount(record: Record<string, unknown>): number | null {
   return finiteOrNull(record.fill_count_fp ?? record.fill_count);
 }
 
-function kalshiUiRemainingCount(record: Record<string, unknown>): number | null {
+export function kalshiUiRemainingCount(record: Record<string, unknown>): number | null {
   return finiteOrNull(record.remaining_count_fp ?? record.remaining_count);
 }
 
@@ -616,18 +616,18 @@ function kalshiUiDollars(record: Record<string, unknown>, dollarKeys: string[], 
   return null;
 }
 
-function kalshiUiFillPrice(record: Record<string, unknown>): number | null {
+export function kalshiUiFillPrice(record: Record<string, unknown>): number | null {
   const fillCount = kalshiUiFillCount(record);
   const takerCost = kalshiUiDollars(record, ["taker_fill_cost_dollars", "maker_fill_cost_dollars"], ["taker_fill_cost", "maker_fill_cost"]);
   if (fillCount != null && fillCount > 0 && takerCost != null) return roundPrice(takerCost / fillCount);
   return kalshiUiDollars(record, ["average_fill_price", "price_dollars"], ["price"]);
 }
 
-function kalshiUiFee(record: Record<string, unknown>): number | null {
+export function kalshiUiFee(record: Record<string, unknown>): number | null {
   return kalshiUiDollars(record, ["average_fee_paid", "taker_fees_dollars", "maker_fees_dollars"], ["taker_fees", "maker_fees"]);
 }
 
-function kalshiUiOrderStatus(record: Record<string, unknown>, fillCount: number | null, requestedSize: number): string {
+export function kalshiUiOrderStatus(record: Record<string, unknown>, fillCount: number | null, requestedSize: number): string {
   if (isExactFillCount(fillCount, requestedSize)) return "filled";
   const status = String(record.status ?? "").trim();
   const remaining = kalshiUiRemainingCount(record);
@@ -635,7 +635,7 @@ function kalshiUiOrderStatus(record: Record<string, unknown>, fillCount: number 
   return status || "unfilled";
 }
 
-function kalshiUiExchangeTimestampMs(record: Record<string, unknown>): number | null {
+export function kalshiUiExchangeTimestampMs(record: Record<string, unknown>): number | null {
   const tsMs = finiteOrNull(record.ts_ms);
   if (tsMs != null) return tsMs;
   for (const key of ["updated_ts", "create_ts", "created_time"]) {
@@ -648,7 +648,7 @@ function kalshiUiExchangeTimestampMs(record: Record<string, unknown>): number | 
   return null;
 }
 
-function kalshiUiMarketPositionRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+export function kalshiUiMarketPositionRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
   const eventPosition = recordOrNull(payload.event_position) ?? payload;
   const rows = Array.isArray(eventPosition.market_positions) ? eventPosition.market_positions : [];
   return rows.map((row) => recordOrNull(row)).filter((row): row is Record<string, unknown> => row != null);

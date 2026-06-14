@@ -93,7 +93,7 @@ apply_deploy_env_policy() {
   set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
   set_env_value LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES ""
   set_env_value LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES ""
-  set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 30
+  set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 5
   set_env_value LIVE_RECONCILE_BEFORE_TRADE true
   set_env_value LIVE_AUTO_HARDLOCKS_ENABLED true
   set_env_value LIVE_EXECUTION_QUALITY_GATE_ENABLED true
