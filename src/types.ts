@@ -4,7 +4,8 @@ export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
 export type LiveOrderPlacementMode = "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
-export type LiveKalshiHedgeOrderMode = "public_v2" | "ui_quick_order";
+export type LiveKalshiHedgeOrderMode = "public_v2" | "ui_quick_order" | "fix_ioc";
+export type LiveKalshiHedgeTimeInForce = "immediate_or_cancel" | "fill_or_kill";
 export type LiveKalshiPrearmPricePolicy = "patch_after_fill";
 export type LivePartialFillLockMode = "lock" | "quarantine";
 export type LiveRecoveryStatus =
@@ -599,6 +600,7 @@ export interface LiveExecutionReadiness {
   polymarketPresignEnabled?: boolean;
   polymarketFirstMinFillShares?: number;
   polymarketFirstMaxFillShares?: number;
+  kalshiHedgeTimeInForce?: LiveKalshiHedgeTimeInForce;
   kalshiPrearmEnabled?: boolean;
   kalshiPrearmMaxAgeMs?: number;
   kalshiPrearmPricePolicy?: LiveKalshiPrearmPricePolicy;
@@ -803,6 +805,10 @@ export interface DashboardSnapshot {
     liveOrderPlacementMode?: LiveOrderPlacementMode;
     kalshiHedgeOrderMode?: LiveKalshiHedgeOrderMode;
     kalshiUiQuickOrderCapValidated?: boolean;
+    kalshiFixHost?: string;
+    kalshiFixPort?: number;
+    kalshiFixTargetCompId?: string;
+    kalshiFixUseDollars?: boolean;
     liveAggressiveLimitRestMs?: number;
     liveParallelExecutionEnabled: boolean;
     liveHotPathEnabled: boolean;
@@ -812,6 +818,7 @@ export interface DashboardSnapshot {
     livePolymarketSignedOrderTtlMs: number;
     livePolymarketFirstMinFillShares?: number;
     livePolymarketFirstMaxFillShares?: number;
+    liveKalshiHedgeTimeInForce: LiveKalshiHedgeTimeInForce;
     liveKalshiPrearmEnabled: boolean;
     liveKalshiPrearmMaxAgeMs: number;
     liveKalshiPrearmPricePolicy: LiveKalshiPrearmPricePolicy;

@@ -19,6 +19,7 @@
     "hostinger:resume": "bash scripts/hostinger-resume-if-ready.sh",
     "hostinger:stage-ui-quick-order": "bash scripts/hostinger-stage-ui-quick-order.sh",
     "hostinger:stage-parallel-quick": "HOSTINGER_STAGE_PLACEMENT_MODE=parallel_quick bash scripts/hostinger-stage-ui-quick-order.sh",
+    "hostinger:stage-fix-ioc": "bash scripts/hostinger-stage-fix-ioc.sh",
     "hostinger:validate-kalshi-ui-cap": "bash scripts/hostinger-validate-kalshi-ui-cap.sh",
     "hostinger:pause-ui-capture": "bash scripts/hostinger-pause-for-kalshi-ui-capture.sh",
     "hostinger:reconcile-quarantines": "bash scripts/hostinger-reconcile-historical-quarantines.sh",

@@ -339,6 +339,7 @@ export class LiveExecutor implements ArbExecutor {
       polymarketPresignEnabled: this.config.livePolymarketPresignEnabled,
       polymarketFirstMinFillShares: this.config.livePolymarketFirstMinFillShares,
       polymarketFirstMaxFillShares: this.config.livePolymarketFirstMaxFillShares,
+      kalshiHedgeTimeInForce: this.config.liveKalshiHedgeTimeInForce,
       kalshiPrearmEnabled: this.config.liveKalshiPrearmEnabled,
       kalshiPrearmMaxAgeMs: this.config.liveKalshiPrearmMaxAgeMs,
       kalshiPrearmPricePolicy: this.config.liveKalshiPrearmPricePolicy,
@@ -423,10 +424,18 @@ export class LiveExecutor implements ArbExecutor {
       || this.config.liveOrderPlacementMode === "parallel_quick"
       ? this.config.liveOrderPlacementMode
       : this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
-    if (placementMode === "parallel_quick" && this.config.kalshiHedgeOrderMode !== "ui_quick_order") {
-      return skipped("parallel_quick requires KALSHI_HEDGE_ORDER_MODE=ui_quick_order");
+    if (
+      placementMode === "parallel_quick"
+      && this.config.kalshiHedgeOrderMode !== "ui_quick_order"
+      && this.config.kalshiHedgeOrderMode !== "fix_ioc"
+    ) {
+      return skipped("parallel_quick requires KALSHI_HEDGE_ORDER_MODE=ui_quick_order or fix_ioc");
     }
-    if (placementMode === "parallel_quick" && !this.config.kalshiUiQuickOrderCapValidated) {
+    if (
+      placementMode === "parallel_quick"
+      && this.config.kalshiHedgeOrderMode === "ui_quick_order"
+      && !this.config.kalshiUiQuickOrderCapValidated
+    ) {
       return skipped("parallel_quick requires KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true");
     }
     const limitRestMs = placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
@@ -790,7 +799,9 @@ export class LiveExecutor implements ArbExecutor {
         preflightStartedAt: timings.preflightStartedAt,
         preflightCompletedAt: timings.preflightCompletedAt,
         firstVenue: null,
-        firstVenueReason: "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
+        firstVenueReason: this.config.kalshiHedgeOrderMode === "fix_ioc"
+          ? "parallel Kalshi FIX IOC and Polymarket exact-share FAK submitted concurrently"
+          : "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
         firstVenueVwap: null,
         hotGateStartedAt: timings.hotGateStartedAt,
         hotGateCompletedAt: timings.hotGateCompletedAt,

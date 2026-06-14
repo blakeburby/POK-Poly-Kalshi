@@ -88,6 +88,7 @@ NODE
 apply_deploy_env_policy() {
   echo "Applying Hostinger exact-share safety env policy."
   set_env_value LIVE_ORDER_PLACEMENT_MODE polymarket_first_exact
+  set_env_value LIVE_KALSHI_HEDGE_TIME_IN_FORCE immediate_or_cancel
   set_env_value POLYMARKET_ORDER_TYPE FAK
   set_env_value LIVE_ORDER_SIZE 5
   set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10

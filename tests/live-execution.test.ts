@@ -16,6 +16,8 @@ import {
   createKalshiOrderClient,
   deriveOrCreatePolymarketApiCreds,
   KalshiOrderClient,
+  KalshiFixOrderClient,
+  type KalshiFixOrderSessionLike,
   KalshiUiQuickOrderClient,
   polymarketApiCredsFromConfig,
   PolymarketOrderClient,
@@ -30,6 +32,7 @@ import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { ArbLeg, DashboardSignal, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "../src/execution/venue-confirmations";
+import { buildKalshiFixNewOrderFields, encodeFixMessage, extractFixMessages, kalshiFixLimitPriceField, parseFixMessage, parseKalshiFixExecutionReport, type KalshiFixOrderInput } from "../src/kalshi/fix";
 import { contract } from "./helpers";
 
 const { privateKey: kalshiTestPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -74,6 +77,16 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiUiSessionPath: "/etc/pok-poly-kalshi/kalshi-ui-session.json",
     kalshiUiMarketIdCacheTtlMs: 60_000,
     kalshiUiQuickOrderCapValidated: false,
+    kalshiFixHost: "mm.fix.elections.kalshi.com",
+    kalshiFixPort: 8228,
+    kalshiFixSenderCompId: "test-key",
+    kalshiFixTargetCompId: "KalshiNR",
+    kalshiFixHeartbeatSeconds: 10,
+    kalshiFixConnectTimeoutMs: 1_500,
+    kalshiFixOrderResponseTimeoutMs: 2_500,
+    kalshiFixUseDollars: true,
+    kalshiFixEnableIocCancelReport: true,
+    kalshiFixPreserveOriginalOrderQty: true,
     kalshiWsUrl: "",
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
@@ -116,6 +129,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     livePolymarketSignedOrderTtlMs: 5_000,
     livePolymarketFirstMinFillShares: 7,
     livePolymarketFirstMaxFillShares: 9,
+    liveKalshiHedgeTimeInForce: "immediate_or_cancel",
     liveKalshiPrearmEnabled: true,
     liveKalshiPrearmMaxAgeMs: 5_000,
     liveKalshiPrearmPricePolicy: "patch_after_fill",
@@ -467,13 +481,13 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     direction: "yes",
     strike: 1500,
     ask: 0.4,
-  }, { executionGroupId: "group", clientOrderId: "client-yes", size: 1, maxBuyPrice: 0.41 });
+  }, { executionGroupId: "group", clientOrderId: "client-yes", size: 1, maxBuyPrice: 0.41, placementMode: "polymarket_first_exact" });
 
   assert.equal(yes.ticker, "KXBTC15M-YES");
   assert.equal(yes.side, "bid");
   assert.equal(yes.price, "0.4100");
   assert.equal(yes.count, "1.00");
-  assert.equal(yes.time_in_force, "fill_or_kill");
+  assert.equal(yes.time_in_force, "immediate_or_cancel");
   assert.equal("order_group_id" in yes, false);
 
   const no = buildKalshiV2OrderBody({
@@ -482,7 +496,7 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     direction: "no",
     strike: 1502,
     ask: 0.5,
-  }, { executionGroupId: "group", clientOrderId: "client-no", size: 1, maxBuyPrice: 0.51 });
+  }, { executionGroupId: "group", clientOrderId: "client-no", size: 1, maxBuyPrice: 0.51, placementMode: "polymarket_first_exact" });
 
   assert.equal(no.side, "ask");
   assert.equal(no.price, "0.4900");
@@ -518,6 +532,21 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     placementMode: "parallel_market",
   });
   assert.equal(market.time_in_force, "immediate_or_cancel");
+
+  const configuredFok = buildKalshiV2OrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-FOK",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-fok",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "polymarket_first_exact",
+  }, { hedgeTimeInForce: "fill_or_kill" });
+  assert.equal(configuredFok.time_in_force, "fill_or_kill");
 });
 
 test("Kalshi UI Quick Order body maps YES and NO legs onto user-side market orders", () => {
@@ -768,6 +797,137 @@ test("Kalshi UI Quick Order client supports captured WAF-header session without 
 test("Kalshi order client factory selects UI Quick Order mode only when configured", () => {
   assert.ok(createKalshiOrderClient(config()) instanceof KalshiOrderClient);
   assert.ok(createKalshiOrderClient(config({ kalshiHedgeOrderMode: "ui_quick_order" })) instanceof KalshiUiQuickOrderClient);
+  assert.ok(createKalshiOrderClient(config({ kalshiHedgeOrderMode: "fix_ioc" })) instanceof KalshiFixOrderClient);
+});
+
+test("Kalshi FIX helpers build capped IOC limit orders with strict price rounding", () => {
+  assert.equal(kalshiFixLimitPriceField(0.615, "yes", true), "0.6150");
+  assert.equal(kalshiFixLimitPriceField(0.615, "yes", false), "61");
+  assert.equal(kalshiFixLimitPriceField(0.385, "no", false), "39");
+
+  const fields = buildKalshiFixNewOrderFields({
+    clientOrderId: "client-fix",
+    symbol: "KXBTC15M-26JUN140300-00",
+    direction: "yes",
+    quantity: 5,
+    yesBookLimitPrice: 0.615,
+    maxExecutionCostDollars: 3.075,
+    timeInForce: "immediate_or_cancel",
+    orderGroupId: "group-1",
+  }, { useDollars: true }, "20260614-21:00:00.123");
+  const byTag = Object.fromEntries(fields.map(([tag, value]) => [String(tag), String(value)]));
+  assert.equal(byTag["11"], "client-fix");
+  assert.equal(byTag["38"], "5.00");
+  assert.equal(byTag["40"], "2");
+  assert.equal(byTag["44"], "0.6150");
+  assert.equal(byTag["54"], "1");
+  assert.equal(byTag["59"], "3");
+  assert.equal(byTag["2964"], "1");
+  assert.equal(byTag["21006"], "true");
+  assert.equal(byTag["21009"], "3.0750");
+
+  const encoded = encodeFixMessage([[35, "D"], [34, 2], [49, "sender"], [56, "KalshiNR"], ...fields]);
+  const extracted = extractFixMessages(`noise${encoded}`).messages;
+  assert.equal(extracted.length, 1);
+  const parsed = parseFixMessage(extracted[0]);
+  assert.equal(parsed["8"], "FIXT.1.1");
+  assert.equal(parsed["35"], "D");
+  assert.equal(parsed["11"], "client-fix");
+  assert.match(parsed["10"], /^\d{3}$/);
+});
+
+test("Kalshi FIX execution reports parse fill, fee, and timestamps", () => {
+  const report = parseKalshiFixExecutionReport({
+    "11": "client-fix",
+    "14": "5.00",
+    "17": "4;7",
+    "37": "order-fix",
+    "39": "2",
+    "6": "0.6100",
+    "137": "0.0020",
+    "150": "F",
+    "151": "0.00",
+    "60": "20260614-21:00:00.123",
+  }, true);
+  assert.equal(report.clientOrderId, "client-fix");
+  assert.equal(report.orderId, "order-fix");
+  assert.equal(report.cumulativeQuantity, 5);
+  assert.equal(report.averageYesBookPrice, 0.61);
+  assert.equal(report.feeDollars, 0.002);
+  assert.equal(report.exchangeTimestampMs, Date.parse("2026-06-14T21:00:00.123Z"));
+});
+
+test("Kalshi FIX order client submits NO hedge through capped supported IOC route", async () => {
+  let placed: KalshiFixOrderInput | null = null;
+  const session: KalshiFixOrderSessionLike = {
+    async readiness() {
+      return { ready: true, reason: null };
+    },
+    async warm() {
+      return undefined;
+    },
+    async placeOrder(input) {
+      placed = input;
+      return {
+        clientOrderId: input.clientOrderId,
+        orderId: "fix-order-1",
+        status: "filled",
+        fillCount: input.quantity,
+        averageYesBookPrice: input.yesBookLimitPrice,
+        feeDollars: 0.001,
+        exchangeTimestampMs: Date.parse("2026-06-14T21:00:00.123Z"),
+        text: null,
+        ambiguous: false,
+        reports: [{
+          clientOrderId: input.clientOrderId,
+          orderId: "fix-order-1",
+          execId: "1;1",
+          ordStatus: "2",
+          execType: "F",
+          text: null,
+          cumulativeQuantity: input.quantity,
+          leavesQuantity: 0,
+          averageYesBookPrice: input.yesBookLimitPrice,
+          lastYesBookPrice: input.yesBookLimitPrice,
+          lastQuantity: input.quantity,
+          feeDollars: 0.001,
+          exchangeTimestampMs: Date.parse("2026-06-14T21:00:00.123Z"),
+          rawTags: {},
+        }],
+      };
+    },
+  };
+  const fetchFn = async (): Promise<Response> => new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+  const client = new KalshiFixOrderClient(config({
+    kalshiHedgeOrderMode: "fix_ioc",
+    liveKalshiHedgeTimeInForce: "immediate_or_cancel",
+  }), fetchFn as typeof fetch, session);
+  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-26JUN140300-00", direction: "no", strike: 1500, ask: 0.61 };
+  const context: LiveOrderContext = {
+    executionGroupId: "group",
+    clientOrderId: "client-fix",
+    size: 5,
+    maxBuyPrice: 0.61,
+    requiredCollateral: 3.3,
+    placementMode: "parallel_quick",
+  };
+
+  const reason = await withKalshiEnv(() => client.preflightOrder(leg, context));
+  assert.equal(reason, null);
+  const result = await withKalshiEnv(() => client.placeOrder(leg, context));
+
+  assert.ok(placed);
+  assert.equal(placed.clientOrderId, "client-fix");
+  assert.equal(placed.symbol, leg.contractId);
+  assert.equal(placed.direction, "no");
+  assert.equal(placed.quantity, 5);
+  assert.equal(placed.yesBookLimitPrice, 0.39);
+  assert.equal(placed.maxExecutionCostDollars, 3.05);
+  assert.equal(placed.timeInForce, "immediate_or_cancel");
+  assert.equal(result.status, "filled");
+  assert.equal(result.fillPrice, 0.61);
+  assert.equal(result.metadata?.kalshiOrderRoute, "fix_ioc");
+  assert.equal(result.metadata?.kalshiFixMaxExecutionCostDollars, 3.05);
 });
 
 test("Kalshi order client pre-arms request during preflight and patches final price", async () => {
@@ -2769,6 +2929,17 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveKalshiPrearmEnabled, true);
   assert.equal(loadConfig({}).liveKalshiPrearmMaxAgeMs, 5_000);
   assert.equal(loadConfig({}).liveKalshiPrearmPricePolicy, "patch_after_fill");
+  assert.equal(loadConfig({}).liveKalshiHedgeTimeInForce, "immediate_or_cancel");
+  assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "fill_or_kill" }).liveKalshiHedgeTimeInForce, "fill_or_kill");
+  assert.equal(loadConfig({ KALSHI_HEDGE_ORDER_MODE: "fix_ioc" }).kalshiHedgeOrderMode, "fix_ioc");
+  assert.equal(loadConfig({}).kalshiFixHost, "mm.fix.elections.kalshi.com");
+  assert.equal(loadConfig({}).kalshiFixPort, 8228);
+  assert.equal(loadConfig({}).kalshiFixTargetCompId, "KalshiNR");
+  assert.equal(loadConfig({}).kalshiFixHeartbeatSeconds, 10);
+  assert.equal(loadConfig({}).kalshiFixConnectTimeoutMs, 1_500);
+  assert.equal(loadConfig({}).kalshiFixOrderResponseTimeoutMs, 2_500);
+  assert.equal(loadConfig({}).kalshiFixUseDollars, true);
+  assert.equal(loadConfig({ KALSHI_FIX_USE_DOLLARS: "false" }).kalshiFixUseDollars, false);
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -2875,7 +3046,7 @@ test("live executor synchronizes parallel_quick dispatch after both refreshed pr
   assert.equal(result.executionTimings?.parallelSettledAtMs, now);
 });
 
-test("live executor fails closed for parallel_quick without UI mode or cap validation", async () => {
+test("live executor fails closed for parallel_quick without supported Kalshi market-like mode or UI cap validation", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -2893,7 +3064,7 @@ test("live executor fails closed for parallel_quick without UI mode or cap valid
   );
   const wrongModeResult = await wrongMode.execute(candidate);
   assert.equal(wrongModeResult.action, "skipped");
-  assert.match(wrongModeResult.failureReason ?? "", /KALSHI_HEDGE_ORDER_MODE=ui_quick_order/);
+  assert.match(wrongModeResult.failureReason ?? "", /KALSHI_HEDGE_ORDER_MODE=ui_quick_order or fix_ioc/);
 
   const unvalidatedCap = new LiveExecutor(
     config({
@@ -2912,6 +3083,33 @@ test("live executor fails closed for parallel_quick without UI mode or cap valid
   assert.match(unvalidatedCapResult.failureReason ?? "", /KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true/);
   assert.equal(kalshi.placed.length, 0);
   assert.equal(polymarket.placed.length, 0);
+});
+
+test("live executor allows parallel_quick with supported Kalshi FIX IOC mode", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 1,
+      liveOrderPlacementMode: "parallel_quick",
+      kalshiHedgeOrderMode: "fix_ioc",
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_quick");
+  assert.equal(result.action, "filled");
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /Kalshi FIX IOC/);
 });
 
 test("live executor hardlocks one-sided parallel_quick fills instead of auto-unwinding", async () => {

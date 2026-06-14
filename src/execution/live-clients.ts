@@ -18,7 +18,8 @@ import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
 import { getKalshiHeaders } from "../kalshi/auth";
-import type { ArbLeg, LiveOrderPlacementMode, Venue, VenueExecutionReadiness } from "../types";
+import { KalshiFixOrderSession, type KalshiFixOrderExecution, type KalshiFixOrderInput } from "../kalshi/fix";
+import type { ArbLeg, LiveKalshiHedgeTimeInForce, LiveOrderPlacementMode, Venue, VenueExecutionReadiness } from "../types";
 
 export interface LiveOrderContext {
   executionGroupId: string;
@@ -374,7 +375,11 @@ function kalshiYesBookPrice(leg: ArbLeg, context: LiveOrderContext): number {
   return roundPrice(leg.direction === "yes" ? context.maxBuyPrice : 1 - context.maxBuyPrice);
 }
 
-export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): Record<string, string | boolean> {
+export function buildKalshiV2OrderBody(
+  leg: ArbLeg,
+  context: LiveOrderContext,
+  options: { hedgeTimeInForce?: LiveKalshiHedgeTimeInForce } = {},
+): Record<string, string | boolean> {
   const isYes = leg.direction === "yes";
   const yesBookPrice = kalshiYesBookPrice(leg, context);
   const body: Record<string, string | boolean> = {
@@ -383,7 +388,7 @@ export function buildKalshiV2OrderBody(leg: ArbLeg, context: LiveOrderContext): 
     side: isYes ? "bid" : "ask",
     count: fixedCount(context.size),
     price: fixedDollars(yesBookPrice),
-    time_in_force: kalshiTimeInForce(context),
+    time_in_force: kalshiTimeInForce(context, options.hedgeTimeInForce ?? "immediate_or_cancel"),
     self_trade_prevention_type: "taker_at_cross",
     cancel_order_on_pause: true,
   };
@@ -413,9 +418,10 @@ function patchPreparedKalshiBody(
   prepared: KalshiPreparedOrder,
   leg: ArbLeg,
   context: LiveOrderContext,
+  hedgeTimeInForce: LiveKalshiHedgeTimeInForce,
 ): { body: Record<string, string | boolean>; patchMs: number; fallbackReason: string | null } {
   const startedAt = Date.now();
-  const desired = buildKalshiV2OrderBody(leg, context);
+  const desired = buildKalshiV2OrderBody(leg, context, { hedgeTimeInForce });
   const invariantFields: Array<keyof typeof desired> = ["ticker", "client_order_id", "side", "count", "time_in_force"];
   for (const field of invariantFields) {
     if (prepared.bodyTemplate[field] !== desired[field]) {
@@ -772,7 +778,7 @@ export class KalshiOrderClient implements VenueOrderClient {
     const buildStartedAt = Date.now();
     try {
       const { url, signPath } = kalshiOrderEndpoint(this.config);
-      const bodyTemplate = buildKalshiV2OrderBody(leg, context);
+      const bodyTemplate = buildKalshiV2OrderBody(leg, context, { hedgeTimeInForce: this.config.liveKalshiHedgeTimeInForce });
       const signStartedAt = Date.now();
       const headers = getKalshiHeaders("POST", signPath, signStartedAt.toString());
       const signedAt = Date.now();
@@ -829,7 +835,7 @@ export class KalshiOrderClient implements VenueOrderClient {
     let headers: Record<string, string>;
     let pricePatchMs: number | null = null;
     if (preparedUsable) {
-      const patched = patchPreparedKalshiBody(prepared, leg, context);
+      const patched = patchPreparedKalshiBody(prepared, leg, context, this.config.liveKalshiHedgeTimeInForce);
       pricePatchMs = patched.patchMs;
       if (patched.fallbackReason == null) {
         body = patched.body;
@@ -837,11 +843,11 @@ export class KalshiOrderClient implements VenueOrderClient {
       } else {
         preparedFallbackReason = patched.fallbackReason;
         endpoint = kalshiOrderEndpoint(this.config);
-        body = buildKalshiV2OrderBody(leg, context);
+        body = buildKalshiV2OrderBody(leg, context, { hedgeTimeInForce: this.config.liveKalshiHedgeTimeInForce });
         headers = getKalshiHeaders("POST", endpoint.signPath);
       }
     } else {
-      body = buildKalshiV2OrderBody(leg, context);
+      body = buildKalshiV2OrderBody(leg, context, { hedgeTimeInForce: this.config.liveKalshiHedgeTimeInForce });
       headers = getKalshiHeaders("POST", endpoint.signPath);
     }
     const response = await this.fetchFn(endpoint.url, {
@@ -1105,6 +1111,196 @@ export class KalshiOrderClient implements VenueOrderClient {
     const text = await response.text();
     if (!response.ok) throw new Error(`Kalshi order cancel failed ${response.status}: ${sanitizeError(text)}`);
     return "canceled";
+  }
+}
+
+export interface KalshiFixOrderSessionLike {
+  readiness(): Promise<{ ready: boolean; reason: string | null }>;
+  warm(): Promise<void>;
+  placeOrder(input: KalshiFixOrderInput): Promise<KalshiFixOrderExecution>;
+}
+
+function kalshiFixFillPrice(execution: KalshiFixOrderExecution, leg: ArbLeg): number | null {
+  if (execution.averageYesBookPrice == null) return null;
+  return leg.direction === "yes" ? roundPrice(execution.averageYesBookPrice) : roundPrice(1 - execution.averageYesBookPrice);
+}
+
+function kalshiFixResultError(execution: KalshiFixOrderExecution, fillPrice: number | null, context: LiveOrderContext): string | null {
+  if (execution.ambiguous) {
+    return `Kalshi FIX ambiguous execution state${execution.text ? `: ${execution.text}` : ""}`;
+  }
+  if (fillPrice != null && fillPrice > context.maxBuyPrice + 0.000001) {
+    return `Kalshi FIX safety breach: fill price ${fillPrice.toFixed(4)} exceeded hedge cap ${context.maxBuyPrice.toFixed(4)}`;
+  }
+  return exactFillError("kalshi", execution.fillCount, context.size);
+}
+
+export class KalshiFixOrderClient implements VenueOrderClient {
+  readonly venue = "kalshi" as const;
+  private readonly publicClient: KalshiOrderClient;
+  private readonly session: KalshiFixOrderSessionLike;
+
+  constructor(
+    private readonly config: AppConfig,
+    fetchFn: typeof fetch = fetch,
+    session?: KalshiFixOrderSessionLike,
+  ) {
+    this.publicClient = new KalshiOrderClient({ ...config, liveKalshiPrearmEnabled: false }, fetchFn);
+    this.session = session ?? new KalshiFixOrderSession({
+      host: config.kalshiFixHost,
+      port: config.kalshiFixPort,
+      senderCompId: config.kalshiFixSenderCompId || process.env.KALSHI_API_KEY_ID?.trim() || "",
+      targetCompId: config.kalshiFixTargetCompId,
+      heartbeatSeconds: config.kalshiFixHeartbeatSeconds,
+      connectTimeoutMs: config.kalshiFixConnectTimeoutMs,
+      orderResponseTimeoutMs: config.kalshiFixOrderResponseTimeoutMs,
+      useDollars: config.kalshiFixUseDollars,
+      enableIocCancelReport: config.kalshiFixEnableIocCancelReport,
+      preserveOriginalOrderQty: config.kalshiFixPreserveOriginalOrderQty,
+    });
+  }
+
+  async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
+    const publicReadiness = await this.publicClient.readiness(now);
+    if (!publicReadiness.ready) return publicReadiness;
+    if (!this.config.kalshiFixSenderCompId && !process.env.KALSHI_API_KEY_ID?.trim()) {
+      return {
+        ...publicReadiness,
+        configured: false,
+        ready: false,
+        reason: "KALSHI_FIX_SENDER_COMP_ID or KALSHI_API_KEY_ID is required for Kalshi FIX IOC mode",
+        lastCheckedAt: now,
+      };
+    }
+    if (this.config.kalshiFixTargetCompId !== "KalshiNR") {
+      return {
+        ...publicReadiness,
+        ready: false,
+        reason: "Kalshi FIX IOC mode requires non-retransmission TargetCompID KalshiNR",
+        lastCheckedAt: now,
+      };
+    }
+    if (this.config.liveKalshiHedgeTimeInForce !== "immediate_or_cancel") {
+      return {
+        ...publicReadiness,
+        ready: false,
+        reason: "Kalshi FIX IOC mode requires LIVE_KALSHI_HEDGE_TIME_IN_FORCE=immediate_or_cancel",
+        lastCheckedAt: now,
+      };
+    }
+    if (this.config.liveKalshiOrderGroupEnabled && this.config.liveKalshiOrderGroupId.trim()) {
+      return {
+        ...publicReadiness,
+        ready: false,
+        reason: "Kalshi FIX IOC mode blocks explicit LIVE_KALSHI_ORDER_GROUP_ID because Kalshi FIX NewOrderSingle order-group attachment is not documented",
+        lastCheckedAt: now,
+      };
+    }
+    const fixReadiness = await this.session.readiness();
+    return {
+      ...publicReadiness,
+      configured: publicReadiness.configured,
+      ready: publicReadiness.ready && fixReadiness.ready,
+      reason: fixReadiness.ready ? null : fixReadiness.reason ?? "Kalshi FIX session is not ready",
+      lastCheckedAt: now,
+    };
+  }
+
+  async warm(options: { now?: number; requiredCollateral?: number } = {}): Promise<void> {
+    await this.publicClient.warm(options);
+    await this.session.warm();
+  }
+
+  private supportsPlacementMode(mode: LiveOrderContext["placementMode"]): boolean {
+    return mode === "polymarket_first_exact" || mode === "parallel_quick" || mode === "parallel_market";
+  }
+
+  async preflightOrder(_leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
+    if (!this.supportsPlacementMode(context.placementMode)) {
+      return "Kalshi FIX IOC mode is only supported for polymarket_first_exact, parallel_market, or parallel_quick";
+    }
+    const readiness = await this.readiness(context.requestedAt ?? Date.now());
+    context.preflight = {
+      ...context.preflight,
+      kalshiReadiness: readiness,
+      kalshiRequiredCollateral: readiness.requiredCollateral ?? context.requiredCollateral,
+    };
+    return readiness.ready ? null : readiness.reason ?? "Kalshi FIX IOC readiness failed";
+  }
+
+  async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+    if (!this.supportsPlacementMode(context.placementMode)) {
+      throw new Error("Kalshi FIX IOC mode is only supported for polymarket_first_exact, parallel_market, or parallel_quick");
+    }
+    const requestedAt = context.requestedAt ?? Date.now();
+    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const readiness = context.preflight?.kalshiReadiness?.ready
+      && context.preflight.kalshiRequiredCollateral != null
+      && context.preflight.kalshiRequiredCollateral + 1e-9 >= requiredCollateral
+      ? context.preflight.kalshiReadiness
+      : await this.readiness(requestedAt);
+    if (!readiness.ready) throw new Error(readiness.reason ?? "Kalshi FIX IOC readiness failed");
+
+    const execution = await this.session.placeOrder({
+      clientOrderId: context.clientOrderId,
+      symbol: leg.contractId,
+      direction: leg.direction,
+      quantity: context.size,
+      yesBookLimitPrice: kalshiYesBookPrice(leg, context),
+      maxExecutionCostDollars: roundPrice(context.size * context.maxBuyPrice),
+      timeInForce: "immediate_or_cancel",
+      orderGroupId: context.orderGroupId,
+      signal: context.signal,
+    });
+    const respondedAt = Date.now();
+    const fillPrice = kalshiFixFillPrice(execution, leg);
+    const error = kalshiFixResultError(execution, fillPrice, context);
+    const capBreached = fillPrice != null && fillPrice > context.maxBuyPrice + 0.000001;
+    return {
+      venue: this.venue,
+      clientOrderId: execution.clientOrderId || context.clientOrderId,
+      orderId: execution.orderId,
+      status: execution.ambiguous || capBreached ? "unknown" : execution.status,
+      fillPrice,
+      fillCount: execution.fillCount,
+      requestedAt: isoFromMs(requestedAt),
+      respondedAt: isoFromMs(respondedAt),
+      error,
+      fee: execution.feeDollars,
+      exchangeTimestampMs: execution.exchangeTimestampMs,
+      metadata: {
+        orderPlacementMode: context.placementMode ?? "parallel_market",
+        kalshiOrderRoute: "fix_ioc",
+        kalshiFixHost: this.config.kalshiFixHost,
+        kalshiFixPort: this.config.kalshiFixPort,
+        kalshiFixTargetCompId: this.config.kalshiFixTargetCompId,
+        kalshiFixUseDollars: this.config.kalshiFixUseDollars,
+        kalshiFixTimeInForce: "immediate_or_cancel",
+        kalshiFixMaxExecutionCostDollars: roundPrice(context.size * context.maxBuyPrice),
+        kalshiSubmittedMaxBuyPrice: context.maxBuyPrice,
+        kalshiSubmittedYesBookPrice: kalshiYesBookPrice(leg, context),
+        kalshiRequiredCollateral: readiness.requiredCollateral ?? requiredCollateral,
+        kalshiCollateralBalance: readiness.balance,
+        kalshiFixReportCount: execution.reports.length,
+        kalshiFixFinalText: execution.text,
+        kalshiFixAmbiguous: execution.ambiguous,
+        kalshiFixFinalOrdStatus: execution.reports.at(-1)?.ordStatus ?? null,
+        kalshiFixFinalExecType: execution.reports.at(-1)?.execType ?? null,
+        pendingReconciliation: execution.ambiguous || undefined,
+        safetyBreach: capBreached,
+      },
+    };
+  }
+
+  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+    return this.publicClient.recoverTimedOutOrder(leg, context, {
+      ...timedOutResult,
+      metadata: {
+        ...(timedOutResult.metadata ?? {}),
+        kalshiOrderRoute: "fix_ioc",
+        kalshiFixTimeoutRecoveryViaRest: true,
+      },
+    });
   }
 }
 
@@ -1445,9 +1641,9 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
 }
 
 export function createKalshiOrderClient(config: AppConfig, fetchFn: typeof fetch = fetch): VenueOrderClient {
-  return config.kalshiHedgeOrderMode === "ui_quick_order"
-    ? new KalshiUiQuickOrderClient(config, fetchFn)
-    : new KalshiOrderClient(config, fetchFn);
+  if (config.kalshiHedgeOrderMode === "ui_quick_order") return new KalshiUiQuickOrderClient(config, fetchFn);
+  if (config.kalshiHedgeOrderMode === "fix_ioc") return new KalshiFixOrderClient(config, fetchFn);
+  return new KalshiOrderClient(config, fetchFn);
 }
 
 function initialResultStatus(fillCount: number | null, requestedSize: number): string {
@@ -1591,9 +1787,13 @@ function polymarketSignedOrderKind(context: LiveOrderContext): "market" | "share
   return context.placementMode === "polymarket_first_exact" || context.placementMode === "parallel_quick" ? "share_limit" : "market";
 }
 
-function kalshiTimeInForce(context: LiveOrderContext): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {
+function kalshiTimeInForce(
+  context: LiveOrderContext,
+  hedgeTimeInForce: LiveKalshiHedgeTimeInForce,
+): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {
   if (isLimitRestMode(context)) return "good_till_canceled";
   if (context.placementMode === "parallel_market") return "immediate_or_cancel";
+  if (context.placementMode === "polymarket_first_exact") return hedgeTimeInForce;
   return "fill_or_kill";
 }
 

@@ -65,6 +65,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       liveHotPathWarmIntervalMs: 1_000,
       livePolymarketPresignEnabled: false,
       livePolymarketSignedOrderTtlMs: 5_000,
+      liveKalshiHedgeTimeInForce: "immediate_or_cancel",
       liveKalshiPrearmEnabled: true,
       liveKalshiPrearmMaxAgeMs: 5_000,
       liveKalshiPrearmPricePolicy: "patch_after_fill",

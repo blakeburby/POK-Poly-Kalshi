@@ -81,6 +81,7 @@ apply_safety_env_policy() {
     placement_mode=polymarket_first_exact
   fi
   set_env_value LIVE_ORDER_PLACEMENT_MODE "$placement_mode"
+  set_env_value LIVE_KALSHI_HEDGE_TIME_IN_FORCE immediate_or_cancel
   set_env_value POLYMARKET_ORDER_TYPE FAK
   set_env_value LIVE_ORDER_SIZE 5
   set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
@@ -139,6 +140,7 @@ const quarantineCap = Number(reconciliation.quarantineCapDollars ?? Number.POSIT
 const riskState = execution.riskState ?? "unknown";
 const liveOrderPlacementMode = health.liveOrderPlacementMode ?? null;
 const kalshiHedgeOrderMode = health.kalshiHedgeOrderMode ?? runtimeHealth.kalshiHedgeOrderMode ?? null;
+const liveKalshiHedgeTimeInForce = health.liveKalshiHedgeTimeInForce ?? runtimeHealth.liveKalshiHedgeTimeInForce ?? null;
 const kalshiUiQuickOrderCapValidated =
   health.kalshiUiQuickOrderCapValidated ?? runtimeHealth.kalshiUiQuickOrderCapValidated ?? null;
 
@@ -147,9 +149,10 @@ const checks = [
   ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
   ["health.liveOrderPlacementMode supported", liveOrderPlacementMode === "polymarket_first_exact" || liveOrderPlacementMode === "parallel_quick"],
+  ["health.liveKalshiHedgeTimeInForce=immediate_or_cancel", liveKalshiHedgeTimeInForce === "immediate_or_cancel"],
   [
-    "health.kalshiHedgeOrderMode=ui_quick_order when parallel_quick",
-    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order",
+    "health.kalshiHedgeOrderMode=ui_quick_order or fix_ioc when parallel_quick",
+    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order" || kalshiHedgeOrderMode === "fix_ioc",
   ],
   ["health.liveOrderSize=5", Number(health.liveOrderSize) === 5],
   ["health.liveMinBookDepthShares>=10", Number(health.liveMinBookDepthShares) >= 10],
@@ -160,6 +163,10 @@ const checks = [
   [
     "health.kalshiUiQuickOrderCapValidated=true when ui_quick_order",
     kalshiHedgeOrderMode !== "ui_quick_order" || kalshiUiQuickOrderCapValidated === true,
+  ],
+  [
+    "health.liveKalshiHedgeTimeInForce=immediate_or_cancel when fix_ioc",
+    kalshiHedgeOrderMode !== "fix_ioc" || liveKalshiHedgeTimeInForce === "immediate_or_cancel",
   ],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
@@ -188,11 +195,16 @@ console.log(JSON.stringify({
   arbEnabled: health.arbEnabled,
   requireArbEnabled,
   liveOrderPlacementMode,
+  liveKalshiHedgeTimeInForce,
   liveOrderSize: health.liveOrderSize,
   liveMinBookDepthShares: health.liveMinBookDepthShares,
   liveKalshiMinCashDollars: health.liveKalshiMinCashDollars,
   kalshiHedgeOrderMode,
   kalshiUiQuickOrderCapValidated,
+  kalshiFixHost: health.kalshiFixHost ?? runtimeHealth.kalshiFixHost ?? null,
+  kalshiFixPort: health.kalshiFixPort ?? runtimeHealth.kalshiFixPort ?? null,
+  kalshiFixTargetCompId: health.kalshiFixTargetCompId ?? runtimeHealth.kalshiFixTargetCompId ?? null,
+  kalshiFixUseDollars: health.kalshiFixUseDollars ?? runtimeHealth.kalshiFixUseDollars ?? null,
   riskState,
   riskStateReason: execution.riskStateReason ?? null,
   partialFillLocked: execution.partialFillLocked,

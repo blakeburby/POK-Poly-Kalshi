@@ -1,4 +1,4 @@
-import type { LiveKalshiHedgeOrderMode, LiveKalshiPrearmPricePolicy, LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
+import type { LiveKalshiHedgeOrderMode, LiveKalshiHedgeTimeInForce, LiveKalshiPrearmPricePolicy, LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
 
 export interface AppConfig {
   port: number;
@@ -19,6 +19,16 @@ export interface AppConfig {
   kalshiUiSessionPath: string;
   kalshiUiMarketIdCacheTtlMs: number;
   kalshiUiQuickOrderCapValidated: boolean;
+  kalshiFixHost: string;
+  kalshiFixPort: number;
+  kalshiFixSenderCompId: string;
+  kalshiFixTargetCompId: string;
+  kalshiFixHeartbeatSeconds: number;
+  kalshiFixConnectTimeoutMs: number;
+  kalshiFixOrderResponseTimeoutMs: number;
+  kalshiFixUseDollars: boolean;
+  kalshiFixEnableIocCancelReport: boolean;
+  kalshiFixPreserveOriginalOrderQty: boolean;
   kalshiWsUrl: string;
   kalshiSeriesTicker: string;
   polymarketWsUrl: string;
@@ -61,6 +71,7 @@ export interface AppConfig {
   livePolymarketSignedOrderTtlMs: number;
   livePolymarketFirstMinFillShares: number;
   livePolymarketFirstMaxFillShares: number;
+  liveKalshiHedgeTimeInForce: LiveKalshiHedgeTimeInForce;
   liveKalshiPrearmEnabled: boolean;
   liveKalshiPrearmMaxAgeMs: number;
   liveKalshiPrearmPricePolicy: LiveKalshiPrearmPricePolicy;
@@ -146,8 +157,14 @@ function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMo
 
 function envLiveKalshiHedgeOrderMode(env: NodeJS.ProcessEnv): LiveKalshiHedgeOrderMode {
   const value = envString(env, "KALSHI_HEDGE_ORDER_MODE", "public_v2").toLowerCase();
-  if (value === "public_v2" || value === "ui_quick_order") return value;
-  throw new Error("KALSHI_HEDGE_ORDER_MODE must be public_v2 or ui_quick_order");
+  if (value === "public_v2" || value === "ui_quick_order" || value === "fix_ioc") return value;
+  throw new Error("KALSHI_HEDGE_ORDER_MODE must be public_v2, ui_quick_order, or fix_ioc");
+}
+
+function envLiveKalshiHedgeTimeInForce(env: NodeJS.ProcessEnv): LiveKalshiHedgeTimeInForce {
+  const value = envString(env, "LIVE_KALSHI_HEDGE_TIME_IN_FORCE", "immediate_or_cancel").toLowerCase();
+  if (value === "immediate_or_cancel" || value === "fill_or_kill") return value;
+  throw new Error("LIVE_KALSHI_HEDGE_TIME_IN_FORCE must be immediate_or_cancel or fill_or_kill");
 }
 
 function envLivePartialFillLockMode(env: NodeJS.ProcessEnv): LivePartialFillLockMode {
@@ -188,6 +205,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     kalshiUiSessionPath: envString(env, "KALSHI_UI_SESSION_PATH", "/etc/pok-poly-kalshi/kalshi-ui-session.json"),
     kalshiUiMarketIdCacheTtlMs: envNumber(env, "KALSHI_UI_MARKET_ID_CACHE_TTL_MS", 60_000),
     kalshiUiQuickOrderCapValidated: envBoolean(env, "KALSHI_UI_QUICK_ORDER_CAP_VALIDATED", false),
+    kalshiFixHost: envString(env, "KALSHI_FIX_HOST", "mm.fix.elections.kalshi.com"),
+    kalshiFixPort: envNumber(env, "KALSHI_FIX_PORT", 8228),
+    kalshiFixSenderCompId: envString(env, "KALSHI_FIX_SENDER_COMP_ID", envString(env, "KALSHI_API_KEY_ID")),
+    kalshiFixTargetCompId: envString(env, "KALSHI_FIX_TARGET_COMP_ID", "KalshiNR"),
+    kalshiFixHeartbeatSeconds: envNumber(env, "KALSHI_FIX_HEARTBEAT_SECONDS", 10),
+    kalshiFixConnectTimeoutMs: envNumber(env, "KALSHI_FIX_CONNECT_TIMEOUT_MS", 1_500),
+    kalshiFixOrderResponseTimeoutMs: envNumber(env, "KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS", envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500)),
+    kalshiFixUseDollars: envBoolean(env, "KALSHI_FIX_USE_DOLLARS", true),
+    kalshiFixEnableIocCancelReport: envBoolean(env, "KALSHI_FIX_ENABLE_IOC_CANCEL_REPORT", true),
+    kalshiFixPreserveOriginalOrderQty: envBoolean(env, "KALSHI_FIX_PRESERVE_ORIGINAL_ORDER_QTY", true),
     kalshiWsUrl: envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
     kalshiSeriesTicker: envString(env, "KALSHI_SERIES_TICKER", "KXBTC15M"),
     polymarketWsUrl: envString(env, "POLYMARKET_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
@@ -234,6 +261,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     livePolymarketSignedOrderTtlMs: envNumber(env, "LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS", 5_000),
     livePolymarketFirstMinFillShares,
     livePolymarketFirstMaxFillShares,
+    liveKalshiHedgeTimeInForce: envLiveKalshiHedgeTimeInForce(env),
     liveKalshiPrearmEnabled: envBoolean(env, "LIVE_KALSHI_PREARM_ENABLED", true),
     liveKalshiPrearmMaxAgeMs: envNumber(env, "LIVE_KALSHI_PREARM_MAX_AGE_MS", 5_000),
     liveKalshiPrearmPricePolicy: envLiveKalshiPrearmPricePolicy(env),

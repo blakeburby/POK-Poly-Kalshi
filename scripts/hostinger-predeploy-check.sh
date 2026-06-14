@@ -111,6 +111,11 @@ console.log(JSON.stringify({
   liveOrderSize: health.liveOrderSize,
   kalshiHedgeOrderMode: health.kalshiHedgeOrderMode ?? null,
   kalshiUiQuickOrderCapValidated: health.kalshiUiQuickOrderCapValidated ?? null,
+  liveKalshiHedgeTimeInForce: health.liveKalshiHedgeTimeInForce ?? null,
+  kalshiFixHost: health.kalshiFixHost ?? null,
+  kalshiFixPort: health.kalshiFixPort ?? null,
+  kalshiFixTargetCompId: health.kalshiFixTargetCompId ?? null,
+  kalshiFixUseDollars: health.kalshiFixUseDollars ?? null,
   livePolymarketFirstMinFillShares: health.livePolymarketFirstMinFillShares,
   livePolymarketFirstMaxFillShares: health.livePolymarketFirstMaxFillShares,
   liveAutoHardlocksEnabled: health.liveAutoHardlocksEnabled,
@@ -152,7 +157,7 @@ npm --version
 
 echo "Sanitized worker env:"
 "${SUDO[@]}" awk -F= '
-  $1 ~ /^(ARB_ENABLED|LIVE_ORDER_PLACEMENT_MODE|LIVE_ORDER_SIZE|LIVE_MIN_BOOK_DEPTH_SHARES|LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES|LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES|LIVE_RECONCILE_BEFORE_TRADE|LIVE_AUTO_HARDLOCKS_ENABLED|LIVE_EXACT_EXPOSURE_REQUIRED|LIVE_EXECUTION_QUALITY_GATE_ENABLED|KALSHI_HEDGE_ORDER_MODE|KALSHI_UI_SESSION_PATH|KALSHI_UI_QUICK_ORDER_CAP_VALIDATED)$/ {
+  $1 ~ /^(ARB_ENABLED|LIVE_ORDER_PLACEMENT_MODE|LIVE_KALSHI_HEDGE_TIME_IN_FORCE|LIVE_ORDER_SIZE|LIVE_MIN_BOOK_DEPTH_SHARES|LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES|LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES|LIVE_RECONCILE_BEFORE_TRADE|LIVE_AUTO_HARDLOCKS_ENABLED|LIVE_EXACT_EXPOSURE_REQUIRED|LIVE_EXECUTION_QUALITY_GATE_ENABLED|KALSHI_HEDGE_ORDER_MODE|KALSHI_UI_SESSION_PATH|KALSHI_UI_QUICK_ORDER_CAP_VALIDATED)$/ {
     print $1 "=" $2
   }
 ' "$ENV_FILE"
