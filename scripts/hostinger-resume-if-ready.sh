@@ -151,8 +151,8 @@ const checks = [
   ["health.liveOrderPlacementMode supported", liveOrderPlacementMode === "polymarket_first_exact" || liveOrderPlacementMode === "parallel_quick"],
   ["health.liveKalshiHedgeTimeInForce=immediate_or_cancel", liveKalshiHedgeTimeInForce === "immediate_or_cancel"],
   [
-    "health.kalshiHedgeOrderMode=ui_quick_order or fix_ioc when parallel_quick",
-    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order" || kalshiHedgeOrderMode === "fix_ioc",
+    "health.kalshiHedgeOrderMode=ui_quick_order, fix_ioc, or public_v2 when parallel_quick",
+    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order" || kalshiHedgeOrderMode === "fix_ioc" || kalshiHedgeOrderMode === "public_v2",
   ],
   ["health.liveOrderSize=5", Number(health.liveOrderSize) === 5],
   ["health.liveMinBookDepthShares>=10", Number(health.liveMinBookDepthShares) >= 10],

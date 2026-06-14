@@ -533,6 +533,21 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
   });
   assert.equal(market.time_in_force, "immediate_or_cancel");
 
+  const parallelQuick = buildKalshiV2OrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-QUICK",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-quick",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "parallel_quick",
+  });
+  assert.equal(parallelQuick.time_in_force, "immediate_or_cancel");
+
   const configuredFok = buildKalshiV2OrderBody({
     venue: "kalshi",
     contractId: "KXBTC15M-FOK",
@@ -3046,7 +3061,7 @@ test("live executor synchronizes parallel_quick dispatch after both refreshed pr
   assert.equal(result.executionTimings?.parallelSettledAtMs, now);
 });
 
-test("live executor fails closed for parallel_quick without supported Kalshi market-like mode or UI cap validation", async () => {
+test("live executor fails closed for parallel_quick UI mode without cap validation", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
   const books = new BookStore();
@@ -3054,17 +3069,6 @@ test("live executor fails closed for parallel_quick without supported Kalshi mar
   books.setKalshiContracts([higher]);
   const kalshi = new FakeVenueClient("kalshi");
   const polymarket = new FakeVenueClient("polymarket");
-
-  const wrongMode = new LiveExecutor(
-    config({ liveOrderSize: 1, liveOrderPlacementMode: "parallel_quick" }),
-    books,
-    kalshi,
-    polymarket,
-    () => now,
-  );
-  const wrongModeResult = await wrongMode.execute(candidate);
-  assert.equal(wrongModeResult.action, "skipped");
-  assert.match(wrongModeResult.failureReason ?? "", /KALSHI_HEDGE_ORDER_MODE=ui_quick_order or fix_ioc/);
 
   const unvalidatedCap = new LiveExecutor(
     config({
@@ -3083,6 +3087,33 @@ test("live executor fails closed for parallel_quick without supported Kalshi mar
   assert.match(unvalidatedCapResult.failureReason ?? "", /KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true/);
   assert.equal(kalshi.placed.length, 0);
   assert.equal(polymarket.placed.length, 0);
+});
+
+test("live executor allows parallel_quick with supported Kalshi public V2 IOC mode", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 1,
+      liveOrderPlacementMode: "parallel_quick",
+      kalshiHedgeOrderMode: "public_v2",
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "parallel_quick");
+  assert.equal(result.action, "filled");
+  assert.match(result.executionTimings?.firstVenueReason ?? "", /Kalshi public V2 IOC/);
 });
 
 test("live executor allows parallel_quick with supported Kalshi FIX IOC mode", async () => {

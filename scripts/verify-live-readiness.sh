@@ -42,8 +42,8 @@ const checks = [
   ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
   [
-    "health.kalshiHedgeOrderMode=ui_quick_order or fix_ioc when parallel_quick",
-    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order" || kalshiHedgeOrderMode === "fix_ioc",
+    "health.kalshiHedgeOrderMode=ui_quick_order, fix_ioc, or public_v2 when parallel_quick",
+    liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order" || kalshiHedgeOrderMode === "fix_ioc" || kalshiHedgeOrderMode === "public_v2",
   ],
   [
     "health.kalshiUiQuickOrderCapValidated=true when parallel_quick uses ui_quick_order",

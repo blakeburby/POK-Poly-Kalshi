@@ -428,8 +428,9 @@ export class LiveExecutor implements ArbExecutor {
       placementMode === "parallel_quick"
       && this.config.kalshiHedgeOrderMode !== "ui_quick_order"
       && this.config.kalshiHedgeOrderMode !== "fix_ioc"
+      && this.config.kalshiHedgeOrderMode !== "public_v2"
     ) {
-      return skipped("parallel_quick requires KALSHI_HEDGE_ORDER_MODE=ui_quick_order or fix_ioc");
+      return skipped("parallel_quick requires KALSHI_HEDGE_ORDER_MODE=ui_quick_order, fix_ioc, or public_v2");
     }
     if (
       placementMode === "parallel_quick"
@@ -801,7 +802,9 @@ export class LiveExecutor implements ArbExecutor {
         firstVenue: null,
         firstVenueReason: this.config.kalshiHedgeOrderMode === "fix_ioc"
           ? "parallel Kalshi FIX IOC and Polymarket exact-share FAK submitted concurrently"
-          : "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
+          : this.config.kalshiHedgeOrderMode === "public_v2"
+            ? "parallel Kalshi public V2 IOC and Polymarket exact-share FAK submitted concurrently"
+            : "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
         firstVenueVwap: null,
         hotGateStartedAt: timings.hotGateStartedAt,
         hotGateCompletedAt: timings.hotGateCompletedAt,

@@ -4,7 +4,7 @@
 
 Use supported Kalshi order-entry surfaces only.
 
-Preferred low-latency mode is now staged behind `KALSHI_HEDGE_ORDER_MODE=fix_ioc`:
+Preferred low-latency mode, once Kalshi enables FIX for the account/API key, is staged behind `KALSHI_HEDGE_ORDER_MODE=fix_ioc`:
 
 - Persistent TLS FIX order-entry session to `mm.fix.elections.kalshi.com:8228`
 - `TargetCompID=KalshiNR`
@@ -17,7 +17,7 @@ Preferred low-latency mode is now staged behind `KALSHI_HEDGE_ORDER_MODE=fix_ioc
 - `UseDollars=Y` fixed-point price format by default
 - no automatic retry after ambiguous state
 
-Default rollback mode remains supported public V2 event orders as aggressive marketable IOC orders:
+Production-viable fallback mode remains supported public V2 event orders as aggressive marketable IOC orders:
 
 - `POST /trade-api/v2/portfolio/events/orders`
 - `side=bid` for YES, `side=ask` for NO-equivalent YES-book execution
@@ -27,7 +27,7 @@ Default rollback mode remains supported public V2 event orders as aggressive mar
 - `self_trade_prevention_type=taker_at_cross`
 - `cancel_order_on_pause=true`
 
-Both routes are capped marketable limits, not uncapped market orders. They cross available liquidity immediately up to a strict price/cost cap, cancel the unfilled remainder, and keep all fills visible through normal accounting and reconciliation.
+Both routes are capped marketable limits, not uncapped market orders. They cross available liquidity immediately up to a strict price/cost cap, cancel the unfilled remainder, and keep all fills visible through normal accounting and reconciliation. When FIX access is unavailable, `LIVE_ORDER_PLACEMENT_MODE=parallel_quick` plus `KALSHI_HEDGE_ORDER_MODE=public_v2` is the fastest supported deployable route because it dispatches Kalshi public V2 IOC and Polymarket exact-share FAK concurrently.
 
 ## Official Surface Review
 
@@ -40,6 +40,7 @@ Both routes are capped marketable limits, not uncapped market orders. They cross
 - FIX non-retransmission order entry uses `KalshiNR` and requires `ResetSeqNumFlag=Y` on logon. Only one FIX connection is allowed per API key.
 - FIX subpenny/dollar price format is enabled by logon tag `21005=Y`, letting order prices use fixed-point dollars instead of whole-cent integers.
 - Kalshi WebSockets provide authenticated orderbook deltas and fill notifications. They are still the right source for quote freshness and post-submit fill verification, not an order submission mechanism.
+- Hostinger production FIX staging on June 14, 2026 returned a Kalshi FIX logout reason: `API usage level is not allowed for FIX`. Treat FIX as externally blocked until Kalshi enables that access level.
 
 Sources:
 
@@ -131,6 +132,18 @@ Qualified signal event
   -> any reject/partial/timeout/ambiguous state remains a strict failure
 ```
 
+Supported deployable fallback while FIX access is blocked:
+
+```text
+Qualified signal event
+  -> refreshed quote/collateral/readiness preflight
+  -> parallel dispatch:
+       Kalshi public V2 marketable limit IOC
+       Polymarket exact-share marketable FAK
+  -> both exact fills succeed
+  -> any reject/partial/timeout/ambiguous state remains a strict failure
+```
+
 ## Operational Setting
 
 ```bash
@@ -155,6 +168,20 @@ Hostinger staging:
 
 ```bash
 HOSTINGER_SSH_TARGET=root@187.77.145.117 npm run hostinger:stage-fix-ioc
+```
+
+Staged deployable public V2 parallel quick:
+
+```bash
+LIVE_ORDER_PLACEMENT_MODE=parallel_quick
+KALSHI_HEDGE_ORDER_MODE=public_v2
+LIVE_KALSHI_HEDGE_TIME_IN_FORCE=immediate_or_cancel
+```
+
+Hostinger staging:
+
+```bash
+HOSTINGER_SSH_TARGET=root@187.77.145.117 npm run hostinger:stage-public-v2-parallel-quick
 ```
 
 Rollback:

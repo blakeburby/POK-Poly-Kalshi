@@ -1793,7 +1793,7 @@ function kalshiTimeInForce(
 ): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {
   if (isLimitRestMode(context)) return "good_till_canceled";
   if (context.placementMode === "parallel_market") return "immediate_or_cancel";
-  if (context.placementMode === "polymarket_first_exact") return hedgeTimeInForce;
+  if (context.placementMode === "polymarket_first_exact" || context.placementMode === "parallel_quick") return hedgeTimeInForce;
   return "fill_or_kill";
 }
 
