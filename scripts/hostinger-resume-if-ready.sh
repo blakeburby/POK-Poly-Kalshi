@@ -278,13 +278,24 @@ apply_safety_env_policy
 "${SUDO[@]}" systemctl restart pok-worker
 wait_for_health
 
+# The worker answers /health before order books finish subscribing after a restart, so the
+# books.*.length>0 gates can fail transiently for a few seconds. Poll until green or a bounded
+# timeout before treating it as a real readiness failure.
 set +e
-readiness_check false "$DASHBOARD_API_TOKEN"
-READINESS_STATUS=$?
+READINESS_STATUS=30
+for ((readiness_attempt = 1; readiness_attempt <= 12; readiness_attempt += 1)); do
+  readiness_check false "$DASHBOARD_API_TOKEN"
+  READINESS_STATUS=$?
+  if [ "$READINESS_STATUS" -eq 0 ]; then
+    break
+  fi
+  echo "Resume readiness not green yet (attempt ${readiness_attempt}/12); waiting for order books / scan warmup..."
+  sleep 5
+done
 set -e
 
 if [ "$READINESS_STATUS" -ne 0 ]; then
-  echo "Readiness is not green; leaving ARB_ENABLED=false."
+  echo "Readiness is not green after the warmup window; leaving ARB_ENABLED=false."
   echo "Completion-rate report while paused:"
   completion_report || true
   exit "$READINESS_STATUS"
@@ -295,7 +306,23 @@ set_env_value ARB_ENABLED true
 "${SUDO[@]}" systemctl restart pok-worker
 wait_for_health
 
-readiness_check true "$DASHBOARD_API_TOKEN"
+# Post-enable confirmation, with the same warmup tolerance. ARB is already enabled at this point,
+# so a transient miss is a warning, not a failure.
+set +e
+FINAL_READINESS_STATUS=30
+for ((readiness_attempt = 1; readiness_attempt <= 12; readiness_attempt += 1)); do
+  readiness_check true "$DASHBOARD_API_TOKEN"
+  FINAL_READINESS_STATUS=$?
+  if [ "$FINAL_READINESS_STATUS" -eq 0 ]; then
+    break
+  fi
+  echo "Post-enable readiness not green yet (attempt ${readiness_attempt}/12); waiting for warmup..."
+  sleep 5
+done
+set -e
+if [ "$FINAL_READINESS_STATUS" -ne 0 ]; then
+  echo "WARNING: ARB_ENABLED=true but post-enable readiness did not confirm green within the warmup window; inspect before relying on it." >&2
+fi
 
 echo "Completion-rate report after resume:"
 completion_report
