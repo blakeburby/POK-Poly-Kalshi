@@ -426,6 +426,12 @@ test("risk quarantine migration adds partial-fill quarantine audit columns", () 
   assert.match(sql, /idx_cross_venue_arb_signals_risk_quarantine_active/);
 });
 
+test("historical quarantine reconciliation treats confirmed and executed venue events as terminal", () => {
+  const script = readFileSync("scripts/reconcile-historical-quarantines.ts", "utf8");
+  assert.match(script, /const terminalOrderStatuses = new Set\(\[[\s\S]*"confirmed"/);
+  assert.match(script, /const terminalOrderStatuses = new Set\(\[[\s\S]*"executed"/);
+});
+
 test("signal persistence blocks live candidates with same-window exposure", async () => {
   const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
   const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });

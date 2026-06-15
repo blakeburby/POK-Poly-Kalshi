@@ -60,6 +60,8 @@ type Queryable = {
 };
 
 const terminalOrderStatuses = new Set([
+  "confirmed",
+  "executed",
   "filled",
   "matched",
   "canceled",
