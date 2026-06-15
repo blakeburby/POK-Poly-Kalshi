@@ -59,7 +59,7 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
           </div>
         </GridPanel>
 
-        <GridPanel title="Drawdown · Underwater" dot="amber" span={8} bodyClassName="h-[240px] p-2"
+        <GridPanel title="Drawdown · Underwater" dot="stale" span={8} bodyClassName="h-[240px] p-2"
           right={<span className="font-mono text-[11px] tabular-nums text-amber">max {fmtUsd((a?.maxDrawdown ?? 0) * size)}</span>}>
           {ddPts.length > 1 ? <EChart option={drawdownAreaOption(ddPts, (v) => fmtUsd(v, { sign: true }))} /> : <Empty />}
         </GridPanel>

@@ -262,7 +262,7 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
       </GridPanel>
 
       {failures.length ? (
-        <GridPanel title="Failure / Skip Breakdown" dot="amber" span={12} bodyClassName="flex flex-wrap gap-2">
+        <GridPanel title="Failure / Skip Breakdown" dot="stale" span={12} bodyClassName="flex flex-wrap gap-2">
           {failures.map(([reason, count]) => (
             <div key={reason} className="flex items-center gap-2 rounded-sm border border-line bg-surface-2/50 px-2.5 py-1.5">
               <Badge variant="down">{count}</Badge>

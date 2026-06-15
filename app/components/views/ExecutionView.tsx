@@ -105,7 +105,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
       </Grid>
 
       <Grid>
-        <GridPanel title="Realized Slippage vs Time · by Outcome" dot="amber" span={8} bodyClassName="h-[240px] p-2" right={<Legend />}>
+        <GridPanel title="Realized Slippage vs Time · by Outcome" dot="stale" span={8} bodyClassName="h-[240px] p-2" right={<Legend />}>
           {scatter.length ? (
             <EChart
               option={scatterOption({

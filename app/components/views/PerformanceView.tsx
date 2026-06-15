@@ -94,7 +94,7 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
         <GridPanel title="Per-Bucket Net PnL + Drawdown" dot="live" span={7} bodyClassName="h-[240px] p-2">
           <EChart option={pnlBarsDrawdownOption(bars, fmt$)} />
         </GridPanel>
-        <GridPanel title="Rolling Drawdown" dot="amber" span={5} bodyClassName="h-[240px] p-2"
+        <GridPanel title="Rolling Drawdown" dot="stale" span={5} bodyClassName="h-[240px] p-2"
           right={<span className="font-mono text-[11px] tabular-nums text-amber">max {fmtUsd(usd(a.maxDrawdown))}</span>}>
           <EChart option={drawdownAreaOption(ddPts, fmt$)} />
         </GridPanel>
