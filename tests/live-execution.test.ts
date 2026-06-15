@@ -3012,7 +3012,9 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveKalshiHedgeTimeInForce, "fill_or_kill");
   assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "immediate_or_cancel" }).liveKalshiHedgeTimeInForce, "immediate_or_cancel");
   assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "fill_or_kill" }).liveKalshiHedgeTimeInForce, "fill_or_kill");
-  assert.equal(loadConfig({}).liveOrderTimeoutMs, 3_500);
+  // Kept at 2500 to satisfy the execution.orderTimeoutMs<=2500 readiness gate (bounds the worst-case
+  // leg1->leg2 one-sided window); FOK kills return fast so the bounded retry does not need a longer timeout.
+  assert.equal(loadConfig({}).liveOrderTimeoutMs, 2_500);
   assert.equal(loadConfig({}).liveHedgeRetryAttempts, 2);
   assert.equal(loadConfig({ LIVE_HEDGE_RETRY_ATTEMPTS: "0" }).liveHedgeRetryAttempts, 0);
   assert.equal(loadConfig({ KALSHI_HEDGE_ORDER_MODE: "fix_ioc" }).kalshiHedgeOrderMode, "fix_ioc");
@@ -3021,7 +3023,7 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).kalshiFixTargetCompId, "KalshiNR");
   assert.equal(loadConfig({}).kalshiFixHeartbeatSeconds, 10);
   assert.equal(loadConfig({}).kalshiFixConnectTimeoutMs, 1_500);
-  assert.equal(loadConfig({}).kalshiFixOrderResponseTimeoutMs, 3_500); // derives from LIVE_ORDER_TIMEOUT_MS default (now 3500)
+  assert.equal(loadConfig({}).kalshiFixOrderResponseTimeoutMs, 2_500); // derives from LIVE_ORDER_TIMEOUT_MS default
   assert.equal(loadConfig({ KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS: "2000" }).kalshiFixOrderResponseTimeoutMs, 2_000);
   assert.equal(loadConfig({}).kalshiFixUseDollars, true);
   assert.equal(loadConfig({ KALSHI_FIX_USE_DOLLARS: "false" }).kalshiFixUseDollars, false);

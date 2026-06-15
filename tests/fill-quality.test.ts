@@ -197,7 +197,7 @@ test("fill quality deterministically penalizes thin stale skewed high-latency bo
     }),
     recentSignals: exactSamples().map((sample) => ({
       ...sample,
-      // Near the 3500ms order timeout default (>= 0.85 * timeout = 2975ms) so the RTT penalty fires.
+      // Well above 0.85 * the 2500ms order timeout default (2125ms) so the RTT penalty fires.
       executionTimings: { kalshiOrderRttMs: 3100, polymarketOrderRttMs: 3300 },
     })),
     config: config(),

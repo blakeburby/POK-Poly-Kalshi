@@ -89,7 +89,7 @@ apply_safety_env_policy() {
   fi
   set_env_value LIVE_ORDER_PLACEMENT_MODE "$placement_mode"
   set_env_value LIVE_KALSHI_HEDGE_TIME_IN_FORCE fill_or_kill
-  set_env_value LIVE_ORDER_TIMEOUT_MS 3500
+  set_env_value LIVE_ORDER_TIMEOUT_MS 2500
   set_env_value LIVE_HEDGE_RETRY_ATTEMPTS 2
   set_env_value LIVE_HEDGE_MAX_LOSS_DOLLARS 0.03
   set_env_value POLYMARKET_ORDER_TYPE FAK
