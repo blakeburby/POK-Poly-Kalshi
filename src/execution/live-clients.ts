@@ -1244,12 +1244,18 @@ export class KalshiFixOrderClient implements VenueOrderClient {
   }
 
   private supportsPlacementMode(mode: LiveOrderContext["placementMode"]): boolean {
-    return mode === "polymarket_first_exact" || mode === "parallel_quick" || mode === "parallel_market";
+    // kalshi_first_exact stages the reliable integer Kalshi leg FIRST; allowing it over the persistent FIX
+    // session (Phase B #9 prerequisite) lets the FIX ExecutionReport double as the first-leg confirmation and
+    // skips per-order TLS. Inert until KALSHI_HEDGE_ORDER_MODE=fix_ioc + LIVE_ORDER_PLACEMENT_MODE=kalshi_first_exact.
+    return mode === "polymarket_first_exact"
+      || mode === "kalshi_first_exact"
+      || mode === "parallel_quick"
+      || mode === "parallel_market";
   }
 
   async preflightOrder(_leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     if (!this.supportsPlacementMode(context.placementMode)) {
-      return "Kalshi FIX IOC mode is only supported for polymarket_first_exact, parallel_market, or parallel_quick";
+      return "Kalshi FIX IOC mode is only supported for polymarket_first_exact, kalshi_first_exact, parallel_market, or parallel_quick";
     }
     const readiness = await this.readiness(context.requestedAt ?? Date.now());
     context.preflight = {
@@ -1262,7 +1268,7 @@ export class KalshiFixOrderClient implements VenueOrderClient {
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     if (!this.supportsPlacementMode(context.placementMode)) {
-      throw new Error("Kalshi FIX IOC mode is only supported for polymarket_first_exact, parallel_market, or parallel_quick");
+      throw new Error("Kalshi FIX IOC mode is only supported for polymarket_first_exact, kalshi_first_exact, parallel_market, or parallel_quick");
     }
     const requestedAt = context.requestedAt ?? Date.now();
     const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
