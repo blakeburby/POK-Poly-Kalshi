@@ -17,7 +17,7 @@ import {
 import { useDashboardStore, type ViewId } from "@/store/dashboard-store";
 import { cn } from "@/lib/utils";
 
-const NAV: Array<{ id: ViewId; label: string; icon: React.ElementType; hot: string }> = [
+const NAV: Array<{ id: ViewId; label: string; icon: React.ComponentType<{ className?: string; strokeWidth?: number }>; hot: string }> = [
   { id: "overview", label: "Overview", icon: LayoutGrid, hot: "1" },
   { id: "performance", label: "Performance", icon: LineChart, hot: "2" },
   { id: "execution", label: "Execution", icon: Zap, hot: "3" },
