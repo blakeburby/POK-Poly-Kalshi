@@ -592,6 +592,8 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
       liveOrderTimeoutMs: 2500,
       liveHedgeMaxLossDollars: 5,
       liveHedgeFeeBufferDollars: 1,
+      liveHedgeMinCrossTicks: 2,
+      liveKalshiHedgeTimeInForce: "fill_or_kill",
       liveOrderPlacementMode: "parallel_fok",
       liveAggressiveLimitRestMs: 400,
       liveParallelExecutionEnabled: true,
