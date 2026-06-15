@@ -785,9 +785,25 @@ export class KalshiOrderClient implements VenueOrderClient {
 
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
-    const readiness = await this.checkReadiness(context.requestedAt ?? Date.now(), {
+    // LA1: reuse the warm readiness cache (skipping the ~150ms Kalshi balance RTT, and naturally de-duping the
+    // executor's second preflight) ONLY when the cache is fresh (kept hot by the warm loop) AND the last-seen
+    // balance clears the required collateral by a safety margin. On a thin account or a stale cache we force a
+    // fresh balance check, because placeOrder() trusts this readiness without re-fetching — reusing stale
+    // balance here could let an underfunded hedge through and resurrect the insufficient_balance-after-fill
+    // one-sided failure. So the latency win only materializes once the account is funded with headroom.
+    const now = context.requestedAt ?? Date.now();
+    const cached = this.cachedReadiness;
+    const freshMs = Math.max(2_000, this.config.liveHotPathWarmIntervalMs * 2);
+    const balanceMargin = Math.max(this.config.liveCollateralBufferDollars, requiredCollateral * 0.1);
+    const canReuseCache = cached != null
+      && cached.ready === true
+      && cached.balance != null
+      && cached.balance + 1e-9 >= requiredCollateral + balanceMargin
+      && (cached.requiredCollateral ?? 0) + 1e-9 >= requiredCollateral
+      && now - (cached.lastCheckedAt ?? 0) < freshMs;
+    const readiness = await this.checkReadiness(now, {
       requiredCollateral,
-      force: true,
+      force: !canReuseCache,
     });
     context.preflight = {
       ...context.preflight,

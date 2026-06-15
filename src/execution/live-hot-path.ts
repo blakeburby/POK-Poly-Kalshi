@@ -231,7 +231,19 @@ export class LiveExposureCache {
   }
 
   private async ensureFresh(now = this.now()): Promise<string | null> {
-    if (!this.status().reason) return null;
+    const ageMs = this.refreshedAt == null ? Number.POSITIVE_INFINITY : Math.max(0, now - this.refreshedAt);
+    if (ageMs <= this.maxAgeMs) return null;
+    // LA2: within a SOFT-stale window, serve last-good data and kick a BACKGROUND refresh so the hot path
+    // never blocks on a cold multi-query DB refresh (the source of the multi-second / 27s submit stalls when
+    // the pg pool is contended by an in-flight scan). A HARD ceiling (3x maxAge) still forces a synchronous
+    // refresh + block, so exposure / quarantine / exact-exposure / execution-quality decisions are never made
+    // on dangerously old data. observeSignal() updates the cache synchronously after every fill, so the bot's
+    // own freshly-created exposure is always reflected immediately regardless of this soft window.
+    const hardMaxAgeMs = Math.max(this.maxAgeMs * 3, this.maxAgeMs + 5_000);
+    if (this.refreshedAt != null && ageMs <= hardMaxAgeMs) {
+      void this.refresh(now).catch(() => undefined);
+      return null;
+    }
     try {
       await this.refresh(now);
     } catch (error) {

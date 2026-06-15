@@ -12,8 +12,14 @@ export function installLowLatencyHttpTransport(config: AppConfig): void {
   installed = true;
   const connections = Math.max(2, Math.min(16, config.executionConcurrency * 4));
   const keepAliveMsecs = Math.max(1_000, config.liveHotPathWarmIntervalMs);
+  // LA6: keep warmed order sockets alive across sparse order activity so the next order does not pay a cold
+  // TCP+TLS handshake (~150-297ms). The previous undici keepAliveTimeout of warmInterval*2 (~2s) let the
+  // socket idle out between orders. maxCachedSessions enables TLS session resumption (abbreviated handshake)
+  // when a connection does need to be re-established. We deliberately do NOT enable retries on the
+  // (non-idempotent) order POST and do NOT use TLS 1.3 0-RTT early data (order replay risk).
+  const idleKeepAliveMs = Math.max(30_000, config.liveHotPathWarmIntervalMs * 2);
   const httpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs, maxSockets: connections });
-  const httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs, maxSockets: connections });
+  const httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs, maxSockets: connections, maxCachedSessions: 100 });
 
   axios.defaults.httpAgent = httpAgent;
   axios.defaults.httpsAgent = httpsAgent;
@@ -21,8 +27,8 @@ export function installLowLatencyHttpTransport(config: AppConfig): void {
   setGlobalDispatcher(new Agent({
     connections,
     pipelining: 1,
-    keepAliveTimeout: Math.max(1_000, config.liveHotPathWarmIntervalMs * 2),
-    keepAliveMaxTimeout: 60_000,
+    keepAliveTimeout: idleKeepAliveMs,
+    keepAliveMaxTimeout: Math.max(60_000, idleKeepAliveMs),
   }));
 }
 

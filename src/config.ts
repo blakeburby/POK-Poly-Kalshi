@@ -64,6 +64,7 @@ export interface AppConfig {
   liveHedgeFeeBufferDollars: number;
   liveHedgeMinCrossTicks: number;
   liveHedgeRetryAttempts: number;
+  liveHedgeRetryBudgetMs: number;
   liveOrderPlacementMode: LiveOrderPlacementMode;
   kalshiHedgeOrderMode: LiveKalshiHedgeOrderMode;
   liveAggressiveLimitRestMs: number;
@@ -290,6 +291,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", 10),
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
     liveHedgeRetryAttempts: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_ATTEMPTS", 2)),
+    liveHedgeRetryBudgetMs: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_BUDGET_MS", 1_500)),
     liveHedgeMaxLossDollars,
     liveHedgeFeeBufferDollars,
     liveHedgeMinCrossTicks,

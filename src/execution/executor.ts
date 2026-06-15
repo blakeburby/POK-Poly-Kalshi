@@ -554,7 +554,14 @@ export class LiveExecutor implements ArbExecutor {
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
       requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
     };
-    const refreshedPreflightOrders = placementMode === "parallel_quick"
+    // LA3: re-preflight Polymarket too in the share-limit presign modes so it RE-PRESIGNS at the refreshed
+    // capped price. Otherwise the order is presigned once at the initial price, the post-preflight quote
+    // refresh moves the cap, and the submit finds the cached signature stale (price_changed) and re-signs
+    // inline on the first-leg critical path (polymarketSignMs avg 81 / p95 389). Re-presign is local-only
+    // (cached hot readiness + cached order book; just the EIP-712 sign) and runs in parallel with the
+    // now-cached Kalshi preflight, so the submit reuses the signature (~3ms) instead of re-signing.
+    const refreshesPolymarket = placementMode === "parallel_quick" || placementMode === "polymarket_first_exact";
+    const refreshedPreflightOrders = refreshesPolymarket
       ? [
         { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
         { client: this.polymarketClient, leg: prepared.polymarket.leg, context: polymarketContext },
@@ -566,8 +573,8 @@ export class LiveExecutor implements ArbExecutor {
     if (refreshedKalshiPreflight) {
       const blockedAt = this.now();
       return this.skippedWithQuoteQuality(
-        placementMode === "parallel_quick"
-          ? `live parallel_quick refreshed preflight failed: ${refreshedKalshiPreflight}`
+        refreshesPolymarket
+          ? `live refreshed preflight failed: ${refreshedKalshiPreflight}`
           : `live Kalshi hedge collateral revalidation failed: ${refreshedKalshiPreflight}`,
         prepared.quoteSnapshot,
         this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
@@ -927,7 +934,7 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketSubmittedAt = this.now();
     const pendingPolymarket = this.pendingVenueResult("polymarket", polymarketContext.clientOrderId, polymarketSubmittedAt);
     const polymarketConfirmationPromise = this.config.liveUserStreamsEnabled && this.confirmationMonitor
-      ? this.confirmVenueOrder(executionGroupId, pendingPolymarket, prepared.polymarket.leg, polymarketSubmittedAt)
+      ? this.confirmVenueOrder(executionGroupId, pendingPolymarket, prepared.polymarket.leg, polymarketSubmittedAt, { firstLegTrigger: true })
       : Promise.resolve(null);
     const polymarketRestPromise = this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, {
       ...polymarketContext,
@@ -1324,10 +1331,20 @@ export class LiveExecutor implements ArbExecutor {
     hedge: PreparedHedge,
     baseContext: LiveOrderContext,
   ): Promise<VenueOrderResult> {
+    const hedgeStartedAt = this.now();
     let result = await this.placeVenueOrder(client, hedge.leg, baseContext);
     const maxAttempts = Math.max(0, this.config.liveHedgeRetryAttempts);
+    const retryBudgetMs = Math.max(0, this.config.liveHedgeRetryBudgetMs);
     let attempt = 0;
-    while (attempt < maxAttempts && this.isHedgeRetryable(result) && candidate.expiryMs > this.now()) {
+    // Retries are bounded by attempt count, candidate expiry, AND a wall-clock budget since the first hedge
+    // submit, so a string of slow Kalshi round-trips cannot stretch the one-sided window unboundedly. FOK
+    // keeps every attempt atomic (no partial), so stopping early never strands a Kalshi partial.
+    while (
+      attempt < maxAttempts
+      && this.isHedgeRetryable(result)
+      && candidate.expiryMs > this.now()
+      && this.now() - hedgeStartedAt < retryBudgetMs
+    ) {
       attempt += 1;
       const reprepared = this.prepareVenueHedge(candidate, filledLeg, hedgeLeg, filled);
       if (typeof reprepared === "string") break;
@@ -1695,6 +1712,7 @@ export class LiveExecutor implements ArbExecutor {
     result: VenueOrderResult,
     leg: ArbLeg,
     submittedAtMs: number,
+    options: { firstLegTrigger?: boolean } = {},
   ): Promise<Record<string, unknown> | null> {
     if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return null;
     const confirmation = await this.confirmationMonitor.waitForVenueResult(result, {
@@ -1702,7 +1720,7 @@ export class LiveExecutor implements ArbExecutor {
       expectedSize: this.config.liveOrderSize,
       leg,
       submittedAtMs,
-      timeoutMs: this.confirmationTimeoutMs(result),
+      timeoutMs: this.confirmationTimeoutMs(result, options),
     });
     return this.confirmationRecord(confirmation, submittedAtMs);
   }
@@ -1841,8 +1859,14 @@ export class LiveExecutor implements ArbExecutor {
     return Object.fromEntries(entries);
   }
 
-  private confirmationTimeoutMs(result: VenueOrderResult): number {
+  private confirmationTimeoutMs(result: VenueOrderResult, options: { firstLegTrigger?: boolean } = {}): number {
     const base = Math.max(1, this.config.liveUserStreamConfirmTimeoutMs);
+    // The first-leg hedge-trigger confirmation waits on a still-pending ("unknown") result by construction,
+    // so it must NOT inherit the final-recovery extension — that turned the leg1->leg2 one-sided window into
+    // a ~5500ms stall on the no-in-range-fill branch. base (2500) stays above the measured confirmation p99
+    // (2072ms), so no real in-range fill is cut; a genuinely late/ambiguous fill is still reconciled by the
+    // final post-submit confirmation (which keeps the recovery extension below).
+    if (options.firstLegTrigger) return base;
     if (isTimeoutOrUnknownResult(result)) return base + Math.max(0, this.config.liveFinalRecoveryTimeoutMs);
     return base;
   }

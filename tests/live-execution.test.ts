@@ -123,6 +123,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveHedgeFeeBufferDollars: 0.01,
     liveHedgeMinCrossTicks: 2,
     liveHedgeRetryAttempts: 0,
+    liveHedgeRetryBudgetMs: 1_500,
     livePolymarketFirstCrossCents: 0,
     liveOrderPlacementMode: "parallel_limit_rest",
     kalshiHedgeOrderMode: "public_v2",
@@ -1047,6 +1048,41 @@ test("Kalshi order client pre-arms request during preflight and patches final pr
   assert.equal(result.metadata?.kalshiPreparedFallbackReason, null);
   assert.equal(result.metadata?.kalshiPrearmOriginalMaxBuyPrice, 0.51);
   assert.equal(result.metadata?.kalshiSubmittedMaxBuyPrice, 0.53);
+});
+
+test("LA1: Kalshi preflight reuses a warm, margin-covered readiness cache but forces a fresh balance check when thin", async () => {
+  const makeClient = (balanceDollars: string) => {
+    let balanceCalls = 0;
+    const fetchFn = async (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+        balanceCalls += 1;
+        return new Response(JSON.stringify({ balance_dollars: balanceDollars }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
+    };
+    const client = new KalshiOrderClient(config({ liveKalshiPrearmEnabled: false }), fetchFn as typeof fetch);
+    return { client, balanceCalls: () => balanceCalls };
+  };
+  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-LA1", direction: "yes", strike: 1500, ask: 0.5 };
+  const base: LiveOrderContext = { executionGroupId: "g", clientOrderId: "c", size: 5, maxBuyPrice: 1, requiredCollateral: 5.25, placementMode: "polymarket_first_exact" };
+
+  // Funded with headroom ($100 >> 5.25 + margin): first preflight forces a fetch and warms the cache; the
+  // second (the executor's refreshed preflight) reuses it -> only ONE balance RTT.
+  await withKalshiEnv(async () => {
+    const { client, balanceCalls } = makeClient("100.00");
+    assert.equal(await client.preflightOrder(leg, { ...base, requestedAt: 1_000 }), null);
+    assert.equal(await client.preflightOrder(leg, { ...base, requestedAt: 1_010 }), null);
+    assert.equal(balanceCalls(), 1);
+  });
+
+  // Thin balance (5.50, only ~0.25 over the 5.25 requirement): the safety margin forces a fresh balance check
+  // every time so a recent drawdown cannot let an underfunded hedge through -> TWO balance RTTs.
+  await withKalshiEnv(async () => {
+    const { client, balanceCalls } = makeClient("5.50");
+    assert.equal(await client.preflightOrder(leg, { ...base, requestedAt: 1_000 }), null);
+    assert.equal(await client.preflightOrder(leg, { ...base, requestedAt: 1_010 }), null);
+    assert.equal(balanceCalls(), 2);
+  });
 });
 
 test("Kalshi order client falls back to live signing when pre-armed request is stale", async () => {
@@ -3017,6 +3053,9 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveOrderTimeoutMs, 2_500);
   assert.equal(loadConfig({}).liveHedgeRetryAttempts, 2);
   assert.equal(loadConfig({ LIVE_HEDGE_RETRY_ATTEMPTS: "0" }).liveHedgeRetryAttempts, 0);
+  // LA4: bounded wall-clock budget for the hedge-retry loop (keeps the one-sided window from stretching).
+  assert.equal(loadConfig({}).liveHedgeRetryBudgetMs, 1_500);
+  assert.equal(loadConfig({ LIVE_HEDGE_RETRY_BUDGET_MS: "800" }).liveHedgeRetryBudgetMs, 800);
   assert.equal(loadConfig({ KALSHI_HEDGE_ORDER_MODE: "fix_ioc" }).kalshiHedgeOrderMode, "fix_ioc");
   assert.equal(loadConfig({}).kalshiFixHost, "mm.fix.elections.kalshi.com");
   assert.equal(loadConfig({}).kalshiFixPort, 8228);
@@ -4616,6 +4655,36 @@ test("live exposure cache reads persisted quarantine totals from the backing sto
 
   assert.equal(await cache.unresolvedRiskQuarantineExposureDollars(), 4.2);
   assert.deepEqual(await cache.liveRiskQuarantineStatus(), { total: 4.2, count: 1 });
+});
+
+test("LA2: exposure cache serves last-good in the soft-stale window (background refresh) and blocks past the hard ceiling", async () => {
+  let clock = 1_800_000_000_000;
+  let reads = 0;
+  let failReads = false;
+  const cache = new LiveExposureCache({
+    listLiveExposureSignals: async () => { reads += 1; if (failReads) throw new Error("db down"); return []; },
+  }, 5_000, 10, () => clock);
+  const { candidate } = liveCandidate(1_799_999_900_000);
+
+  await cache.refresh();
+  assert.equal(reads, 1);
+  // Fresh (age 0 <= maxAge 5000): no block, no new read.
+  assert.equal(await cache.liveExposureBlockReason(candidate, clock, 3), null);
+  assert.equal(reads, 1);
+
+  // Soft-stale (age 8000: > maxAge 5000, <= hard 15000): serves last-good (no block) and kicks a BACKGROUND
+  // refresh. Make that refresh fail so freshness does not advance, to set up the hard-ceiling case.
+  failReads = true;
+  clock += 8_000;
+  assert.equal(await cache.liveExposureBlockReason(candidate, clock, 3), null);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(reads, 2); // background refresh attempted (and failed silently), hot path did NOT block
+
+  // Hard-stale (age 18000 > hard ceiling 15000): must block on a synchronous refresh; refresh fails -> blocks.
+  clock += 10_000;
+  const blocked = await cache.liveExposureBlockReason(candidate, clock, 3);
+  assert.match(blocked ?? "", /refresh failed|stale/);
 });
 
 test("live exposure cache enforces submitted attempt cap from warmed attempts and observed signals", async () => {
