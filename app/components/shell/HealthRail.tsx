@@ -8,10 +8,22 @@ import { useNow } from "@/hooks/useNow";
 import { StatusDot, Label, MiniBar } from "@/components/ui/stat";
 import { cn } from "@/lib/utils";
 
+/** Desktop right rail — hidden on mobile (surfaced via MobileHealthSheet instead). */
 export function HealthRail() {
   const snap = useDashboardStore((s) => s.snapshot);
+  if (!snap) return <aside className="hidden w-[238px] shrink-0 border-l border-line bg-surface/60 lg:block" />;
+  return (
+    <aside className="hidden w-[238px] shrink-0 flex-col overflow-y-auto border-l border-line bg-surface/60 lg:flex">
+      <HealthRailBody />
+    </aside>
+  );
+}
+
+/** Shared content used by both the desktop rail and the mobile bottom sheet. */
+export function HealthRailBody() {
+  const snap = useDashboardStore((s) => s.snapshot);
   const now = useNow(2000);
-  if (!snap) return <aside className="w-[238px] shrink-0 border-l border-line bg-surface/60" />;
+  if (!snap) return null;
 
   const op = operationalStatus(snap);
   const checks = healthChecks(snap, now);
@@ -21,7 +33,7 @@ export function HealthRail() {
   const size = orderSize(snap);
 
   return (
-    <aside className="flex w-[238px] shrink-0 flex-col border-l border-line bg-surface/60">
+    <>
       {/* operational headline */}
       <div
         className={cn(
@@ -96,7 +108,7 @@ export function HealthRail() {
           <span className="font-mono text-[11px] tabular-nums text-fg-secondary">{size} sh</span>
         </div>
       </div>
-    </aside>
+    </>
   );
 }
 

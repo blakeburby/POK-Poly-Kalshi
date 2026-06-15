@@ -55,28 +55,29 @@ export function KpiStrip() {
   const week = (a?.weekly.netPnl ?? 0) * size;
   const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? 0;
 
+  // Key metrics first so the most important are visible before any horizontal scroll on mobile.
   const kpis: Kpi[] = [
     { label: "Net PnL · Today", value: fmtUsd(day, { sign: true }), tone: day >= 0 ? "up" : "down", emphasis: true, spark: pnlSpark },
-    { label: "Net PnL · 1H", value: fmtUsd(hour, { sign: true }), tone: hour >= 0 ? "up" : "down" },
-    { label: "Net PnL · 7D", value: fmtUsd(week, { sign: true }), tone: week >= 0 ? "up" : "down" },
     { label: "Account Equity", value: fmtUsd(eq.total), tone: "neutral", emphasis: true, spark: equitySpark },
-    { label: "Win Rate", value: fmtPct(a?.daily.winRate), tone: "neutral" },
-    { label: "Per-Trade Sharpe", value: a?.daily.sharpeRatio != null ? a.daily.sharpeRatio.toFixed(2) : "–", tone: "neutral" },
+    { label: "Open Positions", value: fmtNum(openPositionCount(snap)), tone: "neutral" },
+    { label: "Unhedged Exposure", value: fmtUsd(unhedged), tone: unhedged > 0 ? "down" : "up" },
     { label: "Fill Success", value: fmtPct(a?.daily.fillRate), tone: (a?.daily.fillRate ?? 0) >= 0.6 ? "up" : "stale" },
     { label: "Hedge / Exact-Pair", value: fmtPct(exec?.executionQuality?.exactPairFillRate), tone: (exec?.executionQuality?.exactPairFillRate ?? 0) >= 0.6 ? "up" : "stale" },
     { label: "Avg Edge Captured", value: fmtCents(exec?.executionQuality?.estimatedExecutableEdge), tone: "up" },
-    { label: "Open Positions", value: fmtNum(openPositionCount(snap)), tone: "neutral" },
-    { label: "Unhedged Exposure", value: fmtUsd(unhedged), tone: unhedged > 0 ? "down" : "up" },
+    { label: "Net PnL · 1H", value: fmtUsd(hour, { sign: true }), tone: hour >= 0 ? "up" : "down" },
+    { label: "Net PnL · 7D", value: fmtUsd(week, { sign: true }), tone: week >= 0 ? "up" : "down" },
+    { label: "Win Rate", value: fmtPct(a?.daily.winRate), tone: "neutral" },
+    { label: "Per-Trade Sharpe", value: a?.daily.sharpeRatio != null ? a.daily.sharpeRatio.toFixed(2) : "–", tone: "neutral" },
   ];
 
   return (
-    <div className="flex h-[var(--kpi-h)] shrink-0 items-stretch gap-px overflow-x-auto border-b border-line bg-surface/40">
+    <div className="flex h-[var(--kpi-h)] shrink-0 snap-x snap-mandatory items-stretch gap-px overflow-x-auto scroll-px-3 border-b border-line bg-surface/40">
       {kpis.map((k) => (
         <div
           key={k.label}
           className={cn(
-            "flex min-w-[118px] flex-1 flex-col justify-center gap-1 border-r border-line/60 px-3.5",
-            k.emphasis && "min-w-[150px]",
+            "flex min-w-[44vw] snap-start flex-col justify-center gap-1 border-r border-line/60 px-3.5 sm:min-w-[118px] sm:flex-1",
+            k.emphasis && "sm:min-w-[150px]",
           )}
         >
           <span className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-fg-muted">{k.label}</span>
@@ -103,7 +104,7 @@ export function KpiStrip() {
 
 function TradeableTile({ ok, riskState }: { ok: boolean; riskState: string }) {
   return (
-    <div className="flex min-w-[150px] flex-col justify-center gap-1 bg-surface-2/40 px-3.5">
+    <div className="flex min-w-[44vw] snap-start flex-col justify-center gap-1 bg-surface-2/40 px-3.5 sm:min-w-[150px]">
       <span className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-fg-muted">System</span>
       <div className="flex items-center gap-2">
         <span className={cn("size-2.5 rounded-full", ok ? "bg-live heartbeat" : "bg-halt")} />

@@ -53,3 +53,35 @@ export const SheetContent = React.forwardRef<
   </DialogPrimitive.Portal>
 ));
 SheetContent.displayName = "SheetContent";
+
+/** Bottom sheet (mobile). Slides up; capped height with internal scroll. */
+export const BottomSheetContent = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { title?: string }
+>(({ className, children, title, ...props }, ref) => (
+  <DialogPrimitive.Portal>
+    <Overlay />
+    <DialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-xl border-t border-line-strong bg-surface",
+        "shadow-2xl outline-none",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom data-[state=open]:duration-200",
+        className,
+      )}
+      {...props}
+    >
+      {title ? <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title> : null}
+      <div className="flex items-center justify-center pt-2">
+        <span className="h-1 w-9 rounded-full bg-line-strong" />
+      </div>
+      <DialogPrimitive.Close className="absolute right-3 top-3 z-10 rounded-sm p-1 text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg">
+        <X className="size-4" />
+      </DialogPrimitive.Close>
+      <div className="min-h-0 overflow-y-auto" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {children}
+      </div>
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+));
+BottomSheetContent.displayName = "BottomSheetContent";

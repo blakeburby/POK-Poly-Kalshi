@@ -67,12 +67,12 @@ export function PanelHeader({
         />
       ) : null}
       <span
-        className="truncate font-mono text-[10.5px] font-medium uppercase tracking-[0.12em] text-fg-secondary"
+        className="min-w-0 truncate font-mono text-[10.5px] font-medium uppercase tracking-[0.12em] text-fg-secondary"
         style={accent ? { color: accent } : undefined}
       >
         {title}
       </span>
-      {right ? <div className="ml-auto flex items-center gap-2">{right}</div> : null}
+      {right ? <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">{right}</div> : null}
     </div>
   );
 }

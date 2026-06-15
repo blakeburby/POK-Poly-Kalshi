@@ -51,7 +51,7 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
 
   return (
     <ViewScroll>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-fg-muted">Window</span>
           <Tabs value={win} onValueChange={(v) => setWin(v as AnalyticsWindow)}>
@@ -62,7 +62,7 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
             </TabsList>
           </Tabs>
         </div>
-        <span className="font-mono text-[10px] uppercase tracking-wide text-fg-faint">
+        <span className="hidden truncate font-mono text-[10px] uppercase tracking-wide text-fg-faint sm:inline">
           per-share PnL × {size}-share clip · {a.filledTrades} fills
         </span>
       </div>

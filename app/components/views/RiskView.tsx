@@ -131,8 +131,8 @@ function classBadge(c: ArbCandidate): { variant: "up" | "amber" | "down"; label:
 function StructureTable({ structures }: { structures: ArbCandidate[] }) {
   if (!structures.length) return <Empty>No synthetic structures</Empty>;
   return (
-    <div className="max-h-[240px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[240px] overflow-auto">
+      <table className="w-full min-w-[640px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <Th>Strikes</Th>
@@ -169,8 +169,8 @@ function StructureTable({ structures }: { structures: ArbCandidate[] }) {
 function RecoveryTable({ rows, size }: { rows: DashboardSnapshot["recentSignals"]; size: number }) {
   if (!rows.length) return <Empty>No open quarantines or recoveries — exposure clean</Empty>;
   return (
-    <div className="max-h-[280px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[280px] overflow-auto">
+      <table className="w-full min-w-[640px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <Th>Time</Th>

@@ -24,7 +24,7 @@ export function StatusBar() {
     : [];
 
   return (
-    <footer className="flex h-[var(--statusbar-h)] shrink-0 items-center gap-4 overflow-x-auto border-t border-line bg-surface px-3 font-mono text-[10px] text-fg-muted">
+    <footer className="hidden h-[var(--statusbar-h)] shrink-0 items-center gap-4 overflow-x-auto border-t border-line bg-surface px-3 font-mono text-[10px] text-fg-muted lg:flex">
       <span className="uppercase tracking-[0.1em] text-fg-faint">{source === "mock" ? "DEMO" : "WORKER"}</span>
       {items.map(([k, v]) => (
         <span key={k} className="flex shrink-0 items-center gap-1.5">
