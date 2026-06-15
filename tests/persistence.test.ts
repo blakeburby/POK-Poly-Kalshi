@@ -448,6 +448,8 @@ test("historical quarantine reconciliation ignores unrelated positive positions 
   const script = readFileSync("scripts/reconcile-historical-quarantines.ts", "utf8");
   assert.match(script, /targetPositivePositions/);
   assert.match(script, /positive-value positions for unresolved quarantine markets/);
+  assert.match(script, /positions: positions\.map\(summarizePosition\)/);
+  assert.match(script, /Number\(kalshi\.positionCount/);
   assert.match(script, /Number\(kalshi\.positionValueDollars/);
 });
 

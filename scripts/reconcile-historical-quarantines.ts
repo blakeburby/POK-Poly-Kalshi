@@ -307,6 +307,27 @@ async function fetchJson(url: string, token?: string): Promise<unknown> {
   return text ? JSON.parse(text) as unknown : {};
 }
 
+function summarizePosition(position: JsonRecord): JsonRecord {
+  return {
+    id: position.id ?? null,
+    market: position.market ?? null,
+    marketId: position.marketId ?? position.market_id ?? null,
+    ticker: position.ticker ?? null,
+    contractId: position.contractId ?? position.contract_id ?? null,
+    assetId: position.assetId ?? position.asset_id ?? null,
+    tokenId: position.tokenId ?? position.token_id ?? null,
+    outcome: position.outcome ?? null,
+    side: position.side ?? null,
+    shares: numberFrom(position.shares),
+    quantity: numberFrom(position.quantity),
+    count: numberFrom(position.count),
+    value: numberFrom(position.value),
+    positionValueDollars: numberFrom(position.positionValueDollars),
+    currentValue: numberFrom(position.currentValue),
+    marketValue: numberFrom(position.marketValue),
+  };
+}
+
 function summarizePlatform(value: unknown): JsonRecord {
   const platform = asRecord(value);
   const positions = asArray(platform.positions);
@@ -315,7 +336,8 @@ function summarizePlatform(value: unknown): JsonRecord {
   const unknownValuePositionCount = positions.filter((position) => numberFrom(position.shares) != null && numberFrom(position.value) == null).length;
   return {
     connectionStatus: platform.connectionStatus ?? null,
-    positions: positions.length,
+    positionCount: positions.length,
+    positions: positions.map(summarizePosition),
     openOrders: openOrders.length,
     positiveValuePositions: positions.filter((position) => Math.abs(numberFrom(position.value) ?? 0) > 0.01).length,
     unknownValuePositionCount,
@@ -511,7 +533,7 @@ function guardFailures(evidence: {
   if (Number(kalshi.openOrders ?? 0) !== 0) failures.push("Kalshi open orders are not zero");
   if (Number(polymarket.openOrders ?? 0) !== 0) failures.push("Polymarket open orders are not zero");
   if (kalshiTargetPositions == null) {
-    if (Number(kalshi.positions ?? 0) !== 0) failures.push("Kalshi positions are not zero");
+    if (Number(kalshi.positionCount ?? 0) !== 0) failures.push("Kalshi positions are not zero");
     if (Number(kalshi.positionValueDollars ?? 0) > 0.01) failures.push("Kalshi position value is positive");
   } else if (kalshiTargetPositions.length > 0) {
     failures.push("Kalshi has positive-value positions for unresolved quarantine markets");
