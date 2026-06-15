@@ -96,6 +96,8 @@ function quoteLeg(
   contract: BinaryContract | null,
   config: AppConfig,
   now: number,
+  extraCrossCents = 0,
+  maxAgeMs = config.liveQuoteMaxAgeMs,
 ): { snapshot: QuoteSnapshotLeg | null; reason: string | null; maxBuyPrice: number | null; adjustedLeg: ArbLeg | null } {
   const depthRequired = Math.max(config.liveOrderSize, config.liveMinBookDepthShares);
   if (!leg) return { snapshot: null, reason: "candidate must contain one Kalshi leg and one Polymarket leg", maxBuyPrice: null, adjustedLeg: null };
@@ -128,8 +130,8 @@ function quoteLeg(
     tickSizeChangedAt: contract.tickSizeChangedAt ?? null,
   };
 
-  if (quoteAgeMs > config.liveQuoteMaxAgeMs) {
-    return { snapshot, reason: `${leg.venue} ${leg.direction} quote is stale: age ${quoteAgeMs}ms exceeds ${config.liveQuoteMaxAgeMs}ms`, maxBuyPrice: null, adjustedLeg: null };
+  if (quoteAgeMs > maxAgeMs) {
+    return { snapshot, reason: `${leg.venue} ${leg.direction} quote is stale: age ${quoteAgeMs}ms exceeds ${maxAgeMs}ms`, maxBuyPrice: null, adjustedLeg: null };
   }
   if (topAsk == null || !finite(topAsk)) {
     return { snapshot, reason: `${leg.venue} ${leg.direction} ask is unavailable`, maxBuyPrice: null, adjustedLeg: null };
@@ -146,8 +148,12 @@ function quoteLeg(
     return { snapshot, reason: `${leg.venue} ${leg.direction} tick size changed within quote freshness window`, maxBuyPrice: null, adjustedLeg: null };
   }
 
+  // The marketable offset is at least the taker cushion; for the first/cancelable leg an extra cross
+  // offset (P1-5) can be layered on to absorb post-quote book movement. The projectedEdgeAfterFees gate
+  // below still binds, so a deeper cross can never erase guaranteed profit.
   const takerCushion = Math.max(0, config.liveTakerPriceCushionCents);
-  const maxBuyPrice = roundPrice(Math.min(1, executionVwap.worstAsk + takerCushion / 100));
+  const marketableOffsetCents = Math.max(takerCushion, Math.max(0, extraCrossCents));
+  const maxBuyPrice = roundPrice(Math.min(1, executionVwap.worstAsk + marketableOffsetCents / 100));
   return {
     snapshot: { ...snapshot, maxBuyPrice },
     reason: null,
@@ -161,13 +167,16 @@ export function evaluateLiveQuoteQuality(
   books: LiveQuoteBooks,
   config: AppConfig,
   now = Date.now(),
+  polymarketFirstCrossCents = 0,
 ): LiveQuoteEvaluation {
   const kalshiLeg = legForVenue(candidate, "kalshi");
   const polymarketLeg = legForVenue(candidate, "polymarket");
   const kalshiContract = kalshiLeg ? findContract(books, kalshiLeg) : null;
   const polymarketContract = polymarketLeg ? findContract(books, polymarketLeg) : null;
   const kalshi = quoteLeg(kalshiLeg, kalshiContract, config, now);
-  const polymarket = quoteLeg(polymarketLeg, polymarketContract, config, now);
+  // The extra cross offset (P1-5) and the optionally-tighter freshness bound (P2-10) apply ONLY to the
+  // staleness-prone Polymarket leg. The Kalshi leg keeps the standard cushion and freshness bar.
+  const polymarket = quoteLeg(polymarketLeg, polymarketContract, config, now, polymarketFirstCrossCents, config.livePolymarketQuoteMaxAgeMs ?? config.liveQuoteMaxAgeMs);
   const quoteSkewMs = kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
     ? Math.abs(kalshi.snapshot.updatedAt - polymarket.snapshot.updatedAt)
     : null;

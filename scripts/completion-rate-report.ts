@@ -91,6 +91,20 @@ function roundMetric(value: number | null): number | null {
   return Math.round(value * 10_000) / 10_000;
 }
 
+// Determine which venue is the LEADING (first-submitted) leg for a given attempt so that
+// firstLeg/hedge metrics are correct regardless of placement mode. Polymarket-led modes keep the
+// legacy mapping; Kalshi-led modes (kalshi_first_exact, kalshi_rest_then_cross) invert it. The
+// explicit execution_timings.firstVenue wins when present.
+function leadingVenue(executionStrategy: string | null, timings: Record<string, unknown>): "kalshi" | "polymarket" {
+  const recorded = String(timings.firstVenue ?? "").toLowerCase();
+  if (recorded === "kalshi" || recorded === "polymarket") return recorded;
+  const strategy = (executionStrategy ?? "").toLowerCase();
+  if (strategy.startsWith("kalshi")) return "kalshi";
+  // polymarket_first_exact, parallel_quick, and other parallel modes treat Polymarket (the FAK
+  // taker leg) as the leading leg for legacy continuity.
+  return "polymarket";
+}
+
 function failureClass(row: {
   action: string;
   completedTwoSided: boolean;
@@ -99,14 +113,14 @@ function failureClass(row: {
   failureReason: string | null;
   kalshiFillCount: number;
   polymarketFillCount: number;
-  polymarketStatus: string | null;
+  firstLegStatus: string | null;
 }): string {
   if (row.completedTwoSided) return "completed_two_sided";
   if (row.firstLegFilled && !row.hedgeFilled && row.failureReason?.toLowerCase().includes("outside configured hedge range")) {
     return "first_leg_filled_hedge_skipped_range";
   }
   if (row.firstLegFilled && !row.hedgeFilled) return "first_leg_filled_no_hedge";
-  if (!row.firstLegFilled && ["unknown", "unexpected_fill_count"].includes((row.polymarketStatus ?? "").toLowerCase())) {
+  if (!row.firstLegFilled && ["unknown", "unexpected_fill_count"].includes((row.firstLegStatus ?? "").toLowerCase())) {
     return "first_leg_unknown_or_mismatch";
   }
   if (!row.firstLegFilled) return "first_leg_no_fill";
@@ -129,8 +143,10 @@ function classify(row: AttemptRow): ClassifiedAttempt {
     && kalshiFillCount > 0
     && polymarketFillCount > 0
     && Math.abs(kalshiFillCount - polymarketFillCount) <= 0.000001;
-  const firstLegFilled = polymarketFillCount > 0;
-  const hedgeFilled = kalshiFillCount > 0;
+  const lead = leadingVenue(row.execution_strategy, timings);
+  const firstLegFilled = lead === "kalshi" ? kalshiFillCount > 0 : polymarketFillCount > 0;
+  const hedgeFilled = lead === "kalshi" ? polymarketFillCount > 0 : kalshiFillCount > 0;
+  const firstLegStatus = lead === "kalshi" ? row.kalshi_status : row.polymarket_status;
   const base = {
     action: row.action,
     executionStrategy: row.execution_strategy,
@@ -140,7 +156,7 @@ function classify(row: AttemptRow): ClassifiedAttempt {
     failureReason: row.failure_reason,
     kalshiFillCount,
     polymarketFillCount,
-    polymarketStatus: row.polymarket_status,
+    firstLegStatus,
   };
   return {
     id: Number(row.id),
@@ -207,7 +223,7 @@ async function main(): Promise<void> {
         reconciliation_resolved_at
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
-        AND execution_strategy IN ('polymarket_first_exact', 'parallel_quick')
+        AND execution_strategy IN ('polymarket_first_exact', 'parallel_quick', 'kalshi_first_exact', 'kalshi_rest_then_cross')
       ORDER BY created_at DESC, id DESC
       LIMIT $1
     `, [Math.max(limit, 20)]);
@@ -226,7 +242,7 @@ async function main(): Promise<void> {
 
     const report = {
       generatedAt: new Date().toISOString(),
-      executionStrategies: ["polymarket_first_exact", "parallel_quick"],
+      executionStrategies: ["polymarket_first_exact", "parallel_quick", "kalshi_first_exact", "kalshi_rest_then_cross"],
       qualifiedCountSampled: lastN.length,
       last2CompletionRate: roundMetric(rate(attempts.slice(0, 2).map((attempt) => attempt.completedTwoSided))),
       completionRate: roundMetric(rate(lastN.map((attempt) => attempt.completedTwoSided))),

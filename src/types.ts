@@ -3,7 +3,7 @@ import type { TradingActivitySnapshot } from "../types/trading";
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
-export type LiveOrderPlacementMode = "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
+export type LiveOrderPlacementMode = "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact" | "kalshi_first_exact";
 export type LiveKalshiHedgeOrderMode = "public_v2" | "ui_quick_order" | "fix_ioc";
 export type LiveKalshiHedgeTimeInForce = "immediate_or_cancel" | "fill_or_kill";
 export type LiveKalshiPrearmPricePolicy = "patch_after_fill";
@@ -233,7 +233,7 @@ export interface ReconciliationResolution {
   notes?: string | null;
 }
 
-export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact";
+export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact" | "kalshi_first_exact";
 
 export interface UserStreamVenueState {
   enabled: boolean;
@@ -802,6 +802,7 @@ export interface DashboardSnapshot {
     liveOrderTimeoutMs: number;
     liveHedgeMaxLossDollars: number;
     liveHedgeFeeBufferDollars: number;
+    liveHedgeMinCrossTicks: number;
     liveOrderPlacementMode?: LiveOrderPlacementMode;
     kalshiHedgeOrderMode?: LiveKalshiHedgeOrderMode;
     kalshiUiQuickOrderCapValidated?: boolean;

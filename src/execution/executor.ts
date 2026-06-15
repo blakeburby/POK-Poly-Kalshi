@@ -13,6 +13,7 @@ import {
   type LiveOrderContext,
   type VenueOrderClient,
   type VenueOrderResult,
+  type VenueUnwindOutcome,
 } from "./live-clients";
 import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
@@ -141,6 +142,7 @@ interface PreparedHedge {
   maxBuyPrice: number;
   requiredCollateral: number;
   hedgeCapPrice: number;
+  hedgeShares: number;
   quoteSnapshot: QuoteSnapshot;
 }
 
@@ -195,6 +197,9 @@ interface ExecutionMetadata {
   riskQuarantineReason?: string | null;
   riskQuarantineExposureDollars?: number | null;
   riskQuarantineEvidence?: Record<string, unknown> | null;
+  // C1: legs for the bounded auto-unwind backstop. Present only on paths that can produce a one-sided
+  // fill; absent elsewhere. The unwind is additionally gated by liveAutoUnwindEnabled (default off).
+  unwindLegs?: { kalshi: ArbLeg; polymarket: ArbLeg } | null;
 }
 
 export interface RiskQuarantineExposureReader {
@@ -413,13 +418,19 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketLeg = legForVenue(candidate, "polymarket");
     if (!kalshiLeg || !polymarketLeg) return this.failed("candidate must contain one Kalshi leg and one Polymarket leg");
 
-    let prepared = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
+    // The extra first-leg cross offset (P1-5) applies only when Polymarket is the leading/cancelable
+    // leg (polymarket_first_exact). Default 0 = no change. The cushioned-edge gate still binds.
+    const polymarketFirstCrossCents = this.config.liveOrderPlacementMode === "polymarket_first_exact"
+      ? this.config.livePolymarketFirstCrossCents
+      : 0;
+    let prepared = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
     if (typeof prepared === "string") return skipped(prepared);
 
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
     const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact"
+      || this.config.liveOrderPlacementMode === "kalshi_first_exact"
       || this.config.liveOrderPlacementMode === "parallel_market"
       || this.config.liveOrderPlacementMode === "parallel_quick"
       ? this.config.liveOrderPlacementMode
@@ -445,7 +456,7 @@ export class LiveExecutor implements ArbExecutor {
       clientOrderId: kalshiClientOrderId,
       size: this.config.liveOrderSize,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
-      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: this.kalshiPreflightCollateral(prepared, placementMode),
       orderGroupId: this.config.liveKalshiOrderGroupEnabled ? this.config.liveKalshiOrderGroupId || undefined : undefined,
       placementMode,
       limitRestMs,
@@ -503,7 +514,7 @@ export class LiveExecutor implements ArbExecutor {
         fillQualitySnapshot,
       );
     }
-    const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg);
+    const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
     if (typeof refreshed === "string") {
       return this.skippedWithQuoteQuality(
         `live quote revalidation after preflight failed: ${refreshed}`,
@@ -536,7 +547,7 @@ export class LiveExecutor implements ArbExecutor {
     kalshiContext = {
       ...kalshiContext,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
-      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: this.kalshiPreflightCollateral(prepared, placementMode),
     };
     polymarketContext = {
       ...polymarketContext,
@@ -568,6 +579,8 @@ export class LiveExecutor implements ArbExecutor {
       leadLagSnapshot,
       fillQualitySnapshot,
       expectedExecutableEdge: fillQualitySnapshot?.expectedExecutableEdge ?? null,
+      // C1: carried into every result path so a one-sided fill can be auto-unwound (when enabled).
+      unwindLegs: { kalshi: prepared.kalshi.leg, polymarket: prepared.polymarket.leg },
     };
 
     if (placementMode === "polymarket_first_exact") {
@@ -588,6 +601,42 @@ export class LiveExecutor implements ArbExecutor {
         hotGateStartedAt,
         hotGateCompletedAt,
       }, fillQualityMetadata);
+    }
+
+    if (placementMode === "kalshi_first_exact") {
+      // Structural sequencing fix (P2-8): commit the RELIABLE, INTEGER, collateral-constrained venue
+      // (Kalshi, FOK) FIRST, and submit the Polymarket hedge only after an exact Kalshi fill. The
+      // pre-Polymarket collateral gate means an underfunded/unfillable Kalshi leg aborts BEFORE any
+      // Polymarket order, so the residual failure flips from "Polymarket filled / Kalshi missing"
+      // (held fractional one-sided) to "Kalshi missing / Polymarket never sent" (flat). A true passive
+      // resting variant (kalshi_rest_then_cross) is a future refinement requiring resting-order client
+      // support and double-fill protection.
+      const kalshiPlan: VenueExecutionPlan = {
+        venue: "kalshi",
+        client: this.kalshiClient,
+        prepared: prepared.kalshi,
+        context: kalshiContext,
+        clientOrderId: kalshiClientOrderId,
+      };
+      const polymarketPlan: VenueExecutionPlan = {
+        venue: "polymarket",
+        client: this.polymarketClient,
+        prepared: prepared.polymarket,
+        context: polymarketContext,
+        clientOrderId: polymarketClientOrderId,
+      };
+      const firstDecision: SequentialFirstVenueDecision = {
+        firstVenue: "kalshi",
+        firstVenueReason: "kalshi_first_exact: commit the reliable integer Kalshi leg (FOK) first, then hedge Polymarket after an exact Kalshi fill",
+        firstVenueVwap: prepared.quoteSnapshot.kalshi?.vwap ?? prepared.kalshi.maxBuyPrice,
+      };
+      return await this.executeFirstThenHedge(candidate, executionGroupId, prepared, kalshiPlan, polymarketPlan, firstDecision, {
+        executeStartedAt,
+        preflightStartedAt,
+        preflightCompletedAt,
+        hotGateStartedAt,
+        hotGateCompletedAt,
+      }, fillQualityMetadata, "kalshi_first_exact");
     }
 
     if (this.config.liveParallelExecutionEnabled || placementMode === "parallel_market") {
@@ -650,10 +699,40 @@ export class LiveExecutor implements ArbExecutor {
     const firstDecision = this.selectSequentialFirstVenue(prepared);
     const firstPlan = firstDecision.firstVenue === "kalshi" ? kalshiPlan : polymarketPlan;
     const hedgePlan = firstPlan.venue === "kalshi" ? polymarketPlan : kalshiPlan;
+    return await this.executeFirstThenHedge(candidate, executionGroupId, prepared, firstPlan, hedgePlan, firstDecision, {
+      executeStartedAt,
+      preflightStartedAt,
+      preflightCompletedAt,
+      hotGateStartedAt,
+      hotGateCompletedAt,
+    }, fillQualityMetadata, "sequential_hedge");
+  }
+
+  // Shared "place the first leg, then hedge the other after an exact first-leg fill" machinery used by
+  // both the legacy sequential_hedge path (which picks the cheaper leg) and kalshi_first_exact (which
+  // forces Kalshi first). The first leg is submitted whole; only an exact fill triggers the hedge, so a
+  // first-leg miss never sends the second order (flat). The hedge is sized to the actual first-leg fill
+  // (P0-1) and retried on a clean miss (P0-3). A hedge cap/preflight failure declines the hedge and
+  // routes any one-sided residual to the existing lock/quarantine path unchanged.
+  private async executeFirstThenHedge(
+    candidate: ArbCandidate,
+    executionGroupId: string,
+    prepared: PreparedExecution,
+    firstPlan: VenueExecutionPlan,
+    hedgePlan: VenueExecutionPlan,
+    firstDecision: SequentialFirstVenueDecision,
+    timings: {
+      executeStartedAt: number;
+      preflightStartedAt: number;
+      preflightCompletedAt: number;
+      hotGateStartedAt: number;
+      hotGateCompletedAt: number;
+    },
+    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs">,
+    executionStrategy: ExecutionStrategy,
+  ): Promise<ExecutionResult> {
     const results: Partial<Record<Venue, VenueOrderResult>> = {};
 
-    // Capture the cheap leg first. The old Kalshi-first sequence let fast-moving
-    // Polymarket mispricings disappear before the Polymarket order was ever sent.
     const firstResult = await this.placeVenueOrder(firstPlan.client, firstPlan.prepared.leg, firstPlan.context);
     results[firstPlan.venue] = firstResult;
     if (!this.isExactVenueFill(firstResult)) {
@@ -665,14 +744,14 @@ export class LiveExecutor implements ArbExecutor {
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
         ...fillQualityMetadata,
-        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
-          preflightStartedAt,
-          preflightCompletedAt,
-          hotGateStartedAt,
-          hotGateCompletedAt,
+        executionTimings: this.executionTimings(timings.executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+          preflightStartedAt: timings.preflightStartedAt,
+          preflightCompletedAt: timings.preflightCompletedAt,
+          hotGateStartedAt: timings.hotGateStartedAt,
+          hotGateCompletedAt: timings.hotGateCompletedAt,
           ...firstDecision,
         }),
-        executionStrategy: "sequential_hedge",
+        executionStrategy,
         riskHedge: false,
       });
     }
@@ -690,15 +769,15 @@ export class LiveExecutor implements ArbExecutor {
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
         ...fillQualityMetadata,
-        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
-          preflightStartedAt,
-          preflightCompletedAt,
-          hotGateStartedAt,
-          hotGateCompletedAt,
+        executionTimings: this.executionTimings(timings.executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+          preflightStartedAt: timings.preflightStartedAt,
+          preflightCompletedAt: timings.preflightCompletedAt,
+          hotGateStartedAt: timings.hotGateStartedAt,
+          hotGateCompletedAt: timings.hotGateCompletedAt,
           postFillHedgeDecisionMs,
           ...firstDecision,
         }),
-        executionStrategy: "sequential_hedge",
+        executionStrategy,
         riskHedge: true,
         hedgeCapPrice: null,
         hedgeFailureReason,
@@ -707,6 +786,7 @@ export class LiveExecutor implements ArbExecutor {
 
     const hedgeContext: LiveOrderContext = {
       ...hedgePlan.context,
+      size: hedge.hedgeShares,
       maxBuyPrice: hedge.maxBuyPrice,
       requiredCollateral: hedge.requiredCollateral,
     };
@@ -723,22 +803,30 @@ export class LiveExecutor implements ArbExecutor {
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: hedge.quoteSnapshot,
         ...fillQualityMetadata,
-        executionTimings: this.executionTimings(executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
-          preflightStartedAt,
-          preflightCompletedAt,
-          hotGateStartedAt,
-          hotGateCompletedAt,
+        executionTimings: this.executionTimings(timings.executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
+          preflightStartedAt: timings.preflightStartedAt,
+          preflightCompletedAt: timings.preflightCompletedAt,
+          hotGateStartedAt: timings.hotGateStartedAt,
+          hotGateCompletedAt: timings.hotGateCompletedAt,
           postFillHedgeDecisionMs,
           ...firstDecision,
         }),
-        executionStrategy: "sequential_hedge",
+        executionStrategy,
         riskHedge: true,
         hedgeCapPrice: hedge.hedgeCapPrice,
         hedgeFailureReason,
       });
     }
 
-    const hedgeResult = await this.placeVenueOrder(hedgePlan.client, hedge.leg, hedgeContext);
+    const hedgeResult = await this.placeHedgeWithRetry(
+      hedgePlan.client,
+      candidate,
+      firstPlan.prepared.leg,
+      hedgePlan.prepared.leg,
+      firstResult,
+      hedge,
+      hedgeContext,
+    );
     results[hedgePlan.venue] = hedgeResult;
     const venueConfirmations = await this.confirmVenueOrders(executionGroupId, [
       { result: firstResult, leg: firstPlan.prepared.leg, submittedAtMs: Date.parse(firstResult.requestedAt) },
@@ -751,17 +839,17 @@ export class LiveExecutor implements ArbExecutor {
     return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
       ...fillQualityMetadata,
-      executionTimings: this.executionTimings(executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
-        preflightStartedAt,
-        preflightCompletedAt,
-        hotGateStartedAt,
-        hotGateCompletedAt,
+      executionTimings: this.executionTimings(timings.executeStartedAt, confirmed.kalshi, confirmed.polymarket, {
+        preflightStartedAt: timings.preflightStartedAt,
+        preflightCompletedAt: timings.preflightCompletedAt,
+        hotGateStartedAt: timings.hotGateStartedAt,
+        hotGateCompletedAt: timings.hotGateCompletedAt,
         postFillHedgeDecisionMs,
         ...firstDecision,
         venueConfirmations,
       }),
       venueConfirmations,
-      executionStrategy: "sequential_hedge",
+      executionStrategy,
       riskHedge: true,
       hedgeCapPrice: hedge.hedgeCapPrice,
     });
@@ -779,7 +867,7 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
-    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge">,
+    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs">,
   ): Promise<ExecutionResult> {
     const submitted = await this.submitSynchronizedVenueOrders(prepared, kalshiContext, polymarketContext);
     const venueConfirmations = await this.confirmVenueOrders(executionGroupId, [
@@ -832,7 +920,7 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
-    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge">,
+    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs">,
   ): Promise<ExecutionResult> {
     const firstVenueReason = `Polymarket FAK submitted first; Kalshi submits after Polymarket fill count is within ${this.polymarketFirstFillRangeLabel()}`;
     const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
@@ -918,10 +1006,19 @@ export class LiveExecutor implements ArbExecutor {
 
     const hedgeContext: LiveOrderContext = {
       ...kalshiContext,
+      size: hedge.hedgeShares,
       maxBuyPrice: hedge.maxBuyPrice,
       requiredCollateral: hedge.requiredCollateral,
     };
-    const kalshi = await this.placeVenueOrder(this.kalshiClient, hedge.leg, hedgeContext);
+    const kalshi = await this.placeHedgeWithRetry(
+      this.kalshiClient,
+      candidate,
+      prepared.polymarket.leg,
+      prepared.kalshi.leg,
+      confirmedPolymarket,
+      hedge,
+      hedgeContext,
+    );
     const finalPolymarketRest = polymarketEvidence.restResult ?? await polymarketRestPromise;
     const finalPolymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
     const finalPolymarket = this.applyVenueConfirmation(
@@ -1103,11 +1200,29 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
-  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg): PreparedExecution | string {
+  // Collateral to reserve for the Kalshi leg during the pre-Polymarket preflight. For
+  // polymarket_first_exact, Kalshi is the DEFERRED hedge whose limit can rise to the tick-aware,
+  // loss-capped hedge cap (P0-2) — which is highest when Polymarket fills at its cheapest (top ask).
+  // Reserve for that worst case BEFORE dispatching Polymarket so a qualifying fill can always be hedged
+  // and never strands one-sided. Other modes reserve at the standard order-size * maxBuyPrice.
+  private kalshiPreflightCollateral(prepared: PreparedExecution, placementMode: LiveOrderPlacementMode): number {
+    const standard = roundPrice(this.config.liveOrderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    if (placementMode !== "polymarket_first_exact") return standard;
+    const polyTopAsk = prepared.quoteSnapshot.polymarket?.topAsk
+      ?? prepared.quoteSnapshot.polymarket?.vwap
+      ?? prepared.polymarket.maxBuyPrice;
+    const worstCaseHedgePrice = Math.min(1, Math.max(
+      prepared.kalshi.maxBuyPrice,
+      1 - polyTopAsk - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars,
+    ));
+    return roundPrice(this.config.liveOrderSize * worstCaseHedgePrice + this.config.liveCollateralBufferDollars);
+  }
+
+  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0): PreparedExecution | string {
     const now = this.now();
     if (!Number.isFinite(this.config.liveOrderSize) || this.config.liveOrderSize <= 0) return "LIVE_ORDER_SIZE must be greater than 0";
     if (candidate.expiryMs - now < this.config.liveMinExpiryMs) return "candidate too close to expiry for live execution";
-    const evaluation = evaluateLiveQuoteQuality(candidate, this.liveBooksForPreflight(kalshiLeg, polymarketLeg), this.config, now);
+    const evaluation = evaluateLiveQuoteQuality(candidate, this.liveBooksForPreflight(kalshiLeg, polymarketLeg), this.config, now, polymarketFirstCrossCents);
     if (!evaluation.ok) return evaluation.reason ?? "live quote quality preflight failed";
     if (!evaluation.kalshiLeg || !evaluation.polymarketLeg || evaluation.kalshiMaxBuyPrice == null || evaluation.polymarketMaxBuyPrice == null) {
       return "live quote quality preflight missing executable legs";
@@ -1129,6 +1244,21 @@ export class LiveExecutor implements ArbExecutor {
     const hedgeVenue = venueLabel(hedgeLeg.venue);
     if (candidate.expiryMs <= now) return `candidate expired before ${hedgeVenue} hedge could be submitted`;
     if (filled.fillPrice == null) return `${venueLabel(filledLeg.venue)} fill price missing; cannot calculate ${hedgeVenue} hedge cap`;
+    // Size the hedge to the ACTUAL first-leg fill (integer floor), not the static configured order
+    // size. For an integer first-leg fill the two executed sizes match exactly (a clean two-sided
+    // fill). For a fractional first-leg fill (e.g. Polymarket 8.13) the integer Kalshi hedge takes the
+    // floor (8), so only the small fractional remainder (0.13) stays one-sided and routes to the
+    // existing partial/quarantine path (bounded by liveMaxUnresolvedExposureDollars). This strictly
+    // minimizes residual exposure: declining the hedge would strand the whole fill, and hedging the
+    // static size could over-hedge when fill < size and create opposite-side exposure.
+    const filledFillCount = filled.fillCount;
+    if (filledFillCount == null || !Number.isFinite(filledFillCount) || filledFillCount <= 0) {
+      return `${venueLabel(filledLeg.venue)} fill count unavailable; cannot size ${hedgeVenue} hedge`;
+    }
+    const hedgeShares = Math.floor(filledFillCount + 0.000001);
+    if (hedgeShares <= 0) {
+      return `${venueLabel(filledLeg.venue)} fill ${filledFillCount} below one share; cannot size ${hedgeVenue} hedge`;
+    }
     const knownFilledFee = Math.max(0, filled.fee ?? 0);
     const rawHedgeCapPrice = 1 - filled.fillPrice - knownFilledFee - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars;
     const hedgeCapPrice = roundPrice(Math.min(1, Math.max(0, rawHedgeCapPrice)));
@@ -1157,10 +1287,89 @@ export class LiveExecutor implements ArbExecutor {
     return {
       leg,
       maxBuyPrice: hedgeCapPrice,
-      requiredCollateral: roundPrice(this.config.liveOrderSize * hedgeCapPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: roundPrice(hedgeShares * hedgeCapPrice + this.config.liveCollateralBufferDollars),
       hedgeCapPrice,
+      hedgeShares,
       quoteSnapshot: evaluation.snapshot,
     };
+  }
+
+  // A FOK hedge either fills the exact requested integer size or fills 0 (it can never strand a
+  // partial). A clean 0-fill is retryable: the book may simply have moved a tick during the leg1->leg2
+  // window. We do NOT retry on any fill, on insufficient collateral, or on an ambiguous/timeout/unknown
+  // result (which may have filled and must not be double-submitted — reconciliation handles those).
+  private isHedgeRetryable(result: VenueOrderResult): boolean {
+    if ((result.fillCount ?? 0) > 0) return false;
+    if (String(result.status ?? "").toLowerCase() === "filled") return false;
+    if (isTimeoutOrUnknownResult(result)) return false;
+    const error = String(result.error ?? "").toLowerCase();
+    if (error.includes("insufficient_balance")
+      || error.includes("below required")
+      || error.includes("collateral")) {
+      return false;
+    }
+    return true;
+  }
+
+  // Submit the hedge and, on a clean FOK miss, re-fetch the book, recompute the cap from the SAME
+  // first-leg fill, and resubmit up to liveHedgeRetryAttempts times. Each retry is bounded by the
+  // candidate not having expired, and re-preparation returns a skip string if the book moved out of the
+  // (loss-capped) hedge cap, in which case we stop with the clean 0-fill rather than chase the book.
+  private async placeHedgeWithRetry(
+    client: VenueOrderClient,
+    candidate: ArbCandidate,
+    filledLeg: ArbLeg,
+    hedgeLeg: ArbLeg,
+    filled: VenueOrderResult,
+    hedge: PreparedHedge,
+    baseContext: LiveOrderContext,
+  ): Promise<VenueOrderResult> {
+    let result = await this.placeVenueOrder(client, hedge.leg, baseContext);
+    const maxAttempts = Math.max(0, this.config.liveHedgeRetryAttempts);
+    let attempt = 0;
+    while (attempt < maxAttempts && this.isHedgeRetryable(result) && candidate.expiryMs > this.now()) {
+      attempt += 1;
+      const reprepared = this.prepareVenueHedge(candidate, filledLeg, hedgeLeg, filled);
+      if (typeof reprepared === "string") break;
+      const retryContext: LiveOrderContext = {
+        ...baseContext,
+        clientOrderId: `${baseContext.clientOrderId}-r${attempt}`,
+        size: reprepared.hedgeShares,
+        maxBuyPrice: reprepared.maxBuyPrice,
+        requiredCollateral: reprepared.requiredCollateral,
+        requestedAt: this.now(),
+      };
+      result = await this.placeVenueOrder(client, reprepared.leg, retryContext);
+    }
+    return result;
+  }
+
+  // C1: bounded same-window auto-unwind of a one-sided fill. Reduces the FILLED leg toward flat via the
+  // venue client's loss-bounded opposing order. Only ever shrinks an existing position; never opens a new
+  // one. Returns flattened=false (fall through to quarantine/hardlock) when no client adapter exists, the
+  // adapter declines, or it errors. Caller gates this behind liveAutoUnwindEnabled.
+  private async attemptAutoUnwind(
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    legs: { kalshi: ArbLeg; polymarket: ArbLeg },
+  ): Promise<VenueUnwindOutcome | null> {
+    const kalshiFill = kalshi.fillCount ?? 0;
+    const polymarketFill = polymarket.fillCount ?? 0;
+    const filled = kalshiFill > 0
+      ? { client: this.kalshiClient, leg: legs.kalshi, fillCount: kalshiFill, fillPrice: kalshi.fillPrice }
+      : { client: this.polymarketClient, leg: legs.polymarket, fillCount: polymarketFill, fillPrice: polymarket.fillPrice };
+    if (!filled.client.unwindPosition || filled.fillCount <= 0) return { flattened: false, reason: "no unwind adapter" };
+    try {
+      return await filled.client.unwindPosition({
+        leg: filled.leg,
+        fillCount: filled.fillCount,
+        fillPrice: filled.fillPrice ?? null,
+        maxLossDollars: Math.max(0, this.config.liveAutoUnwindMaxLossDollars),
+        timeoutMs: Math.max(1, this.config.liveAutoUnwindTimeoutMs),
+      });
+    } catch (error) {
+      return { flattened: false, reason: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   private selectSequentialFirstVenue(prepared: PreparedExecution): SequentialFirstVenueDecision {
@@ -1883,9 +2092,21 @@ export class LiveExecutor implements ArbExecutor {
       },
     };
     const venueConfirmations = this.attachRestMetadata(metadata.venueConfirmations ?? fallbackVenueConfirmations, kalshi, polymarket);
-    const initialLiveLockReason = this.confirmationLockReason(metadata.venueConfirmations)
-      ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
-    const riskQuarantine = await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
+    // C1 (default-off): before committing to quarantine/hardlock, try to flatten a one-sided fill with a
+    // loss-bounded opposing order. Guarded by liveAutoUnwindEnabled so the default path below is unchanged.
+    const oneSidedFill = kalshiHasFill !== polymarketHasFill;
+    let autoUnwind: VenueUnwindOutcome | null = null;
+    if (this.config.liveAutoUnwindEnabled && oneSidedFill && metadata.unwindLegs) {
+      autoUnwind = await this.attemptAutoUnwind(kalshi, polymarket, metadata.unwindLegs);
+    }
+    const autoUnwindFlattened = autoUnwind?.flattened === true;
+    const initialLiveLockReason = autoUnwindFlattened
+      ? null
+      : this.confirmationLockReason(metadata.venueConfirmations)
+        ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
+    const riskQuarantine = autoUnwindFlattened
+      ? null
+      : await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
     const liveLockReason = riskQuarantine ? null : initialLiveLockReason;
     const recoveryEvidencePresent = this.hasRecoveryEvidence(kalshi, venueConfirmations.kalshi)
       || this.hasRecoveryEvidence(polymarket, venueConfirmations.polymarket)
@@ -1895,8 +2116,18 @@ export class LiveExecutor implements ArbExecutor {
     const failureClassification = this.postTradeFailureClassification(kalshi, polymarket, partialFill, realizedGuaranteedProfit, metadata);
     const baseRecoveryEvidence = metadata.recoveryEvidence
       ?? (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
-    const recoveryEvidence = failureClassification
-      ? { ...(baseRecoveryEvidence ?? {}), failureClassification }
+    const autoUnwindEvidence = autoUnwind
+      ? {
+        autoUnwind: {
+          attempted: true,
+          flattened: autoUnwind.flattened,
+          lossDollars: autoUnwind.lossDollars ?? null,
+          reason: autoUnwind.reason ?? null,
+        },
+      }
+      : null;
+    const recoveryEvidence = (failureClassification || autoUnwindEvidence)
+      ? { ...(baseRecoveryEvidence ?? {}), ...(autoUnwindEvidence ?? {}), ...(failureClassification ? { failureClassification } : {}) }
       : baseRecoveryEvidence;
     const finalizationMs = metadata.finalizationMs ?? metadata.executionTimings?.totalMs ?? null;
     const autoResolution = this.autoResolution(recoveryStatus, executionGroupId, recoveryEvidence);

@@ -219,6 +219,86 @@ test("live quote quality gates on cushioned executable edge and applies cushion 
   assert.equal(rawNineCentEdge.polymarketMaxBuyPrice, 0.42);
 });
 
+test("first-leg cross offset (P1-5) deepens only the Polymarket limit and the edge gate still binds", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveTakerPriceCushionCents: 2, minProfitDollars: 0.01 });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.52,
+    noAskLevels: [{ price: 0.52, size: 5 }],
+    updatedAt: now,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+
+  // No cross offset: both legs use the 2c taker cushion (poly 0.42, kalshi 0.54).
+  const base = evaluateLiveQuoteQuality(candidate, books, config, now);
+  assert.equal(base.polymarketMaxBuyPrice, 0.42);
+  assert.equal(base.kalshiMaxBuyPrice, 0.54);
+
+  // 5c cross: ONLY the Polymarket first leg deepens to 0.45; Kalshi keeps the 2c cushion at 0.54.
+  const crossed = evaluateLiveQuoteQuality(candidate, books, config, now, 5);
+  assert.equal(crossed.polymarketMaxBuyPrice, 0.45);
+  assert.equal(crossed.kalshiMaxBuyPrice, 0.54);
+  assert.equal(crossed.snapshot.projectedEdgeAfterFees, 0.01); // 1 - (0.45 + 0.54)
+  assert.equal(crossed.ok, true);
+
+  // A cross deep enough to erase guaranteed profit is REJECTED, never executed (no added exposure).
+  const tooDeep = evaluateLiveQuoteQuality(candidate, books, config, now, 6);
+  assert.equal(tooDeep.polymarketMaxBuyPrice, 0.46);
+  assert.equal(tooDeep.snapshot.projectedEdgeAfterFees, 0); // 1 - (0.46 + 0.54)
+  assert.equal(tooDeep.ok, false);
+  assert.match(tooDeep.reason ?? "", /cushioned executable edge/);
+
+  // A cross offset below the taker cushion is a no-op (the larger cushion still applies).
+  const belowCushion = evaluateLiveQuoteQuality(candidate, books, config, now, 1);
+  assert.equal(belowCushion.polymarketMaxBuyPrice, 0.42);
+});
+
+test("Polymarket leg honors a tighter freshness bound than Kalshi (P2-10)", () => {
+  const now = 1_800_000_000_000;
+  // General bar 1000ms; Polymarket tightened to 300ms (the staleness-prone CLOB leg).
+  const config = safetyConfig({ liveQuoteMaxAgeMs: 1_000, livePolymarketQuoteMaxAgeMs: 300, liveQuoteSyncMaxSkewMs: 500 });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now - 400,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.52,
+    noAskLevels: [{ price: 0.52, size: 5 }],
+    updatedAt: now - 400,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+
+  // 400ms-old Polymarket quote is stale under the 300ms Polymarket bar (Kalshi at the same age is fresh).
+  const stale = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(stale.ok, false);
+  assert.match(stale.reason ?? "", /polymarket .* quote is stale: age 400ms exceeds 300ms/);
+
+  // A fresher Polymarket quote (200ms) passes both bars.
+  const fresh = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 200 }] }, config, now);
+  assert.equal(fresh.ok, true);
+});
+
 test("live quote quality accepts one-cent cushioned edge and rejects just below it", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig({ minProfitDollars: 0.01, liveTakerPriceCushionCents: 2 });

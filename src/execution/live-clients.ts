@@ -92,11 +92,33 @@ export interface VenueOrderResult {
   metadata?: Record<string, unknown>;
 }
 
+// Result of a bounded auto-unwind attempt (C1). `flattened` means the held one-sided position was
+// reduced to ~zero within the loss cap; otherwise the caller falls through to quarantine/hardlock.
+export interface VenueUnwindOutcome {
+  flattened: boolean;
+  result?: VenueOrderResult;
+  lossDollars?: number | null;
+  reason?: string | null;
+}
+
+export interface VenueUnwindRequest {
+  leg: ArbLeg;
+  fillCount: number;
+  fillPrice: number | null;
+  maxLossDollars: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
 export interface VenueOrderClient {
   readonly venue: Venue;
   preflightOrder?(leg: ArbLeg, context: LiveOrderContext): Promise<string | null>;
   placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult>;
   recoverTimedOutOrder?(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null>;
+  // C1 (default-off): reduce an existing one-sided fill toward flat with a loss-bounded opposing order.
+  // Optional — live venue SELL adapters are the documented final enablement step; absent on BUY-only
+  // clients today, so the executor falls through to the unchanged quarantine/hardlock path.
+  unwindPosition?(request: VenueUnwindRequest): Promise<VenueUnwindOutcome | null>;
   readiness(now?: number): Promise<VenueExecutionReadiness>;
   warm?(options?: { now?: number; tokenIds?: string[]; requiredCollateral?: number }): Promise<void>;
 }
@@ -1180,14 +1202,8 @@ export class KalshiFixOrderClient implements VenueOrderClient {
         lastCheckedAt: now,
       };
     }
-    if (this.config.liveKalshiHedgeTimeInForce !== "immediate_or_cancel") {
-      return {
-        ...publicReadiness,
-        ready: false,
-        reason: "Kalshi FIX IOC mode requires LIVE_KALSHI_HEDGE_TIME_IN_FORCE=immediate_or_cancel",
-        lastCheckedAt: now,
-      };
-    }
+    // FIX supports both IOC (tag 59=3) and FOK (tag 59=4); the hedge leg defaults to fill_or_kill so a
+    // Kalshi partial can never strand against the first-leg fill. No TIF readiness restriction is needed.
     if (this.config.liveKalshiOrderGroupEnabled && this.config.liveKalshiOrderGroupId.trim()) {
       return {
         ...publicReadiness,
@@ -1248,7 +1264,7 @@ export class KalshiFixOrderClient implements VenueOrderClient {
       quantity: context.size,
       yesBookLimitPrice: kalshiYesBookPrice(leg, context),
       maxExecutionCostDollars: roundPrice(context.size * context.maxBuyPrice),
-      timeInForce: "immediate_or_cancel",
+      timeInForce: this.config.liveKalshiHedgeTimeInForce,
       orderGroupId: context.orderGroupId,
       signal: context.signal,
     });
@@ -1275,7 +1291,7 @@ export class KalshiFixOrderClient implements VenueOrderClient {
         kalshiFixPort: this.config.kalshiFixPort,
         kalshiFixTargetCompId: this.config.kalshiFixTargetCompId,
         kalshiFixUseDollars: this.config.kalshiFixUseDollars,
-        kalshiFixTimeInForce: "immediate_or_cancel",
+        kalshiFixTimeInForce: this.config.liveKalshiHedgeTimeInForce,
         kalshiFixMaxExecutionCostDollars: roundPrice(context.size * context.maxBuyPrice),
         kalshiSubmittedMaxBuyPrice: context.maxBuyPrice,
         kalshiSubmittedYesBookPrice: kalshiYesBookPrice(leg, context),
@@ -1709,6 +1725,7 @@ function polymarketImmediateOrderType(configuredValue: string, context: LiveOrde
   if (context.placementMode === "parallel_market") return OrderType.FAK;
   if (context.placementMode === "parallel_quick") return OrderType.FAK;
   if (context.placementMode === "polymarket_first_exact") return OrderType.FAK;
+  if (context.placementMode === "kalshi_first_exact") return OrderType.FAK; // Polymarket is the hedge: share-limit FAK
   if (context.placementMode === "parallel_fak") return OrderType.FAK;
   if (context.placementMode === "parallel_fok") return OrderType.FOK;
   return polymarketOrderType(configuredValue);
@@ -1784,7 +1801,11 @@ function isLimitRestMode(context: LiveOrderContext): boolean {
 }
 
 function polymarketSignedOrderKind(context: LiveOrderContext): "market" | "share_limit" {
-  return context.placementMode === "polymarket_first_exact" || context.placementMode === "parallel_quick" ? "share_limit" : "market";
+  return context.placementMode === "polymarket_first_exact"
+    || context.placementMode === "parallel_quick"
+    || context.placementMode === "kalshi_first_exact"
+    ? "share_limit"
+    : "market";
 }
 
 function kalshiTimeInForce(

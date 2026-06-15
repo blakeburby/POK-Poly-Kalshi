@@ -26,6 +26,8 @@ import {
   type PolymarketClobLike,
   type VenueOrderClient,
   type VenueOrderResult,
+  type VenueUnwindOutcome,
+  type VenueUnwindRequest,
 } from "../src/execution/live-clients";
 import { LiveExposureCache } from "../src/execution/live-hot-path";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
@@ -113,11 +115,15 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveCollateralBufferDollars: 0.25,
     liveKalshiMinCashDollars: 0,
     liveQuoteMaxAgeMs: 750,
+    livePolymarketQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
     liveOrderTimeoutMs: 2_500,
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,
+    liveHedgeMinCrossTicks: 2,
+    liveHedgeRetryAttempts: 0,
+    livePolymarketFirstCrossCents: 0,
     liveOrderPlacementMode: "parallel_limit_rest",
     kalshiHedgeOrderMode: "public_v2",
     liveAggressiveLimitRestMs: 500,
@@ -167,6 +173,9 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     livePartialFillLockMode: "lock",
     liveMaxUnresolvedExposureDollars: 10,
     liveReconcileBeforeTrade: false,
+    liveAutoUnwindEnabled: false,
+    liveAutoUnwindMaxLossDollars: 0.05,
+    liveAutoUnwindTimeoutMs: 1_500,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
     dashboardApiToken: "token",
@@ -253,6 +262,49 @@ class MutatingVenueClient extends FakeVenueClient {
     const result = await super.placeOrder(leg, context);
     this.afterPlace();
     return result;
+  }
+}
+
+// Implements the optional C1 unwind adapter with a fixed configurable outcome.
+class UnwindableVenueClient extends FakeVenueClient {
+  unwindCalls = 0;
+  lastUnwindRequest: VenueUnwindRequest | null = null;
+
+  constructor(venue: Venue, result: Partial<VenueOrderResult>, private readonly outcome: VenueUnwindOutcome | null) {
+    super(venue, result);
+  }
+
+  async unwindPosition(request: VenueUnwindRequest): Promise<VenueUnwindOutcome | null> {
+    this.unwindCalls += 1;
+    this.lastUnwindRequest = request;
+    return this.outcome;
+  }
+}
+
+// Returns a different result per call (last entry repeats) so a retry path can be exercised.
+class SequencedVenueClient extends FakeVenueClient {
+  private call = 0;
+
+  constructor(venue: Venue, private readonly results: Partial<VenueOrderResult>[]) {
+    super(venue);
+  }
+
+  async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+    const spec = this.results[Math.min(this.call, this.results.length - 1)] ?? {};
+    this.call += 1;
+    this.placed.push({ leg, context });
+    return {
+      venue: this.venue,
+      clientOrderId: context.clientOrderId,
+      orderId: `${this.venue}-order-${this.call}`,
+      status: "filled",
+      fillPrice: leg.ask,
+      fillCount: context.size,
+      requestedAt: "2026-04-29T20:00:00.000Z",
+      respondedAt: "2026-04-29T20:00:00.050Z",
+      error: null,
+      ...spec,
+    };
   }
 }
 
@@ -2910,6 +2962,7 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_limit_rest" }).liveOrderPlacementMode, "parallel_limit_rest");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_fak" }).liveOrderPlacementMode, "parallel_fak");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "polymarket_first_exact" }).liveOrderPlacementMode, "polymarket_first_exact");
+  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "kalshi_first_exact" }).liveOrderPlacementMode, "kalshi_first_exact");
   assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
@@ -2941,18 +2994,35 @@ test("live executor keeps parallel market available and starts both venue orders
     () => loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "6.1", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "6" }),
     /LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES/,
   );
+  // P0-2: the effective hedge loss budget is floored at feeBuffer + minCrossTicks*tick so the hedge
+  // cap always clears at least N Kalshi ticks of crossing headroom, while remaining the single source
+  // of truth for the post-fill loss lock.
+  assert.equal(loadConfig({}).livePolymarketQuoteMaxAgeMs, 750); // default = general bar (inert)
+  assert.equal(loadConfig({ LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "300" }).livePolymarketQuoteMaxAgeMs, 300);
+  assert.equal(loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "600", LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "900" }).livePolymarketQuoteMaxAgeMs, 600); // clamped: never looser than general bar
+  assert.equal(loadConfig({}).liveHedgeMinCrossTicks, 2);
+  assert.equal(loadConfig({}).liveHedgeMaxLossDollars, 0.03); // max(0.03 default, 0.01 + 2*0.01)
+  assert.equal(loadConfig({ LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.01" }).liveHedgeMaxLossDollars, 0.03); // floor still applies
+  assert.equal(loadConfig({ LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.08" }).liveHedgeMaxLossDollars, 0.08); // configured value above floor wins
+  assert.equal(loadConfig({ LIVE_HEDGE_MIN_CROSS_TICKS: "0", LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.02" }).liveHedgeMaxLossDollars, 0.02);
   assert.equal(loadConfig({}).liveKalshiPrearmEnabled, true);
   assert.equal(loadConfig({}).liveKalshiPrearmMaxAgeMs, 5_000);
   assert.equal(loadConfig({}).liveKalshiPrearmPricePolicy, "patch_after_fill");
-  assert.equal(loadConfig({}).liveKalshiHedgeTimeInForce, "immediate_or_cancel");
+  // P0-3: the hedge leg is fill_or_kill by default (atomic; no Kalshi partial can strand the pair).
+  assert.equal(loadConfig({}).liveKalshiHedgeTimeInForce, "fill_or_kill");
+  assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "immediate_or_cancel" }).liveKalshiHedgeTimeInForce, "immediate_or_cancel");
   assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "fill_or_kill" }).liveKalshiHedgeTimeInForce, "fill_or_kill");
+  assert.equal(loadConfig({}).liveOrderTimeoutMs, 3_500);
+  assert.equal(loadConfig({}).liveHedgeRetryAttempts, 2);
+  assert.equal(loadConfig({ LIVE_HEDGE_RETRY_ATTEMPTS: "0" }).liveHedgeRetryAttempts, 0);
   assert.equal(loadConfig({ KALSHI_HEDGE_ORDER_MODE: "fix_ioc" }).kalshiHedgeOrderMode, "fix_ioc");
   assert.equal(loadConfig({}).kalshiFixHost, "mm.fix.elections.kalshi.com");
   assert.equal(loadConfig({}).kalshiFixPort, 8228);
   assert.equal(loadConfig({}).kalshiFixTargetCompId, "KalshiNR");
   assert.equal(loadConfig({}).kalshiFixHeartbeatSeconds, 10);
   assert.equal(loadConfig({}).kalshiFixConnectTimeoutMs, 1_500);
-  assert.equal(loadConfig({}).kalshiFixOrderResponseTimeoutMs, 2_500);
+  assert.equal(loadConfig({}).kalshiFixOrderResponseTimeoutMs, 3_500); // derives from LIVE_ORDER_TIMEOUT_MS default (now 3500)
+  assert.equal(loadConfig({ KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS: "2000" }).kalshiFixOrderResponseTimeoutMs, 2_000);
   assert.equal(loadConfig({}).kalshiFixUseDollars, true);
   assert.equal(loadConfig({ KALSHI_FIX_USE_DOLLARS: "false" }).kalshiFixUseDollars, false);
   const now = 1_799_999_900_000;
@@ -3873,12 +3943,148 @@ test("polymarket_first_exact treats configured Polymarket fill range boundaries 
 
     const result = await executor.execute(candidate);
 
+    // The hedge is sized to the integer floor of the ACTUAL Polymarket fill (P0-1), not the static
+    // configured order size. An integer fill (7, 8, 9) produces an exactly matched hedge; a fractional
+    // in-range fill (8.5) hedges the floor (8) so only the 0.5 remainder stays one-sided.
     assert.equal(polymarket.placed.length, 1);
     assert.equal(kalshi.placed.length, 1);
+    assert.equal(kalshi.placed[0]?.context.size, Math.floor(fillCount + 0.000001));
     assert.equal(result.action, fillCount === 8 ? "filled" : "failed");
     assert.equal(result.partialFill, fillCount !== 8);
     assert.equal(result.executionTimings?.polymarketHedgeTriggerFillCount, fillCount);
   }
+});
+
+test("polymarket_first_exact retries the FOK Kalshi hedge after a clean 0-fill miss (P0-3)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  // First Kalshi FOK attempt is a clean 0-fill miss (book moved a tick); the retry fills exactly.
+  const kalshi = new SequencedVenueClient("kalshi", [
+    { status: "canceled", fillCount: 0, fillPrice: null, error: "kalshi filled 0 shares for requested exact size 8" },
+    { status: "filled", fillCount: 8, fillPrice: 0.5 },
+  ]);
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveHedgeRetryAttempts: 2,
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(kalshi.placed.length, 2); // initial miss + one retry that fills
+  assert.match(kalshi.placed[1]?.context.clientOrderId ?? "", /-r1$/);
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.kalshiFillCount, 8);
+  assert.equal(result.polymarketFillCount, 8);
+});
+
+test("hedge retry does not fire on insufficient_balance and never double-submits (P0-3 safety)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  // A hard collateral failure must not be retried (it will not change), and an ambiguous/unknown
+  // result must not be retried (it may have filled — double-submit would create exposure).
+  for (const spec of [
+    { status: "rejected" as const, fillCount: 0, fillPrice: null, error: "kalshi insufficient_balance" },
+    { status: "unknown" as const, fillCount: null, fillPrice: null, error: "order response timeout" },
+  ]) {
+    const kalshi = new SequencedVenueClient("kalshi", [spec, { status: "filled", fillCount: 8, fillPrice: 0.5 }]);
+    const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
+    const executor = new LiveExecutor(
+      config({
+        liveOrderSize: 8,
+        liveOrderPlacementMode: "polymarket_first_exact",
+        liveHedgeRetryAttempts: 2,
+        liveAutoHardlocksEnabled: false,
+      }),
+      books,
+      kalshi,
+      polymarket,
+      () => now,
+    );
+
+    const result = await executor.execute(candidate);
+
+    assert.equal(kalshi.placed.length, 1); // no retry: terminal/ambiguous result
+    assert.equal(result.action, "failed");
+  }
+});
+
+test("kalshi_first_exact commits Kalshi first and hedges Polymarket after an exact Kalshi fill (P2-8)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "kalshi_first_exact",
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.executionStrategy, "kalshi_first_exact");
+  assert.equal(result.executionTimings?.firstVenue, "kalshi");
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 1);
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.kalshiFillCount, 8);
+  assert.equal(result.polymarketFillCount, 8);
+});
+
+test("kalshi_first_exact never sends Polymarket when the Kalshi first leg misses (no one-sided exposure)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  // Kalshi FOK first leg fills 0 (killed): Polymarket must never be sent, leaving a flat position.
+  const kalshi = new FakeVenueClient("kalshi", { status: "canceled", fillCount: 0, fillPrice: null, error: "kalshi FOK killed without fill" });
+  const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "kalshi_first_exact",
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(polymarket.placed.length, 0); // never sent -> flat, zero exposure
+  assert.equal(result.action, "failed");
+  assert.equal(result.polymarketFillCount ?? 0, 0); // unsubmitted hedge has no fill
+  assert.equal(result.kalshiFillCount ?? 0, 0); // Kalshi FOK killed without fill
 });
 
 test("polymarket_first_exact does not submit Kalshi when Polymarket fill is outside configured range", async () => {
@@ -4196,6 +4402,95 @@ test("live executor quarantines a bounded one-sided fill instead of hard-locking
   assert.equal(locks.engageCalls, 0);
   const readiness = await executor.readiness(now);
   assert.equal(readiness.riskState, "quarantined");
+});
+
+function oneSidedAutoUnwindExecutor(autoUnwindEnabled: boolean, outcome: VenueUnwindOutcome | null, now: number, locks: FakeLiveLockStore) {
+  const { lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    kalshi: { status: "timeout", reason: "kalshi stream did not confirm", fillCount: null, fillPrice: null },
+    polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.84 },
+  };
+  const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 0 };
+  const polymarket = new UnwindableVenueClient("polymarket", { status: "filled", fillCount: 5, fillPrice: 0.84 }, outcome);
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+      liveAutoUnwindEnabled: autoUnwindEnabled,
+    }),
+    books,
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        kalshiTimeoutRecoveryAttempted: true,
+        kalshiTimeoutRecoveryStatus: "not_found",
+      },
+    }),
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+    exposureReader,
+  );
+  return { executor, polymarket };
+}
+
+test("auto-unwind flattens a one-sided fill instead of quarantining when enabled (C1)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  const { executor, polymarket } = oneSidedAutoUnwindExecutor(true, { flattened: true, lossDollars: 0.03 }, now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 1); // unwound the FILLED Polymarket leg
+  assert.equal(polymarket.lastUnwindRequest?.fillCount, 5);
+  assert.equal(polymarket.lastUnwindRequest?.maxLossDollars, 0.05);
+  assert.notEqual(result.recoveryStatus, "risk_quarantined"); // flattened -> no quarantine
+  assert.equal(result.liveLockReason, null);
+  assert.equal(result.riskQuarantineExposureDollars ?? null, null);
+  assert.equal(locks.engageCalls, 0);
+  const evidence = result.recoveryEvidence as Record<string, unknown> | null;
+  assert.equal((evidence?.autoUnwind as Record<string, unknown>)?.flattened, true);
+});
+
+test("auto-unwind falls through to quarantine when the unwind cannot complete (C1 fall-through)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  const { executor, polymarket } = oneSidedAutoUnwindExecutor(true, { flattened: false, reason: "no liquidity within cap" }, now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 1);
+  assert.equal(result.recoveryStatus, "risk_quarantined"); // identical to today when unwind fails
+  assert.equal(result.riskQuarantineExposureDollars, 4.2);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("auto-unwind is never attempted when disabled (C1 default-off is inert)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  const { executor, polymarket } = oneSidedAutoUnwindExecutor(false, { flattened: true, lossDollars: 0.0 }, now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 0); // disabled -> never called
+  assert.equal(result.recoveryStatus, "risk_quarantined");
+  assert.equal(result.riskQuarantineExposureDollars, 4.2);
 });
 
 test("live executor readiness surfaces persisted quarantined exposure after restart", async () => {

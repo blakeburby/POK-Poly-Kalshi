@@ -50,16 +50,20 @@ export interface AppConfig {
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
   liveTakerPriceCushionCents: number;
+  livePolymarketFirstCrossCents: number;
   liveMinExpiryMs: number;
   liveMaxTradesPerWindow: number;
   liveCollateralBufferDollars: number;
   liveKalshiMinCashDollars: number;
   liveQuoteMaxAgeMs: number;
+  livePolymarketQuoteMaxAgeMs: number;
   liveQuoteSyncMaxSkewMs: number;
   liveMinBookDepthShares: number;
   liveOrderTimeoutMs: number;
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
+  liveHedgeMinCrossTicks: number;
+  liveHedgeRetryAttempts: number;
   liveOrderPlacementMode: LiveOrderPlacementMode;
   kalshiHedgeOrderMode: LiveKalshiHedgeOrderMode;
   liveAggressiveLimitRestMs: number;
@@ -109,6 +113,9 @@ export interface AppConfig {
   livePartialFillLockMode: LivePartialFillLockMode;
   liveMaxUnresolvedExposureDollars: number;
   liveReconcileBeforeTrade: boolean;
+  liveAutoUnwindEnabled: boolean;
+  liveAutoUnwindMaxLossDollars: number;
+  liveAutoUnwindTimeoutMs: number;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
@@ -151,8 +158,9 @@ function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMo
     || value === "parallel_fak"
     || value === "parallel_limit_rest"
     || value === "polymarket_first_exact"
+    || value === "kalshi_first_exact"
   ) return value;
-  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_quick, parallel_fok, parallel_fak, parallel_limit_rest, or polymarket_first_exact");
+  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_quick, parallel_fok, parallel_fak, parallel_limit_rest, polymarket_first_exact, or kalshi_first_exact");
 }
 
 function envLiveKalshiHedgeOrderMode(env: NodeJS.ProcessEnv): LiveKalshiHedgeOrderMode {
@@ -162,7 +170,10 @@ function envLiveKalshiHedgeOrderMode(env: NodeJS.ProcessEnv): LiveKalshiHedgeOrd
 }
 
 function envLiveKalshiHedgeTimeInForce(env: NodeJS.ProcessEnv): LiveKalshiHedgeTimeInForce {
-  const value = envString(env, "LIVE_KALSHI_HEDGE_TIME_IN_FORCE", "immediate_or_cancel").toLowerCase();
+  // Default fill_or_kill (P0-3): the Kalshi hedge leg must be all-or-nothing so it never strands a
+  // Kalshi partial against the first-leg fill (the two_sided_mismatched_size source). Both the REST
+  // and FIX routes support FOK; ui_quick_order remains IOC by construction.
+  const value = envString(env, "LIVE_KALSHI_HEDGE_TIME_IN_FORCE", "fill_or_kill").toLowerCase();
   if (value === "immediate_or_cancel" || value === "fill_or_kill") return value;
   throw new Error("LIVE_KALSHI_HEDGE_TIME_IN_FORCE must be immediate_or_cancel or fill_or_kill");
 }
@@ -186,6 +197,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (livePolymarketFirstMinFillShares <= 0 || livePolymarketFirstMaxFillShares <= 0 || livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares) {
     throw new Error("LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES");
   }
+  // Tick-aware hedge loss budget (per-contract price units, NOT total dollars). The hedge cap is
+  // derived as `1 - firstFill - fee - feeBuffer + liveHedgeMaxLossDollars`, and the post-fill loss
+  // lock accepts a completed pair only when realized edge >= -liveHedgeMaxLossDollars. Because both
+  // use the SAME knob, the cap can never imply a fill that later trips the loss lock. To guarantee
+  // the cap clears at least `liveHedgeMinCrossTicks` Kalshi ticks over breakeven net of the fee
+  // buffer, the effective budget is floored at feeBuffer + minCrossTicks * tick. Kalshi prices are
+  // cent-quantized so one tick = $0.01.
+  const KALSHI_PRICE_TICK = 0.01;
+  const liveHedgeFeeBufferDollars = envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01);
+  const liveHedgeMinCrossTicks = Math.max(0, envNumber(env, "LIVE_HEDGE_MIN_CROSS_TICKS", 2));
+  const configuredHedgeMaxLossDollars = envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.03);
+  const liveHedgeMaxLossDollars = Math.max(
+    configuredHedgeMaxLossDollars,
+    liveHedgeFeeBufferDollars + liveHedgeMinCrossTicks * KALSHI_PRICE_TICK,
+  );
   return {
     port: envNumber(env, "PORT", 8080),
     databaseUrl: envString(env, "DATABASE_URL"),
@@ -198,7 +224,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 250),
     dashboardSignalRefreshMs: envNumber(env, "DASHBOARD_SIGNAL_REFRESH_MS", 1_000),
     dashboardAnalyticsRefreshMs: envNumber(env, "DASHBOARD_ANALYTICS_REFRESH_MS", 5_000),
-    executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 2),
+    // Default 1 (P0-4): serialize live attempts so two concurrent scans cannot both reserve the same
+    // Kalshi hedge collateral and double-spend it. Raise only after per-attempt collateral reservation lands.
+    executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 1),
     discoveryBoundaryRefreshEnabled: envBoolean(env, "DISCOVERY_BOUNDARY_REFRESH_ENABLED", true),
     kalshiApiBase: envString(env, "KALSHI_API_BASE", "https://api.elections.kalshi.com/trade-api/v2"),
     kalshiUiApiBase: envString(env, "KALSHI_UI_API_BASE", "https://api.elections.kalshi.com"),
@@ -211,7 +239,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     kalshiFixTargetCompId: envString(env, "KALSHI_FIX_TARGET_COMP_ID", "KalshiNR"),
     kalshiFixHeartbeatSeconds: envNumber(env, "KALSHI_FIX_HEARTBEAT_SECONDS", 10),
     kalshiFixConnectTimeoutMs: envNumber(env, "KALSHI_FIX_CONNECT_TIMEOUT_MS", 1_500),
-    kalshiFixOrderResponseTimeoutMs: envNumber(env, "KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS", envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500)),
+    kalshiFixOrderResponseTimeoutMs: envNumber(env, "KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS", envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 3_500)),
     kalshiFixUseDollars: envBoolean(env, "KALSHI_FIX_USE_DOLLARS", true),
     kalshiFixEnableIocCancelReport: envBoolean(env, "KALSHI_FIX_ENABLE_IOC_CANCEL_REPORT", true),
     kalshiFixPreserveOriginalOrderQty: envBoolean(env, "KALSHI_FIX_PRESERVE_ORIGINAL_ORDER_QTY", true),
@@ -240,16 +268,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK",
     liveOrderSize,
     liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
+    // P1-5: extra marketable offset (cents) applied ONLY to the Polymarket first-leg FAK limit in
+    // polymarket_first_exact, so the order crosses 1-2 ticks of post-quote book movement instead of
+    // missing. Default 0 = inert (build-but-disabled until Kalshi is funded; see RUNBOOK). The
+    // cushioned-edge gate (quote-quality.ts) still rejects any limit that would erase guaranteed profit,
+    // and it only affects the FIRST/cancelable order, so it cannot add directional exposure.
+    livePolymarketFirstCrossCents: Math.max(0, envNumber(env, "LIVE_POLYMARKET_FIRST_CROSS_CENTS", 0)),
     liveMinExpiryMs: envNumber(env, "LIVE_MIN_EXPIRY_MS", 30_000),
     liveMaxTradesPerWindow: envNumber(env, "LIVE_MAX_TRADES_PER_WINDOW", 3),
     liveCollateralBufferDollars: envNumber(env, "LIVE_COLLATERAL_BUFFER_DOLLARS", 0.25),
     liveKalshiMinCashDollars: envNumber(env, "LIVE_KALSHI_MIN_CASH_DOLLARS", 5),
     liveQuoteMaxAgeMs: envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
+    // B2 (P2-10): optional TIGHTER freshness bound for the staleness-prone Polymarket (cross/committing)
+    // leg, to reduce crossing on stale CLOB quotes. Clamped to <= the general bar so it can only tighten,
+    // never loosen. Default = the general bar (inert).
+    livePolymarketQuoteMaxAgeMs: Math.min(
+      envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
+      Math.max(1, envNumber(env, "LIVE_POLYMARKET_QUOTE_MAX_AGE_MS", envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750))),
+    ),
     liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
     liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", 10),
-    liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
-    liveHedgeMaxLossDollars: envNumber(env, "LIVE_HEDGE_MAX_LOSS_DOLLARS", 0.02),
-    liveHedgeFeeBufferDollars: envNumber(env, "LIVE_HEDGE_FEE_BUFFER_DOLLARS", 0.01),
+    liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 3_500),
+    liveHedgeRetryAttempts: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_ATTEMPTS", 2)),
+    liveHedgeMaxLossDollars,
+    liveHedgeFeeBufferDollars,
+    liveHedgeMinCrossTicks,
     liveOrderPlacementMode: envLiveOrderPlacementMode(env),
     kalshiHedgeOrderMode: envLiveKalshiHedgeOrderMode(env),
     liveAggressiveLimitRestMs: envNumber(env, "LIVE_AGGRESSIVE_LIMIT_REST_MS", 500),
@@ -299,6 +342,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     livePartialFillLockMode: envLivePartialFillLockMode(env),
     liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
+    // C1 bounded same-window auto-unwind backstop. Default OFF. When enabled (and a venue client provides
+    // an unwindPosition adapter), a one-sided fill that would otherwise be quarantined/locked is first
+    // reduced toward flat via a loss-bounded opposing order; on failure/over-cap it falls through to the
+    // unchanged quarantine/hardlock path. Only ever reduces an existing position — never opens new exposure.
+    liveAutoUnwindEnabled: envBoolean(env, "LIVE_AUTO_UNWIND_ENABLED", false),
+    liveAutoUnwindMaxLossDollars: Math.max(0, envNumber(env, "LIVE_AUTO_UNWIND_MAX_LOSS_DOLLARS", 0.05)),
+    liveAutoUnwindTimeoutMs: Math.max(1, envNumber(env, "LIVE_AUTO_UNWIND_TIMEOUT_MS", 1_500)),
     kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
     polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),
     dashboardApiToken: envString(env, "DASHBOARD_API_TOKEN"),
