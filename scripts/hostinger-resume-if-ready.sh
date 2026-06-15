@@ -8,12 +8,14 @@ fi
 
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
+ALLOW_PARALLEL_QUICK="${HOSTINGER_RESUME_ALLOW_PARALLEL_QUICK:-false}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$ALLOW_PARALLEL_QUICK" <<'REMOTE'
 set -euo pipefail
 
 APP_DIR="$1"
 ENV_FILE="$2"
+ALLOW_PARALLEL_QUICK="$3"
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
@@ -75,10 +77,15 @@ NODE
 
 apply_safety_env_policy() {
   echo "Applying Hostinger exact-share safety env policy."
+  local current_placement_mode
   local placement_mode
-  placement_mode="$(read_env_value LIVE_ORDER_PLACEMENT_MODE || true)"
-  if [ "$placement_mode" != "parallel_quick" ]; then
-    placement_mode=polymarket_first_exact
+  current_placement_mode="$(read_env_value LIVE_ORDER_PLACEMENT_MODE || true)"
+  placement_mode=polymarket_first_exact
+  if [ "$ALLOW_PARALLEL_QUICK" = "true" ] && [ "$current_placement_mode" = "parallel_quick" ]; then
+    placement_mode=parallel_quick
+  fi
+  if [ "$current_placement_mode" = "parallel_quick" ] && [ "$placement_mode" != "parallel_quick" ]; then
+    echo "Parallel quick was staged but is not resume-allowed; using polymarket_first_exact."
   fi
   set_env_value LIVE_ORDER_PLACEMENT_MODE "$placement_mode"
   set_env_value LIVE_KALSHI_HEDGE_TIME_IN_FORCE immediate_or_cancel
