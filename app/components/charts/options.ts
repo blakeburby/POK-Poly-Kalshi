@@ -11,9 +11,8 @@ const timeAxis = (compact = false): XAXisComponentOption =>
     axisTick: { show: false },
     axisLabel: { ...axisLabel, hideOverlap: true },
     splitLine: { show: false },
-    boundaryGap: false,
     show: !compact,
-  }) as XAXisComponentOption;
+  }) as unknown as XAXisComponentOption;
 
 const valueAxis = (fmt?: (v: number) => string, opts?: { compact?: boolean }): AxisOpt =>
   ({
@@ -24,7 +23,7 @@ const valueAxis = (fmt?: (v: number) => string, opts?: { compact?: boolean }): A
     splitLine,
     scale: true,
     show: !opts?.compact,
-  }) as AxisOpt;
+  }) as unknown as AxisOpt;
 
 export function equityAreaOption(points: Pt[], opts?: { positive?: boolean; fmt?: (v: number) => string }): EChartsOption {
   const color = (opts?.positive ?? true) ? CHART.up : CHART.down;
