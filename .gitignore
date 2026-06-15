@@ -8,3 +8,5 @@ out/
 coverage/
 *.log
 .vercel
+.claude/
+*.tsbuildinfo

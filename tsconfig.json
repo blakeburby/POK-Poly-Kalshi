@@ -17,6 +17,11 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./app/*"],
+      "@root/*": ["./*"]
+    },
     "plugins": [
       {
         "name": "next"
@@ -33,12 +38,11 @@
     "app/**/*.tsx",
     "src/**/*.ts",
     "types/**/*.ts",
-    "tests/**/*.ts",
-    "tests/**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "tests"
   ]
 }

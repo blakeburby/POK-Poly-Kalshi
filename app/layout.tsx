@@ -1,14 +1,16 @@
 import type { Metadata } from "next";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "POK Cross-Venue Terminal",
-  description: "Read-only Kalshi and Polymarket BTC binary arbitrage terminal.",
+  title: "POK Capital · Terminal",
+  description: "Read-only quant terminal for BTC 15m Kalshi ⇄ Polymarket cross-venue arbitrage.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body>{children}</body>
     </html>
   );
