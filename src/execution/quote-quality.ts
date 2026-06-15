@@ -103,19 +103,22 @@ function quoteLeg(
 
   const topAsk = askFor(contract, leg.direction);
   const bookLevels = levelsFor(contract, leg.direction);
-  const vwap = depthWeightedAsk(bookLevels, config.liveOrderSize);
+  const executionVwap = depthWeightedAsk(bookLevels, config.liveOrderSize);
+  const requiredDepthVwap = depthWeightedAsk(bookLevels, depthRequired);
   const quoteAgeMs = now - contract.updatedAt;
   const snapshot: QuoteSnapshotLeg = {
     venue: leg.venue,
     contractId: leg.contractId,
     direction: leg.direction,
     topAsk,
-    worstAsk: vwap?.worstAsk ?? null,
-    vwap: vwap?.vwap ?? null,
+    worstAsk: executionVwap?.worstAsk ?? null,
+    vwap: executionVwap?.vwap ?? null,
     maxBuyPrice: null,
-    depth: vwap?.depth ?? bookLevels.reduce((sum, level) => sum + (finite(level.size) ? level.size : 0), 0),
+    depth: requiredDepthVwap?.depth
+      ?? executionVwap?.depth
+      ?? bookLevels.reduce((sum, level) => sum + (finite(level.size) ? level.size : 0), 0),
     depthRequired,
-    levelsConsumed: vwap?.levelsConsumed ?? [],
+    levelsConsumed: executionVwap?.levelsConsumed ?? [],
     spread: spreadFor(contract, leg.direction),
     quoteAgeMs: Number.isFinite(quoteAgeMs) ? quoteAgeMs : null,
     updatedAt: contract.updatedAt,
@@ -131,7 +134,7 @@ function quoteLeg(
   if (topAsk == null || !finite(topAsk)) {
     return { snapshot, reason: `${leg.venue} ${leg.direction} ask is unavailable`, maxBuyPrice: null, adjustedLeg: null };
   }
-  if (!vwap) {
+  if (!executionVwap || !requiredDepthVwap) {
     return {
       snapshot,
       reason: `${leg.venue} ${leg.direction} depth ${roundPrice(snapshot.depth)} below required ${depthRequired}`,
@@ -144,7 +147,7 @@ function quoteLeg(
   }
 
   const takerCushion = Math.max(0, config.liveTakerPriceCushionCents);
-  const maxBuyPrice = roundPrice(Math.min(1, vwap.worstAsk + takerCushion / 100));
+  const maxBuyPrice = roundPrice(Math.min(1, executionVwap.worstAsk + takerCushion / 100));
   return {
     snapshot: { ...snapshot, maxBuyPrice },
     reason: null,

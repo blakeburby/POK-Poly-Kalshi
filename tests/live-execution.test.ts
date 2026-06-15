@@ -3089,6 +3089,53 @@ test("live executor fails closed for parallel_quick UI mode without cap validati
   assert.equal(polymarket.placed.length, 0);
 });
 
+test("live executor blocks parallel_quick before dispatch when book depth is below configured minimum", async () => {
+  const now = 1_799_999_900_000;
+  const lower = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const higher = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 10 }],
+    updatedAt: now,
+  });
+  const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
+  assert.ok(candidate);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi");
+  const polymarket = new FakeVenueClient("polymarket");
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveMinBookDepthShares: 10,
+      liveOrderPlacementMode: "parallel_quick",
+      kalshiHedgeOrderMode: "public_v2",
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "skipped");
+  assert.match(result.failureReason ?? "", /polymarket yes depth 5 below required 10/);
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(polymarket.placed.length, 0);
+});
+
 test("live executor allows parallel_quick with supported Kalshi public V2 IOC mode", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);

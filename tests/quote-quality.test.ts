@@ -99,6 +99,47 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and raw 
   assert.match(noEdge.reason ?? "", /cushioned executable edge 0.0400 below threshold 0.0500/);
 });
 
+test("live quote quality enforces minimum book depth above order size without raising execution cap", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 5, liveMinBookDepthShares: 10 });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 5 },
+      { price: 0.8, size: 5 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.1,
+    noAskLevels: [{ price: 0.1, size: 10 }],
+    updatedAt: now,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const enoughDepth = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(enoughDepth.ok, true);
+  assert.equal(enoughDepth.snapshot.polymarket?.depthRequired, 10);
+  assert.equal(enoughDepth.snapshot.polymarket?.depth, 10);
+  assert.equal(enoughDepth.snapshot.polymarket?.worstAsk, 0.4);
+  assert.equal(enoughDepth.snapshot.polymarket?.maxBuyPrice, 0.4);
+  assert.deepEqual(enoughDepth.snapshot.polymarket?.levelsConsumed, [{ price: 0.4, size: 5 }]);
+
+  const underDepth = evaluateLiveQuoteQuality(candidate, {
+    kalshi: [kalshi],
+    polymarket: [{ ...poly, yesAskLevels: [{ price: 0.4, size: 5 }] }],
+  }, config, now);
+  assert.equal(underDepth.ok, false);
+  assert.match(underDepth.reason ?? "", /polymarket yes depth 5 below required 10/);
+});
+
 test("live quote quality uses raw VWAP edge without extra live edge buffers", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig();
