@@ -438,9 +438,17 @@ test("live-lock settlement resolver requires paused entries and zero positive-va
   assert.match(script, /snapshotHealth\.arbEnabled !== false/);
   assert.match(script, /Kalshi has positive-value positions/);
   assert.match(script, /Polymarket has positive-value positions/);
+  assert.match(script, /positive-value positions for active lock markets/);
   assert.match(script, /UPDATE live_execution_locks/);
   assert.match(script, /UPDATE cross_venue_arb_signals/);
   assert.match(script, /Refusing to resolve live lock/);
+});
+
+test("historical quarantine reconciliation ignores unrelated positive positions only when target positions are clean", () => {
+  const script = readFileSync("scripts/reconcile-historical-quarantines.ts", "utf8");
+  assert.match(script, /targetPositivePositions/);
+  assert.match(script, /positive-value positions for unresolved quarantine markets/);
+  assert.match(script, /Number\(kalshi\.positionValueDollars/);
 });
 
 test("signal persistence blocks live candidates with same-window exposure", async () => {

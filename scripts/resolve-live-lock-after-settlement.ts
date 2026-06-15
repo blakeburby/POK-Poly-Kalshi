@@ -30,6 +30,8 @@ type SignalRow = {
   execution_strategy: string | null;
   failure_reason: string | null;
   execution_group_id: string | null;
+  kalshi_contract_id: string | null;
+  polymarket_contract_id: string | null;
   kalshi_status: string | null;
   polymarket_status: string | null;
   kalshi_fill_count: string | number | null;
@@ -98,6 +100,55 @@ function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+function asArray(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.map(asRecord) : [];
+}
+
+function stringSet(values: Array<string | null | undefined>): Set<string> {
+  return new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean));
+}
+
+function positionValue(position: JsonRecord): number {
+  return numberFrom(position.value)
+    ?? numberFrom(position.positionValueDollars)
+    ?? numberFrom(position.currentValue)
+    ?? numberFrom(position.marketValue)
+    ?? 0;
+}
+
+function positionShares(position: JsonRecord): number {
+  return numberFrom(position.shares)
+    ?? numberFrom(position.quantity)
+    ?? numberFrom(position.count)
+    ?? 0;
+}
+
+function positionMatchesTarget(position: JsonRecord, targetIds: Set<string>): boolean {
+  if (targetIds.size === 0) return false;
+  const candidates = [
+    position.id,
+    position.market,
+    position.marketId,
+    position.market_id,
+    position.ticker,
+    position.contractId,
+    position.contract_id,
+    position.assetId,
+    position.asset_id,
+    position.tokenId,
+    position.token_id,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  return candidates.some((value) => targetIds.has(value));
+}
+
+function targetPositivePositions(venue: JsonRecord, targetIds: Set<string>): JsonRecord[] | null {
+  if (!Array.isArray(venue.positions)) return null;
+  return asArray(venue.positions).filter((position) => (
+    positionMatchesTarget(position, targetIds)
+    && (positionValue(position) > 0.01 || (positionValue(position) === 0 && positionShares(position) > 0 && position.value == null))
+  ));
+}
+
 function dateIso(value: Date | string | null | undefined): string | null {
   if (value == null) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -131,6 +182,8 @@ function compactSignal(row: SignalRow): JsonRecord {
     executionStrategy: row.execution_strategy,
     failureReason: row.failure_reason,
     executionGroupId: row.execution_group_id,
+    kalshiContractId: row.kalshi_contract_id,
+    polymarketContractId: row.polymarket_contract_id,
     kalshiStatus: row.kalshi_status,
     polymarketStatus: row.polymarket_status,
     kalshiFillCount: numberFrom(row.kalshi_fill_count),
@@ -171,6 +224,10 @@ function guardFailures(input: {
   const tradingActivity = asRecord(input.snapshot.tradingActivity);
   const kalshi = asRecord(tradingActivity.kalshi);
   const polymarket = asRecord(tradingActivity.polymarket);
+  const kalshiTargetIds = stringSet(input.relatedSignals.map((row) => row.kalshi_contract_id));
+  const polymarketTargetIds = stringSet(input.relatedSignals.map((row) => row.polymarket_contract_id));
+  const kalshiTargetPositions = targetPositivePositions(kalshi, kalshiTargetIds);
+  const polymarketTargetPositions = targetPositivePositions(polymarket, polymarketTargetIds);
 
   if (input.health.ok !== true) failures.push("health.ok is not true");
   if (input.health.arbEnabled !== false) failures.push("health.arbEnabled is not false");
@@ -184,12 +241,20 @@ function guardFailures(input: {
   if (polymarket.connectionStatus !== "live") failures.push("Polymarket account source is not live");
   if (Number(kalshi.openOrders ?? 0) !== 0) failures.push("Kalshi open orders are not zero");
   if (Number(polymarket.openOrders ?? 0) !== 0) failures.push("Polymarket open orders are not zero");
-  if (Number(kalshi.positiveValuePositions ?? 0) !== 0) failures.push("Kalshi has positive-value positions");
-  if (Number(kalshi.unknownValuePositionCount ?? 0) !== 0) failures.push("Kalshi has positions with unknown value");
-  if (Number(kalshi.positionValueDollars ?? 0) > 0.01) failures.push("Kalshi position value is positive");
-  if (Number(polymarket.positiveValuePositions ?? 0) !== 0) failures.push("Polymarket has positive-value positions");
-  if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0) failures.push("Polymarket has positions with unknown value");
-  if (Number(polymarket.positionValueDollars ?? 0) > 0.01) failures.push("Polymarket position value is positive");
+  if (kalshiTargetPositions == null) {
+    if (Number(kalshi.positiveValuePositions ?? 0) !== 0) failures.push("Kalshi has positive-value positions");
+    if (Number(kalshi.unknownValuePositionCount ?? 0) !== 0) failures.push("Kalshi has positions with unknown value");
+    if (Number(kalshi.positionValueDollars ?? 0) > 0.01) failures.push("Kalshi position value is positive");
+  } else if (kalshiTargetPositions.length > 0) {
+    failures.push("Kalshi has positive-value positions for active lock markets");
+  }
+  if (polymarketTargetPositions == null) {
+    if (Number(polymarket.positiveValuePositions ?? 0) !== 0) failures.push("Polymarket has positive-value positions");
+    if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0) failures.push("Polymarket has positions with unknown value");
+    if (Number(polymarket.positionValueDollars ?? 0) > 0.01) failures.push("Polymarket position value is positive");
+  } else if (polymarketTargetPositions.length > 0) {
+    failures.push("Polymarket has positive-value positions for active lock markets");
+  }
 
   const tooRecent = input.relatedSignals.filter((row) => {
     const expiryMs = rowExpiryMs(row);
@@ -277,7 +342,8 @@ async function main(): Promise<void> {
       ? { rows: [] as SignalRow[] }
       : await client.query<SignalRow>(`
         SELECT id, created_at, expiry_ms, action, execution_strategy, failure_reason,
-               execution_group_id, kalshi_status, polymarket_status,
+               execution_group_id, kalshi_contract_id, polymarket_contract_id,
+               kalshi_status, polymarket_status,
                kalshi_fill_count, polymarket_fill_count, reconciliation_resolved_at
         FROM cross_venue_arb_signals
         WHERE execution_group_id = ANY($1::TEXT[])

@@ -144,6 +144,51 @@ function asArray(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.map(asRecord) : [];
 }
 
+function stringSet(values: Array<string | null | undefined>): Set<string> {
+  return new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean));
+}
+
+function positionValue(position: JsonRecord): number {
+  return numberFrom(position.value)
+    ?? numberFrom(position.positionValueDollars)
+    ?? numberFrom(position.currentValue)
+    ?? numberFrom(position.marketValue)
+    ?? 0;
+}
+
+function positionShares(position: JsonRecord): number {
+  return numberFrom(position.shares)
+    ?? numberFrom(position.quantity)
+    ?? numberFrom(position.count)
+    ?? 0;
+}
+
+function positionMatchesTarget(position: JsonRecord, targetIds: Set<string>): boolean {
+  if (targetIds.size === 0) return false;
+  const candidates = [
+    position.id,
+    position.market,
+    position.marketId,
+    position.market_id,
+    position.ticker,
+    position.contractId,
+    position.contract_id,
+    position.assetId,
+    position.asset_id,
+    position.tokenId,
+    position.token_id,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  return candidates.some((value) => targetIds.has(value));
+}
+
+function targetPositivePositions(venue: JsonRecord, targetIds: Set<string>): JsonRecord[] | null {
+  if (!Array.isArray(venue.positions)) return null;
+  return asArray(venue.positions).filter((position) => (
+    positionMatchesTarget(position, targetIds)
+    && (positionValue(position) > 0.01 || (positionValue(position) === 0 && positionShares(position) > 0 && position.value == null))
+  ));
+}
+
 function dateIso(value: Date | string | null | undefined): string | null {
   if (value == null) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -447,6 +492,10 @@ function guardFailures(evidence: {
   const tradingActivity = asRecord(evidence.snapshot.tradingActivity);
   const kalshi = asRecord(tradingActivity.kalshi);
   const polymarket = asRecord(tradingActivity.polymarket);
+  const kalshiTargetIds = stringSet(evidence.rows.map((row) => row.kalshi_contract_id));
+  const polymarketTargetIds = stringSet(evidence.rows.map((row) => row.polymarket_contract_id));
+  const kalshiTargetPositions = targetPositivePositions(kalshi, kalshiTargetIds);
+  const polymarketTargetPositions = targetPositivePositions(polymarket, polymarketTargetIds);
 
   if (evidence.health.ok !== true) failures.push("health.ok is not true");
   if (evidence.health.arbEnabled !== false) failures.push("health.arbEnabled is not false");
@@ -461,11 +510,19 @@ function guardFailures(evidence: {
   if (polymarket.connectionStatus !== "live") failures.push("Polymarket account source is not live");
   if (Number(kalshi.openOrders ?? 0) !== 0) failures.push("Kalshi open orders are not zero");
   if (Number(polymarket.openOrders ?? 0) !== 0) failures.push("Polymarket open orders are not zero");
-  if (Number(kalshi.positions ?? 0) !== 0) failures.push("Kalshi positions are not zero");
-  if (Number(kalshi.positionValueDollars ?? 0) > 0.01) failures.push("Kalshi position value is positive");
-  if (Number(polymarket.positiveValuePositions ?? 0) !== 0) failures.push("Polymarket has positive-value positions");
-  if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0) failures.push("Polymarket has positions with unknown value");
-  if (Number(polymarket.positionValueDollars ?? 0) > 0.01) failures.push("Polymarket position value is positive");
+  if (kalshiTargetPositions == null) {
+    if (Number(kalshi.positions ?? 0) !== 0) failures.push("Kalshi positions are not zero");
+    if (Number(kalshi.positionValueDollars ?? 0) > 0.01) failures.push("Kalshi position value is positive");
+  } else if (kalshiTargetPositions.length > 0) {
+    failures.push("Kalshi has positive-value positions for unresolved quarantine markets");
+  }
+  if (polymarketTargetPositions == null) {
+    if (Number(polymarket.positiveValuePositions ?? 0) !== 0) failures.push("Polymarket has positive-value positions");
+    if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0) failures.push("Polymarket has positions with unknown value");
+    if (Number(polymarket.positionValueDollars ?? 0) > 0.01) failures.push("Polymarket position value is positive");
+  } else if (polymarketTargetPositions.length > 0) {
+    failures.push("Polymarket has positive-value positions for unresolved quarantine markets");
+  }
 
   if (evidence.rows.length === 0) return failures;
 
