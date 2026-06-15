@@ -24,6 +24,7 @@
     "hostinger:validate-kalshi-ui-cap": "bash scripts/hostinger-validate-kalshi-ui-cap.sh",
     "hostinger:pause-ui-capture": "bash scripts/hostinger-pause-for-kalshi-ui-capture.sh",
     "hostinger:reconcile-quarantines": "bash scripts/hostinger-reconcile-historical-quarantines.sh",
+    "hostinger:resolve-live-lock": "bash scripts/hostinger-resolve-live-lock-after-settlement.sh",
     "kalshi:ui-session:extract": "tsx scripts/extract-kalshi-ui-session-from-har.ts",
     "kalshi:ui-har:sanitize": "tsx scripts/sanitize-kalshi-ui-har.ts",
     "readiness:public": "bash scripts/verify-public-readiness.sh",

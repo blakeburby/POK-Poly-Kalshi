@@ -432,6 +432,17 @@ test("historical quarantine reconciliation treats confirmed and executed venue e
   assert.match(script, /const terminalOrderStatuses = new Set\(\[[\s\S]*"executed"/);
 });
 
+test("live-lock settlement resolver requires paused entries and zero positive-value positions before apply", () => {
+  const script = readFileSync("scripts/resolve-live-lock-after-settlement.ts", "utf8");
+  assert.match(script, /health\.arbEnabled !== false/);
+  assert.match(script, /snapshotHealth\.arbEnabled !== false/);
+  assert.match(script, /Kalshi has positive-value positions/);
+  assert.match(script, /Polymarket has positive-value positions/);
+  assert.match(script, /UPDATE live_execution_locks/);
+  assert.match(script, /UPDATE cross_venue_arb_signals/);
+  assert.match(script, /Refusing to resolve live lock/);
+});
+
 test("signal persistence blocks live candidates with same-window exposure", async () => {
   const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4 });
   const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5 });
