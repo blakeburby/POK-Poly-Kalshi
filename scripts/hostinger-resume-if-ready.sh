@@ -159,7 +159,7 @@ const checks = [
   ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
   ["health.liveOrderPlacementMode supported", liveOrderPlacementMode === "polymarket_first_exact" || liveOrderPlacementMode === "parallel_quick"],
-  ["health.liveKalshiHedgeTimeInForce=immediate_or_cancel", liveKalshiHedgeTimeInForce === "immediate_or_cancel"],
+  ["health.liveKalshiHedgeTimeInForce=ioc-or-fok", liveKalshiHedgeTimeInForce === "immediate_or_cancel" || liveKalshiHedgeTimeInForce === "fill_or_kill"],
   [
     "health.kalshiHedgeOrderMode=ui_quick_order, fix_ioc, or public_v2 when parallel_quick",
     liveOrderPlacementMode !== "parallel_quick" || kalshiHedgeOrderMode === "ui_quick_order" || kalshiHedgeOrderMode === "fix_ioc" || kalshiHedgeOrderMode === "public_v2",
@@ -173,10 +173,6 @@ const checks = [
   [
     "health.kalshiUiQuickOrderCapValidated=true when ui_quick_order",
     kalshiHedgeOrderMode !== "ui_quick_order" || kalshiUiQuickOrderCapValidated === true,
-  ],
-  [
-    "health.liveKalshiHedgeTimeInForce=immediate_or_cancel when fix_ioc",
-    kalshiHedgeOrderMode !== "fix_ioc" || liveKalshiHedgeTimeInForce === "immediate_or_cancel",
   ],
   ["execution.partialFillLocked=false", execution.partialFillLocked === false],
   ["execution.circuitBreakerLocked=false", execution.circuitBreakerLocked === false],
