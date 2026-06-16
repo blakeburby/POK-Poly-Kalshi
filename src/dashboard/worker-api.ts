@@ -152,16 +152,82 @@ async function cachedExecutionReadiness(
   return value;
 }
 
-export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
-  const snapshotStartedAt = Date.now();
-  const books = runtime.books.snapshot();
-  const scannerStatus = runtime.getScannerStatus();
-  const [recentSignals, analytics] = await Promise.all([
-    cachedRecentSignals(runtime, now, cache),
-    cachedAnalytics(runtime, now, cache),
-  ]);
-  const execution = await cachedExecutionReadiness(runtime, now, cache);
-  const tradingActivity = await cachedTradingActivity(runtime, now, execution, cache);
+function buildHealth(runtime: DashboardRuntime): DashboardSnapshot["health"] {
+  return {
+    ok: true,
+    liveTrading: true,
+    arbEnabled: runtime.config.arbEnabled,
+    minProfitDollars: runtime.config.minProfitDollars,
+    reentryIntervalMs: runtime.config.reentryIntervalMs,
+    scanHeartbeatMs: runtime.config.arbScanHeartbeatMs,
+    staleBookMs: runtime.config.staleBookMs,
+    liveMaxTradesPerWindow: runtime.config.liveMaxTradesPerWindow,
+    liveOrderSize: runtime.config.liveOrderSize,
+    liveTakerPriceCushionCents: runtime.config.liveTakerPriceCushionCents,
+    liveKalshiMinCashDollars: runtime.config.liveKalshiMinCashDollars,
+    liveQuoteMaxAgeMs: runtime.config.liveQuoteMaxAgeMs,
+    liveQuoteSyncMaxSkewMs: runtime.config.liveQuoteSyncMaxSkewMs,
+    liveMinBookDepthShares: runtime.config.liveMinBookDepthShares,
+    liveOrderTimeoutMs: runtime.config.liveOrderTimeoutMs,
+    liveHedgeMaxLossDollars: runtime.config.liveHedgeMaxLossDollars,
+    liveHedgeFeeBufferDollars: runtime.config.liveHedgeFeeBufferDollars,
+    liveHedgeMinCrossTicks: runtime.config.liveHedgeMinCrossTicks,
+    liveOrderPlacementMode: runtime.config.liveOrderPlacementMode,
+    kalshiHedgeOrderMode: runtime.config.kalshiHedgeOrderMode,
+    kalshiUiQuickOrderCapValidated: runtime.config.kalshiUiQuickOrderCapValidated,
+    kalshiFixHost: runtime.config.kalshiFixHost,
+    kalshiFixPort: runtime.config.kalshiFixPort,
+    kalshiFixTargetCompId: runtime.config.kalshiFixTargetCompId,
+    kalshiFixUseDollars: runtime.config.kalshiFixUseDollars,
+    liveAggressiveLimitRestMs: runtime.config.liveAggressiveLimitRestMs,
+    liveParallelExecutionEnabled: runtime.config.liveParallelExecutionEnabled,
+    liveHotPathEnabled: runtime.config.liveHotPathEnabled,
+    liveHotPathCacheMaxAgeMs: runtime.config.liveHotPathCacheMaxAgeMs,
+    liveHotPathWarmIntervalMs: runtime.config.liveHotPathWarmIntervalMs,
+    livePolymarketPresignEnabled: runtime.config.livePolymarketPresignEnabled,
+    livePolymarketSignedOrderTtlMs: runtime.config.livePolymarketSignedOrderTtlMs,
+    livePolymarketFirstMinFillShares: runtime.config.livePolymarketFirstMinFillShares,
+    livePolymarketFirstMaxFillShares: runtime.config.livePolymarketFirstMaxFillShares,
+    liveKalshiHedgeTimeInForce: runtime.config.liveKalshiHedgeTimeInForce,
+    liveKalshiPrearmEnabled: runtime.config.liveKalshiPrearmEnabled,
+    liveKalshiPrearmMaxAgeMs: runtime.config.liveKalshiPrearmMaxAgeMs,
+    liveKalshiPrearmPricePolicy: runtime.config.liveKalshiPrearmPricePolicy,
+    liveLowLatencyHttpEnabled: runtime.config.liveLowLatencyHttpEnabled,
+    liveUserStreamsEnabled: runtime.config.liveUserStreamsEnabled,
+    liveUserStreamPretradeGraceMs: runtime.config.liveUserStreamPretradeGraceMs,
+    liveUserStreamConfirmTimeoutMs: runtime.config.liveUserStreamConfirmTimeoutMs,
+    livePretradeRetryAttempts: runtime.config.livePretradeRetryAttempts,
+    livePretradeRetryDelayMs: runtime.config.livePretradeRetryDelayMs,
+    liveFinalRecoveryTimeoutMs: runtime.config.liveFinalRecoveryTimeoutMs,
+    liveFinalRecoveryPollMs: runtime.config.liveFinalRecoveryPollMs,
+    liveAutoResolveVerifiedIncidents: runtime.config.liveAutoResolveVerifiedIncidents,
+    liveAutoHardlocksEnabled: runtime.config.liveAutoHardlocksEnabled,
+    liveExactExposureRequired: runtime.config.liveExactExposureRequired,
+    liveExecutionQualityGateEnabled: runtime.config.liveExecutionQualityGateEnabled,
+    liveExecutionQualityLookbackMs: runtime.config.liveExecutionQualityLookbackMs,
+    liveExecutionQualitySampleLimit: runtime.config.liveExecutionQualitySampleLimit,
+    liveExecutionQualityMinSamples: runtime.config.liveExecutionQualityMinSamples,
+    liveExecutionQualityMinExactFillRate: runtime.config.liveExecutionQualityMinExactFillRate,
+    liveFillQualityScoringEnabled: runtime.config.liveFillQualityScoringEnabled,
+    liveFillQualityGateEnabled: runtime.config.liveFillQualityGateEnabled,
+    liveFillQualityMinExpectedEdge: runtime.config.liveFillQualityMinExpectedEdge,
+    liveFillQualityLookbackMs: runtime.config.liveFillQualityLookbackMs,
+    liveFillQualitySampleLimit: runtime.config.liveFillQualitySampleLimit,
+    liveFillQualityMinSamples: runtime.config.liveFillQualityMinSamples,
+    liveFillQualityModelVersion: runtime.config.liveFillQualityModelVersion,
+    liveLeadLagScoringEnabled: runtime.config.liveLeadLagScoringEnabled,
+    liveLeadLagGateEnabled: runtime.config.liveLeadLagGateEnabled,
+    liveLeadLagModelVersion: runtime.config.liveLeadLagModelVersion,
+    liveLeadLagWindowsMs: runtime.config.liveLeadLagWindowsMs,
+    liveLeadLagMinConfidence: runtime.config.liveLeadLagMinConfidence,
+    liveLeadLagMaxAdverseSelectionScore: runtime.config.liveLeadLagMaxAdverseSelectionScore,
+    livePartialFillLockMode: runtime.config.livePartialFillLockMode,
+    liveMaxUnresolvedExposureDollars: runtime.config.liveMaxUnresolvedExposureDollars,
+    liveReconcileBeforeTrade: runtime.config.liveReconcileBeforeTrade,
+  };
+}
+
+function sortedCandidates(runtime: DashboardRuntime, now: number): { liveCandidates: ArbCandidate[]; syntheticStructures: ArbCandidate[] } {
   const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
     runtime.books.getKalshiContracts(runtime.config.staleBookMs, now),
@@ -178,82 +244,57 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
       || (right.risk?.worstCaseProfit ?? right.guaranteedProfit) - (left.risk?.worstCaseProfit ?? left.guaranteedProfit)
       || left.expiryMs - right.expiryMs;
   });
+  return { liveCandidates, syntheticStructures };
+}
+
+/**
+ * Lightweight, in-memory-only slice for high-frequency polling (~sub-second):
+ * books, scanner, live candidates, readiness/op-status, diagnostics, latency,
+ * health. Deliberately omits the heavy DB/venue reads (recentSignals, analytics,
+ * tradingActivity, logs) which the dashboard polls on a slower cadence.
+ */
+export async function createLiveSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<Partial<DashboardSnapshot>> {
+  const startedAt = Date.now();
+  const books = runtime.books.snapshot();
+  const scannerStatus = runtime.getScannerStatus();
+  const execution = await cachedExecutionReadiness(runtime, now, cache);
+  const { liveCandidates, syntheticStructures } = sortedCandidates(runtime, now);
+  const buildMs = Math.max(0, Date.now() - startedAt);
+  return {
+    generatedAt: now,
+    health: buildHealth(runtime),
+    latency: runtime.getLatencySnapshot?.(now, buildMs),
+    discovery: runtime.getDiscoveryState(),
+    scanner: {
+      ...scannerStatus,
+      lastScanAgeMs: scannerStatus.lastScanAt > 0 ? Math.max(0, now - scannerStatus.lastScanAt) : null,
+    },
+    books,
+    diagnostics: {
+      polymarket: runtime.getPolymarketDiagnostics?.(now) ?? emptyPolymarketDiagnostics(),
+    },
+    liveCandidates,
+    syntheticStructures,
+    execution,
+  };
+}
+
+export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
+  const snapshotStartedAt = Date.now();
+  const books = runtime.books.snapshot();
+  const scannerStatus = runtime.getScannerStatus();
+  const [recentSignals, analytics] = await Promise.all([
+    cachedRecentSignals(runtime, now, cache),
+    cachedAnalytics(runtime, now, cache),
+  ]);
+  const execution = await cachedExecutionReadiness(runtime, now, cache);
+  const tradingActivity = await cachedTradingActivity(runtime, now, execution, cache);
+  const { liveCandidates, syntheticStructures } = sortedCandidates(runtime, now);
 
   const snapshotBuildMs = Math.max(0, Date.now() - snapshotStartedAt);
   return {
     generatedAt: now,
-    health: {
-      ok: true,
-      liveTrading: true,
-      arbEnabled: runtime.config.arbEnabled,
-      minProfitDollars: runtime.config.minProfitDollars,
-      reentryIntervalMs: runtime.config.reentryIntervalMs,
-      scanHeartbeatMs: runtime.config.arbScanHeartbeatMs,
-      staleBookMs: runtime.config.staleBookMs,
-      liveMaxTradesPerWindow: runtime.config.liveMaxTradesPerWindow,
-      liveOrderSize: runtime.config.liveOrderSize,
-      liveTakerPriceCushionCents: runtime.config.liveTakerPriceCushionCents,
-      liveKalshiMinCashDollars: runtime.config.liveKalshiMinCashDollars,
-      liveQuoteMaxAgeMs: runtime.config.liveQuoteMaxAgeMs,
-      liveQuoteSyncMaxSkewMs: runtime.config.liveQuoteSyncMaxSkewMs,
-      liveMinBookDepthShares: runtime.config.liveMinBookDepthShares,
-      liveOrderTimeoutMs: runtime.config.liveOrderTimeoutMs,
-      liveHedgeMaxLossDollars: runtime.config.liveHedgeMaxLossDollars,
-      liveHedgeFeeBufferDollars: runtime.config.liveHedgeFeeBufferDollars,
-      liveHedgeMinCrossTicks: runtime.config.liveHedgeMinCrossTicks,
-      liveOrderPlacementMode: runtime.config.liveOrderPlacementMode,
-      kalshiHedgeOrderMode: runtime.config.kalshiHedgeOrderMode,
-      kalshiUiQuickOrderCapValidated: runtime.config.kalshiUiQuickOrderCapValidated,
-      kalshiFixHost: runtime.config.kalshiFixHost,
-      kalshiFixPort: runtime.config.kalshiFixPort,
-      kalshiFixTargetCompId: runtime.config.kalshiFixTargetCompId,
-      kalshiFixUseDollars: runtime.config.kalshiFixUseDollars,
-      liveAggressiveLimitRestMs: runtime.config.liveAggressiveLimitRestMs,
-      liveParallelExecutionEnabled: runtime.config.liveParallelExecutionEnabled,
-      liveHotPathEnabled: runtime.config.liveHotPathEnabled,
-      liveHotPathCacheMaxAgeMs: runtime.config.liveHotPathCacheMaxAgeMs,
-      liveHotPathWarmIntervalMs: runtime.config.liveHotPathWarmIntervalMs,
-      livePolymarketPresignEnabled: runtime.config.livePolymarketPresignEnabled,
-      livePolymarketSignedOrderTtlMs: runtime.config.livePolymarketSignedOrderTtlMs,
-      livePolymarketFirstMinFillShares: runtime.config.livePolymarketFirstMinFillShares,
-      livePolymarketFirstMaxFillShares: runtime.config.livePolymarketFirstMaxFillShares,
-      liveKalshiHedgeTimeInForce: runtime.config.liveKalshiHedgeTimeInForce,
-      liveKalshiPrearmEnabled: runtime.config.liveKalshiPrearmEnabled,
-      liveKalshiPrearmMaxAgeMs: runtime.config.liveKalshiPrearmMaxAgeMs,
-      liveKalshiPrearmPricePolicy: runtime.config.liveKalshiPrearmPricePolicy,
-      liveLowLatencyHttpEnabled: runtime.config.liveLowLatencyHttpEnabled,
-      liveUserStreamsEnabled: runtime.config.liveUserStreamsEnabled,
-      liveUserStreamPretradeGraceMs: runtime.config.liveUserStreamPretradeGraceMs,
-      liveUserStreamConfirmTimeoutMs: runtime.config.liveUserStreamConfirmTimeoutMs,
-      livePretradeRetryAttempts: runtime.config.livePretradeRetryAttempts,
-      livePretradeRetryDelayMs: runtime.config.livePretradeRetryDelayMs,
-      liveFinalRecoveryTimeoutMs: runtime.config.liveFinalRecoveryTimeoutMs,
-      liveFinalRecoveryPollMs: runtime.config.liveFinalRecoveryPollMs,
-      liveAutoResolveVerifiedIncidents: runtime.config.liveAutoResolveVerifiedIncidents,
-      liveAutoHardlocksEnabled: runtime.config.liveAutoHardlocksEnabled,
-      liveExactExposureRequired: runtime.config.liveExactExposureRequired,
-      liveExecutionQualityGateEnabled: runtime.config.liveExecutionQualityGateEnabled,
-      liveExecutionQualityLookbackMs: runtime.config.liveExecutionQualityLookbackMs,
-      liveExecutionQualitySampleLimit: runtime.config.liveExecutionQualitySampleLimit,
-      liveExecutionQualityMinSamples: runtime.config.liveExecutionQualityMinSamples,
-      liveExecutionQualityMinExactFillRate: runtime.config.liveExecutionQualityMinExactFillRate,
-      liveFillQualityScoringEnabled: runtime.config.liveFillQualityScoringEnabled,
-      liveFillQualityGateEnabled: runtime.config.liveFillQualityGateEnabled,
-      liveFillQualityMinExpectedEdge: runtime.config.liveFillQualityMinExpectedEdge,
-      liveFillQualityLookbackMs: runtime.config.liveFillQualityLookbackMs,
-      liveFillQualitySampleLimit: runtime.config.liveFillQualitySampleLimit,
-      liveFillQualityMinSamples: runtime.config.liveFillQualityMinSamples,
-      liveFillQualityModelVersion: runtime.config.liveFillQualityModelVersion,
-      liveLeadLagScoringEnabled: runtime.config.liveLeadLagScoringEnabled,
-      liveLeadLagGateEnabled: runtime.config.liveLeadLagGateEnabled,
-      liveLeadLagModelVersion: runtime.config.liveLeadLagModelVersion,
-      liveLeadLagWindowsMs: runtime.config.liveLeadLagWindowsMs,
-      liveLeadLagMinConfidence: runtime.config.liveLeadLagMinConfidence,
-      liveLeadLagMaxAdverseSelectionScore: runtime.config.liveLeadLagMaxAdverseSelectionScore,
-      livePartialFillLockMode: runtime.config.livePartialFillLockMode,
-      liveMaxUnresolvedExposureDollars: runtime.config.liveMaxUnresolvedExposureDollars,
-      liveReconcileBeforeTrade: runtime.config.liveReconcileBeforeTrade,
-    },
+    health: buildHealth(runtime),
     latency: runtime.getLatencySnapshot?.(now, snapshotBuildMs),
     discovery: runtime.getDiscoveryState(),
     scanner: {
@@ -285,6 +326,10 @@ const sharedSnapshotCache: DashboardSnapshotCache = {};
 
 async function writeSnapshot(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
   sendJson(response, 200, await createDashboardSnapshot(runtime, Date.now(), sharedSnapshotCache));
+}
+
+async function writeLive(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
+  sendJson(response, 200, await createLiveSnapshot(runtime, Date.now(), sharedSnapshotCache));
 }
 
 async function writeTradingActivity(response: ServerResponse, runtime: DashboardRuntime, platform: TradingPlatform | null): Promise<void> {
@@ -331,7 +376,7 @@ export async function handleDashboardRequest(
 ): Promise<boolean> {
   const url = new URL(request.url ?? "/", "http://localhost");
   const pathname = url.pathname;
-  if (pathname !== "/dashboard/snapshot" && pathname !== "/dashboard/stream" && pathname !== "/trading/activity") return false;
+  if (pathname !== "/dashboard/snapshot" && pathname !== "/dashboard/live" && pathname !== "/dashboard/stream" && pathname !== "/trading/activity") return false;
 
   if (!runtime.config.dashboardApiToken) {
     sendJson(response, 503, { error: "dashboard_token_not_configured" });
@@ -344,6 +389,11 @@ export async function handleDashboardRequest(
 
   if (pathname === "/dashboard/snapshot") {
     await writeSnapshot(response, runtime);
+    return true;
+  }
+
+  if (pathname === "/dashboard/live") {
+    await writeLive(response, runtime);
     return true;
   }
 
