@@ -551,25 +551,41 @@ export class LiveExecutor implements ArbExecutor {
       );
     }
     prepared = refreshed;
-    leadLagSnapshot = this.leadLagSnapshot(candidate, prepared.quoteSnapshot);
-    const refreshedLeadLagBlock = leadLagBlockReason(leadLagSnapshot);
-    if (refreshedLeadLagBlock) {
-      return this.skippedWithQuoteQuality(
-        refreshedLeadLagBlock,
-        prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
-        null,
-      );
+    // LA5: the lead-lag and fill-quality snapshots are SHADOW telemetry unless their gate is enabled
+    // (leadLagBlockReason / fillQualityBlockReason return null when the gate is off). Only RECOMPUTE them
+    // on the post-preflight refresh when the gate is ON — it must re-decide on the refreshed quote. When
+    // OFF (the default), keep the initial snapshot for telemetry and skip the redundant second
+    // computation on the submit critical path. Trading behavior is unchanged: a disabled gate never
+    // blocks on either snapshot, so the accept/reject outcome is identical either way.
+    // Recompute lead-lag on the refresh when its own gate is on OR the fill-quality gate is on: the
+    // fill-quality score reads the refreshed lead-lag via quoteSnapshot.leadLagSnapshot (set as a side
+    // effect of leadLagSnapshot()), so a fill-quality-gate-on / lead-lag-gate-off config must still see
+    // the refreshed lead-lag to score identically to the pre-LA5 behavior. Only the lead-lag GATE blocks.
+    if (this.config.liveLeadLagGateEnabled || this.config.liveFillQualityGateEnabled) {
+      leadLagSnapshot = this.leadLagSnapshot(candidate, prepared.quoteSnapshot);
     }
-    fillQualitySnapshot = await this.fillQualitySnapshot(candidate, prepared.quoteSnapshot, placementMode);
-    const refreshedFillQualityBlock = fillQualityBlockReason(fillQualitySnapshot);
-    if (refreshedFillQualityBlock) {
-      return this.skippedWithQuoteQuality(
-        refreshedFillQualityBlock,
-        prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
-        fillQualitySnapshot,
-      );
+    if (this.config.liveLeadLagGateEnabled) {
+      const refreshedLeadLagBlock = leadLagBlockReason(leadLagSnapshot);
+      if (refreshedLeadLagBlock) {
+        return this.skippedWithQuoteQuality(
+          refreshedLeadLagBlock,
+          prepared.quoteSnapshot,
+          this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+          null,
+        );
+      }
+    }
+    if (this.config.liveFillQualityGateEnabled) {
+      fillQualitySnapshot = await this.fillQualitySnapshot(candidate, prepared.quoteSnapshot, placementMode);
+      const refreshedFillQualityBlock = fillQualityBlockReason(fillQualitySnapshot);
+      if (refreshedFillQualityBlock) {
+        return this.skippedWithQuoteQuality(
+          refreshedFillQualityBlock,
+          prepared.quoteSnapshot,
+          this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+          fillQualitySnapshot,
+        );
+      }
     }
     kalshiContext = {
       ...kalshiContext,

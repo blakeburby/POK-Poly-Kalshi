@@ -3731,6 +3731,55 @@ test("live executor fill-quality gate allows candidate when expected edge clears
   assert.equal(kalshi.placed.length, 1);
 });
 
+test("LA5: fill-quality is scored ONCE when the gate is off and TWICE when on, with identical accept/reject (parity)", async () => {
+  const now = 1_799_999_900_000;
+  const buildExecutor = (gateEnabled: boolean) => {
+    const { candidate, lower, higher } = liveCandidate(now);
+    const books = new BookStore();
+    books.setPolymarketContracts([lower]);
+    books.setKalshiContracts([higher]);
+    let scoreCalls = 0;
+    const reader = {
+      unresolvedRiskQuarantineExposureDollars: async () => 0,
+      listLiveExecutionQualitySignals: async () => { scoreCalls += 1; return exactQualitySignals(now); },
+      liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
+      liveExactExposureBlockReason: async () => null,
+    };
+    const executor = new LiveExecutor(
+      config({
+        liveOrderSize: 8,
+        liveOrderPlacementMode: "polymarket_first_exact",
+        liveExecutionQualityGateEnabled: false,
+        liveFillQualityScoringEnabled: true,
+        liveFillQualityGateEnabled: gateEnabled,
+      }),
+      books,
+      new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 }),
+      new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 }),
+      () => now,
+      undefined,
+      undefined,
+      undefined,
+      reader,
+    );
+    return { executor, candidate, scoreCalls: () => scoreCalls };
+  };
+
+  // Gate OFF (default): the post-preflight refresh recompute is skipped -> scored once; outcome unchanged.
+  const off = buildExecutor(false);
+  const offResult = await off.executor.execute(off.candidate);
+  assert.equal(offResult.action, "filled");
+  assert.equal(off.scoreCalls(), 1);
+  assert.ok(offResult.fillQualitySnapshot != null);
+
+  // Gate ON: the refresh recompute is preserved (must re-decide on the refreshed quote) -> scored twice.
+  const on = buildExecutor(true);
+  const onResult = await on.executor.execute(on.candidate);
+  assert.equal(onResult.action, "filled");
+  assert.equal(on.scoreCalls(), 2);
+  assert.equal(onResult.fillQualitySnapshot?.gatePassed, true);
+});
+
 test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stream confirmation", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
