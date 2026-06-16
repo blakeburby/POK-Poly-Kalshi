@@ -183,7 +183,7 @@ function GateRow({ label, value, bar, good }: { label: string; value: string; ba
 
 function Legend() {
   return (
-    <div className="flex items-center gap-2.5 font-mono text-[9px] uppercase tracking-wide text-fg-muted">
+    <div className="hidden items-center gap-2.5 font-mono text-[9px] uppercase tracking-wide text-fg-muted sm:flex">
       <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-up" /> exact</span>
       <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-amber" /> partial</span>
       <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-down" /> fail</span>
@@ -195,8 +195,8 @@ function LeadLagTable({ snap }: { snap: DashboardSnapshot }) {
   const rows = (snap.recentSignals ?? []).filter((s) => s.leadLagSnapshot).slice(0, 12);
   if (!rows.length) return <Empty>No lead-lag data</Empty>;
   return (
-    <div className="max-h-[240px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[240px] overflow-auto">
+      <table className="w-full min-w-[460px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <th className="px-3 py-1.5 text-left font-mono text-[9.5px] uppercase tracking-wide">Time</th>

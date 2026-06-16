@@ -60,7 +60,7 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
           span={7}
           bodyClassName="h-[300px] p-2"
           right={
-            <div className="flex items-center gap-2.5 font-mono text-[9px] uppercase tracking-wide text-fg-muted">
+            <div className="hidden items-center gap-2.5 font-mono text-[9px] uppercase tracking-wide text-fg-muted sm:flex">
               <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-up" /> arb</span>
               <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-amber" /> sub-thr</span>
               <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-down" /> prob</span>
@@ -165,8 +165,8 @@ function CandidateTable({
   if (!candidates.length) return <Empty>No candidates in current scan</Empty>;
   const maxEdge = Math.max(...candidates.map((c) => c.guaranteedProfit), threshold * 2, 0.01);
   return (
-    <div className="max-h-[320px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[320px] overflow-auto">
+      <table className="w-full min-w-[760px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <th className="px-3 py-1.5 text-left font-mono text-[9.5px] uppercase tracking-wide">Strikes</th>

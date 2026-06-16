@@ -47,11 +47,18 @@ function demoMode(): boolean {
   return false;
 }
 
+/** Gap between snapshot polls (after the previous one resolves). The worker now
+ *  serves warm cached snapshots in ~ms, so we can poll briskly for a near-live feel. */
+const POLL_MS = 2000;
+
 /**
- * Opens the worker SSE stream and feeds the store. In demo mode (or when the
- * live feed is unavailable in dev), drives the store from the mock generator so
- * every view renders. In production a dead feed yields a "degraded" state with
- * the last snapshot — never fabricated data.
+ * Feeds the store by polling the trimmed snapshot proxy. We deliberately do NOT
+ * use the worker's SSE stream: the worker pushes a full ~1.9MB snapshot every
+ * 250ms, and a long-lived proxied stream is cut by Vercel's function timeout —
+ * together that produced the "slow / not connecting" behavior. Polling a
+ * trimmed snapshot is short-lived, reliable on serverless, and keeps the last
+ * good snapshot visible during a transient failure (never fabricated data). In
+ * demo mode it renders from the mock generator instead.
  */
 export function useDashboardStream(): void {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
@@ -59,62 +66,40 @@ export function useDashboardStream(): void {
 
   useEffect(() => {
     let cancelled = false;
-    let es: EventSource | null = null;
-    let mockTimer: ReturnType<typeof setInterval> | null = null;
-
-    const startMock = () => {
-      if (cancelled || mockTimer) return;
-      const tick = () => {
-        if (!cancelled) setSnapshot(generateMockSnapshot(), "mock");
-      };
-      tick();
-      mockTimer = setInterval(tick, 2000);
-    };
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     if (demoMode()) {
-      startMock();
+      const tick = () => {
+        if (cancelled) return;
+        setSnapshot(generateMockSnapshot(), "mock");
+        timer = setTimeout(tick, 2000);
+      };
+      tick();
       return () => {
         cancelled = true;
-        if (mockTimer) clearInterval(mockTimer);
+        if (timer) clearTimeout(timer);
       };
     }
 
-    const openStream = () => {
-      es = new EventSource("/api/dashboard/stream");
-      es.addEventListener("snapshot", (event) => {
-        try {
-          const snap = JSON.parse((event as MessageEvent).data) as DashboardSnapshot;
-          if (!cancelled) setSnapshot(snap, "live");
-        } catch {
-          /* ignore malformed frame */
-        }
-      });
-      es.addEventListener("error", () => {
-        if (!cancelled) setSource("degraded");
-      });
-    };
-
-    const bootstrap = async () => {
+    const poll = async () => {
       try {
         const res = await fetch("/api/dashboard/snapshot", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
         const snap = (await res.json()) as DashboardSnapshot;
-        if (cancelled) return;
-        setSnapshot(snap, "live");
-        openStream();
+        if (!cancelled) setSnapshot(snap, "live");
       } catch {
-        if (cancelled) return;
-        // No live feed reachable in dev → fall back to mock so the UI is usable.
-        startMock();
+        // Keep the last snapshot on screen; just flag the feed as degraded.
+        if (!cancelled) setSource("degraded");
+      } finally {
+        if (!cancelled) timer = setTimeout(poll, POLL_MS);
       }
     };
 
-    void bootstrap();
+    void poll();
 
     return () => {
       cancelled = true;
-      es?.close();
-      if (mockTimer) clearInterval(mockTimer);
+      if (timer) clearTimeout(timer);
     };
   }, [setSnapshot, setSource]);
 }

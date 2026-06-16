@@ -6,6 +6,7 @@ import { operationalStatus } from "@/lib/selectors";
 import { fmtClock, fmtRelative, type StatusTone } from "@/lib/format";
 import { useNow } from "@/hooks/useNow";
 import { StatusDot } from "@/components/ui/stat";
+import { MobileHealthSheet } from "@/components/shell/MobileHealthSheet";
 import { cn } from "@/lib/utils";
 
 const sourceMeta: Record<FeedSource, { tone: StatusTone; label: string }> = {
@@ -25,22 +26,22 @@ export function TopBar() {
   const candidates = snap?.scanner.lastCandidateCount ?? 0;
 
   return (
-    <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-4 border-b border-line bg-surface px-3.5">
-      <div className="flex items-center gap-2.5">
-        <div className="grid size-7 place-items-center rounded-sm bg-gradient-to-br from-cyan/30 to-violet/20 ring-1 ring-cyan/30">
+    <header className="flex h-[var(--topbar-h)] shrink-0 items-center gap-2 border-b border-line bg-surface px-3 sm:gap-4 sm:px-3.5">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
+        <div className="grid size-7 shrink-0 place-items-center rounded-sm bg-gradient-to-br from-cyan/30 to-violet/20 ring-1 ring-cyan/30">
           <span className="font-mono text-[12px] font-bold tracking-tighter text-fg">P</span>
         </div>
-        <div className="flex flex-col leading-none">
-          <span className="text-[13px] font-semibold tracking-tight text-fg">
-            POK CAPITAL <span className="text-fg-muted">· TERMINAL</span>
+        <div className="flex min-w-0 flex-col leading-none">
+          <span className="truncate text-[12px] font-semibold tracking-tight text-fg sm:text-[13px]">
+            POK CAPITAL<span className="hidden text-fg-muted sm:inline"> · TERMINAL</span>
           </span>
-          <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-fg-faint">
+          <span className="hidden truncate font-mono text-[9px] uppercase tracking-[0.18em] text-fg-faint sm:block">
             BTC 15m · Kalshi ⇄ Polymarket Arbitrage
           </span>
         </div>
       </div>
 
-      <div className="ml-2 flex items-center gap-2 rounded-sm border border-line bg-surface-2/60 px-2 py-1">
+      <div className="ml-1 hidden items-center gap-2 rounded-sm border border-line bg-surface-2/60 px-2 py-1 md:flex">
         <StatusDot tone={meta.tone} pulse={meta.tone === "live"} />
         <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-fg-secondary">{meta.label}</span>
         {snapshotAge != null ? (
@@ -60,11 +61,11 @@ export function TopBar() {
         tone={snap?.execution?.userStreams.polymarket.connected ? "live" : "halt"}
       />
 
-      <div className="ml-auto flex items-center gap-4">
+      <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-4">
         {op ? (
           <div
             className={cn(
-              "flex items-center gap-2 rounded-sm border px-2.5 py-1",
+              "flex min-w-0 items-center gap-2 rounded-sm border px-2 py-1 sm:px-2.5",
               op.tone === "live"
                 ? "border-up/30 bg-up/10"
                 : op.tone === "halt"
@@ -75,7 +76,7 @@ export function TopBar() {
             <StatusDot tone={op.tone} pulse={op.tone === "live"} />
             <span
               className={cn(
-                "font-mono text-[11px] font-medium uppercase tracking-[0.08em]",
+                "truncate font-mono text-[11px] font-medium uppercase tracking-[0.08em]",
                 op.tone === "live" ? "text-up" : op.tone === "halt" ? "text-down" : "text-amber",
               )}
             >
@@ -83,12 +84,13 @@ export function TopBar() {
             </span>
           </div>
         ) : null}
-        <div className="flex flex-col items-end leading-none">
+        <div className="hidden flex-col items-end leading-none md:flex">
           <span className="font-mono text-[13px] tabular-nums text-fg">{fmtClock(now)}</span>
           <span className="font-mono text-[9px] uppercase tracking-wide text-fg-muted">
             {snap ? `upd ${fmtRelative(snap.generatedAt, now)}` : "—"}
           </span>
         </div>
+        <MobileHealthSheet />
       </div>
     </header>
   );

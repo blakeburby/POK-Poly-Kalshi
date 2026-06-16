@@ -8,6 +8,7 @@ import { KpiStrip } from "@/components/shell/KpiStrip";
 import { NavRail } from "@/components/shell/NavRail";
 import { HealthRail } from "@/components/shell/HealthRail";
 import { StatusBar } from "@/components/shell/StatusBar";
+import { MobileNav } from "@/components/shell/MobileNav";
 import { ViewRouter } from "@/components/views/ViewRouter";
 import { StatusDot } from "@/components/ui/stat";
 
@@ -17,7 +18,7 @@ export default function DashboardApp({ dashboardName }: { dashboardName?: string
 
   return (
     <TooltipProvider delayDuration={150} skipDelayDuration={300}>
-      <div className="flex h-screen flex-col overflow-hidden bg-base text-fg">
+      <div className="flex h-dvh flex-col overflow-hidden bg-base text-fg">
         <TopBar />
         <KpiStrip />
         <div className="flex min-h-0 flex-1">
@@ -28,6 +29,7 @@ export default function DashboardApp({ dashboardName }: { dashboardName?: string
           <HealthRail />
         </div>
         <StatusBar />
+        <MobileNav />
       </div>
     </TooltipProvider>
   );

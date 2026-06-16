@@ -1,40 +1,17 @@
 "use client";
 
 import * as React from "react";
-import {
-  LayoutGrid,
-  LineChart,
-  Zap,
-  ShieldAlert,
-  ScrollText,
-  Crosshair,
-  BookOpen,
-  Activity,
-  Boxes,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from "lucide-react";
-import { useDashboardStore, type ViewId } from "@/store/dashboard-store";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { useDashboardStore } from "@/store/dashboard-store";
+import { NAV } from "./nav-items";
 import { cn } from "@/lib/utils";
-
-const NAV: Array<{ id: ViewId; label: string; icon: React.ComponentType<{ className?: string; strokeWidth?: number }>; hot: string }> = [
-  { id: "overview", label: "Overview", icon: LayoutGrid, hot: "1" },
-  { id: "performance", label: "Performance", icon: LineChart, hot: "2" },
-  { id: "execution", label: "Execution", icon: Zap, hot: "3" },
-  { id: "risk", label: "Risk", icon: ShieldAlert, hot: "4" },
-  { id: "ledger", label: "Trade Ledger", icon: ScrollText, hot: "5" },
-  { id: "edge", label: "Edge / Opp.", icon: Crosshair, hot: "6" },
-  { id: "books", label: "Order Books", icon: BookOpen, hot: "7" },
-  { id: "health", label: "System Health", icon: Activity, hot: "8" },
-  { id: "threeD", label: "3D Analytics", icon: Boxes, hot: "9" },
-];
 
 export function NavRail() {
   const view = useDashboardStore((s) => s.view);
   const setView = useDashboardStore((s) => s.setView);
   const [collapsed, setCollapsed] = React.useState(false);
 
-  // keyboard shortcuts 1-9
+  // keyboard shortcuts 1-9 (desktop)
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -50,7 +27,7 @@ export function NavRail() {
   return (
     <nav
       className={cn(
-        "flex shrink-0 flex-col gap-1 border-r border-line bg-surface/60 p-2 transition-[width] duration-200",
+        "hidden shrink-0 flex-col gap-1 border-r border-line bg-surface/60 p-2 transition-[width] duration-200 lg:flex",
         collapsed ? "w-[var(--rail-w-collapsed)]" : "w-[var(--rail-w)]",
       )}
     >
@@ -68,12 +45,8 @@ export function NavRail() {
             )}
           >
             <Icon className={cn("size-4 shrink-0", active && "text-cyan")} strokeWidth={1.75} />
-            {!collapsed && (
-              <span className="flex-1 truncate text-[12px] font-medium tracking-tight">{n.label}</span>
-            )}
-            {!collapsed && (
-              <span className="font-mono text-[9px] text-fg-faint group-hover:text-fg-muted">{n.hot}</span>
-            )}
+            {!collapsed && <span className="flex-1 truncate text-[12px] font-medium tracking-tight">{n.label}</span>}
+            {!collapsed && <span className="font-mono text-[9px] text-fg-faint group-hover:text-fg-muted">{n.hot}</span>}
           </button>
         );
       })}

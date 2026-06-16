@@ -97,8 +97,8 @@ function BookTable({
   const rows = [...contracts].sort((a, b) => a.strike - b.strike);
   if (!rows.length) return <Empty>No {venue} contracts</Empty>;
   return (
-    <div className="max-h-[330px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[330px] overflow-auto">
+      <table className="w-full min-w-[360px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <Th>Strike</Th>
@@ -149,8 +149,8 @@ function CompareTable({ snap, now, staleMs }: { snap: DashboardSnapshot; now: nu
   ).sort((a, b) => a - b);
   if (!strikes.length) return <Empty />;
   return (
-    <div className="max-h-[300px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[300px] overflow-auto">
+      <table className="w-full min-w-[680px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <Th>Strike</Th>

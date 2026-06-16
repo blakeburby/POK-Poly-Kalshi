@@ -164,38 +164,31 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
         <StatTile label="Failure Types" value={String(failures.length)} tone="amber" sub={failures[0]?.[0] ?? "none"} />
       </div>
 
-      <GridPanel
-        title="Trade Ledger · Two-Leg Synthetic Spreads"
-        dot="live"
-        span={12}
-        bodyClassName="p-0"
-        right={
-          <div className="flex items-center gap-2">
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="filter market…"
-              className="h-6 w-36 rounded-sm border border-line bg-surface-2 px-2 font-mono text-[10px] text-fg placeholder:text-fg-faint focus:border-cyan/40 focus:outline-none"
-            />
-            <div className="flex items-center gap-0.5 rounded-sm border border-line bg-surface-2 p-0.5">
-              {(["all", "hedged", "partial", "failed"] as FilterKey[]).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={cn(
-                    "rounded-[3px] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide transition-colors",
-                    filter === f ? "bg-cyan/15 text-cyan" : "text-fg-muted hover:text-fg-secondary",
-                  )}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
+      <GridPanel title="Trade Ledger · Two-Leg Synthetic Spreads" dot="live" span={12} bodyClassName="p-0">
+        <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="filter market…"
+            className="h-6 w-full min-w-0 rounded-sm border border-line bg-surface-2 px-2 font-mono text-[10px] text-fg placeholder:text-fg-faint focus:border-cyan/40 focus:outline-none sm:w-36"
+          />
+          <div className="flex items-center gap-0.5 rounded-sm border border-line bg-surface-2 p-0.5">
+            {(["all", "hedged", "partial", "failed"] as FilterKey[]).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={cn(
+                  "rounded-[3px] px-2 py-1 font-mono text-[10px] uppercase tracking-wide transition-colors",
+                  filter === f ? "bg-cyan/15 text-cyan" : "text-fg-muted hover:text-fg-secondary",
+                )}
+              >
+                {f}
+              </button>
+            ))}
           </div>
-        }
-      >
+        </div>
         <div className="max-h-[560px] overflow-auto">
-          <table className="w-full border-collapse text-[11px]">
+          <table className="w-full min-w-[880px] border-collapse text-[11px]">
             <thead className="sticky top-0 z-10 bg-surface-2/95 backdrop-blur">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="border-b border-line-strong">

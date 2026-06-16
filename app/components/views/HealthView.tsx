@@ -168,11 +168,11 @@ const sevTone: Record<DashboardLogEntry["severity"], StatusTone> = {
 function LogTape({ logs, now }: { logs: DashboardLogEntry[]; now: number }) {
   if (!logs.length) return <Empty>No events</Empty>;
   return (
-    <div className="max-h-[280px] overflow-y-auto font-mono text-[11px]">
+    <div className="max-h-[280px] overflow-auto font-mono text-[11px]">
       {logs.map((l, i) => {
         const t = new Date(l.timestamp).getTime();
         return (
-          <div key={i} className="flex items-center gap-3 border-b border-line/30 px-3 py-1 hover:bg-surface-2/40">
+          <div key={i} className="flex min-w-[560px] items-center gap-3 border-b border-line/30 px-3 py-1 hover:bg-surface-2/40">
             <StatusDot tone={sevTone[l.severity]} className="size-1" />
             <span className="w-20 shrink-0 tabular-nums text-fg-faint">{fmtClock(t, true).slice(0, 12)}</span>
             <span

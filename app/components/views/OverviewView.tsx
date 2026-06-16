@@ -160,8 +160,8 @@ function PositionsTable({ snap }: { snap: DashboardSnapshot }) {
   if (!rows.length) return <Empty>No open positions</Empty>;
   const maxVal = Math.max(...rows.map((r) => r.value ?? 0), 1);
   return (
-    <div className="max-h-[260px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[260px] overflow-auto">
+      <table className="w-full min-w-[460px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <Th className="text-left">Venue</Th>
@@ -199,8 +199,8 @@ function OpportunitiesMini({ snap }: { snap: DashboardSnapshot }) {
   if (!rows.length) return <Empty>No executable candidates right now</Empty>;
   const maxEdge = Math.max(...rows.map((r) => r.guaranteedProfit), snap.health.minProfitDollars * 2, 0.01);
   return (
-    <div className="max-h-[260px] overflow-y-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="max-h-[260px] overflow-auto">
+      <table className="w-full min-w-[460px] border-collapse text-[11px]">
         <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
           <tr className="border-b border-line">
             <Th className="text-left">Pair</Th>
