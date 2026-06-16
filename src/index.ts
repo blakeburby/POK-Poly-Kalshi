@@ -84,6 +84,9 @@ async function main(): Promise<void> {
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     autoHardlocksEnabled: config.liveAutoHardlocksEnabled,
     flatMissNonBlocking: config.liveConfirmationFlatMissNonBlocking,
+    // Floor-hedge band: a Polymarket fractional overfill up to this many shares over the order size is
+    // hedged + cap-quarantined by the executor (T1.1), not a circuit-breaker event.
+    overfillToleranceShares: Math.max(0, config.livePolymarketFirstMaxFillShares - config.liveOrderSize),
     allowUnresolvedRisk: !config.liveAutoHardlocksEnabled,
     liveLocks,
     now: Date.now,

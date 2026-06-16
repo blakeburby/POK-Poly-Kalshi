@@ -201,6 +201,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       maxUnresolvedExposureDollars?: number;
       autoHardlocksEnabled?: boolean;
       flatMissNonBlocking?: boolean;
+      overfillToleranceShares?: number;
       allowUnresolvedRisk?: boolean;
       liveLocks?: LiveExecutionLockWriter;
       now?: () => number;
@@ -291,8 +292,10 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     this.recentEvents.push(event);
     while (this.recentEvents.length > 500) this.recentEvents.shift();
 
+    let matchedPending = false;
     for (const pending of [...this.pending]) {
       if (!eventMatchesExpected(event, pending)) continue;
+      matchedPending = true;
       clearTimeout(pending.timeout);
       this.pending.delete(pending);
       const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize);
@@ -302,11 +305,19 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
         clientOrderId: confirmation.clientOrderId ?? pending.result.clientOrderId,
       }, pending.executionGroupId, pending.expectedSize);
       pending.resolve(confirmation);
-      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize);
+      // Live pending path: the executor reconciles this fill (floor-hedge + cap-quarantine + persisted
+      // partial_fill row), so the floor-hedge band may suppress the redundant breaker lock here.
+      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize, true);
     }
 
-    const known = this.knownOrderFor(event);
-    if (known) await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize);
+    // Only treat the event via the knownOrderFor path when it did NOT just match a live pending in this
+    // call. An event that resolved a pending is authoritatively handled by the executor (pending path);
+    // the knownOrderFor path exists for LATER events on the same order, where the executor has finalized
+    // and will not re-reconcile — there this lock is the sole detector, so it stays strict (no band).
+    if (!matchedPending) {
+      const known = this.knownOrderFor(event);
+      if (known) await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize, false);
+    }
   }
 
   private rememberKnownOrder(result: VenueOrderResult, executionGroupId: string, expectedSize: number): void {
@@ -327,9 +338,9 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     return null;
   }
 
-  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number): Promise<void> {
+  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number, executorReconciles: boolean): Promise<void> {
     const fillCount = event.fillCount ?? 0;
-    const mismatch = fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
+    const rawMismatch = fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
     // A failure/cancel/reject that filled ZERO shares is a clean flat miss (no shares moved -> no
     // exposure), not a circuit-breaker event. Only a failure that actually moved shares (fillCount > 0)
     // or a genuine size mismatch is lock-worthy. Gated by flatMissNonBlocking (default on); when off, the
@@ -337,6 +348,25 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     // (fillCount > 0) still locks, so a delayed/real fill is never missed.
     const failure = isFailureStatus(event.status);
     const lockWorthyFailure = this.options.flatMissNonBlocking === true ? (failure && fillCount > 0) : failure;
+    // Polymarket FAK fills are essentially always fractional OVERFILLS (e.g. 5.05 on a size-5 order). A
+    // fill within the floor-hedge band [expectedSize, expectedSize + overfillToleranceShares] is the
+    // designed T1.1 case: the executor hedges floor(fill) (a matched pair) and quarantines the
+    // sub-tolerance residual under the unresolved-exposure cap. That is a bounded, cap-governed residual,
+    // NOT a circuit-breaker event, so it must not freeze the bot after every filling trade. Underfills
+    // and overfills BEYOND the band still lock, and the executor's exposure-cap quarantine/hard-lock plus
+    // reconciliation still govern any genuine one-sided exposure. Gated by flatMissNonBlocking.
+    //
+    // CRITICAL: the band only applies when the executor reconciles this fill (the live pending-
+    // confirmation path) — there the executor floor-hedges, books the residual into the cap-governed
+    // quarantine, and persists a partial_fill row that LIVE_RECONCILE_BEFORE_TRADE reads. On the
+    // knownOrderFor LATE-event path (executor already finalized, possibly as a clean no-fill) this
+    // coordinator lock is the SOLE detector — venue_order_events is never reconciled against signals — so
+    // the band must NOT suppress there, or a late stream-only in-band fill would go one-sided undetected.
+    const overfillTolerance = Math.max(0, this.options.overfillToleranceShares ?? 0);
+    const withinFloorHedgeBand = executorReconciles
+      && fillCount >= expectedSize - 0.000001
+      && fillCount <= expectedSize + overfillTolerance + 0.000001;
+    const mismatch = rawMismatch && !(this.options.flatMissNonBlocking === true && withinFloorHedgeBand);
     if (!lockWorthyFailure && !mismatch) return;
     const reason = failure
       ? `live safety lock engaged: ${event.venue} user stream reported ${event.status}`
