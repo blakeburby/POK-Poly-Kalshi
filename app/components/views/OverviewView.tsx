@@ -13,6 +13,7 @@ import {
   openPositionCount,
   orderSize,
   tradeableNow,
+  venueAccountValue,
 } from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone, fmtPctRaw } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -129,6 +130,8 @@ function VenueCard({ activity, accent }: { activity: TradingPlatformActivity; ac
   const p = activity.portfolio;
   const spark = activity.sparkline?.map((s) => s.value) ?? [];
   const dayPct = p.dayChangePercent;
+  // Total account value = cash + open-position market value (see venueAccountValue).
+  const accountValue = venueAccountValue(activity);
   return (
     <div className="rounded-md border border-line bg-surface-2/40 p-3">
       <div className="flex items-center justify-between">
@@ -141,7 +144,7 @@ function VenueCard({ activity, accent }: { activity: TradingPlatformActivity; ac
       </div>
       <div className="mt-2 flex items-end justify-between">
         <div className="flex flex-col">
-          <span className="font-mono text-[20px] tabular-nums leading-none text-fg">{fmtUsd(p.portfolioValue)}</span>
+          <span className="font-mono text-[20px] tabular-nums leading-none text-fg">{fmtUsd(accountValue)}</span>
           <span className="mt-1 font-mono text-[10px] text-fg-muted">
             cash {fmtUsd(p.cashValue)} · {activity.positions.length} pos
           </span>

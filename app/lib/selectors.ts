@@ -9,6 +9,7 @@ import type {
   DashboardSignal,
   DashboardAnalyticsWindow,
   LiveExecutionReadiness,
+  TradingPlatformActivity,
   Venue,
 } from "./types";
 import type { StatusTone } from "./format";
@@ -31,21 +32,39 @@ export function toDollars(perShare: number | null | undefined, size: number): nu
   return perShare * size;
 }
 
+/**
+ * Total account value for one venue = cash + market value of open positions.
+ * NOT `portfolio.portfolioValue`: that field is venue-inconsistent at the source
+ * (Kalshi reports positions-only there, Polymarket falls back to cash), so it
+ * is neither cash nor total. Summing cash with the positions array — the same
+ * data the Positions table shows — gives a correct, consistent account total.
+ */
+export function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
+  if (!activity) return null;
+  const cash = activity.portfolio.cashValue;
+  const positions = activity.positions ?? [];
+  if (cash == null && positions.length === 0) return null;
+  const positionsValue = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
+  return (cash ?? 0) + positionsValue;
+}
+
 export function accountEquity(snap: DashboardSnapshot): {
   total: number | null;
   cash: number | null;
   kalshi: number | null;
   polymarket: number | null;
 } {
-  const k = snap.tradingActivity?.kalshi.portfolio;
-  const p = snap.tradingActivity?.polymarket.portfolio;
+  const k = snap.tradingActivity?.kalshi;
+  const p = snap.tradingActivity?.polymarket;
   const sum = (a: number | null | undefined, b: number | null | undefined) =>
     a == null && b == null ? null : (a ?? 0) + (b ?? 0);
+  const kalshi = venueAccountValue(k);
+  const polymarket = venueAccountValue(p);
   return {
-    total: sum(k?.portfolioValue, p?.portfolioValue),
-    cash: sum(k?.cashValue, p?.cashValue),
-    kalshi: k?.portfolioValue ?? null,
-    polymarket: p?.portfolioValue ?? null,
+    total: sum(kalshi, polymarket),
+    cash: sum(k?.portfolio.cashValue, p?.portfolio.cashValue),
+    kalshi,
+    polymarket,
   };
 }
 
