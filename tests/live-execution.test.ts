@@ -118,6 +118,10 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     livePolymarketQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
+    liveMinExecutableLiquidityShares: 0,
+    liveMaxExecutableAskSlippageCents: 0,
+    liveShadowLadderCaptureEnabled: false,
+    liveShadowLadderProbeSizes: [1, 2, 3, 5],
     liveOrderTimeoutMs: 2_500,
     liveHedgeMaxLossDollars: 0.02,
     liveHedgeFeeBufferDollars: 0.01,
@@ -616,6 +620,23 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
     placementMode: "polymarket_first_exact",
   }, { hedgeTimeInForce: "fill_or_kill" });
   assert.equal(configuredFok.time_in_force, "fill_or_kill");
+
+  // T1.3: the Kalshi FIRST leg under kalshi_first_exact is always atomic FOK (exact integer size or 0),
+  // independent of the configured hedge TIF. Locks in the default-branch behavior of kalshiTimeInForce.
+  const kalshiFirst = buildKalshiV2OrderBody({
+    venue: "kalshi",
+    contractId: "KXBTC15M-KFIRST",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client-kfirst",
+    size: 1,
+    maxBuyPrice: 0.41,
+    placementMode: "kalshi_first_exact",
+  }, { hedgeTimeInForce: "immediate_or_cancel" });
+  assert.equal(kalshiFirst.time_in_force, "fill_or_kill");
 });
 
 test("Kalshi UI Quick Order body maps YES and NO legs onto user-side market orders", () => {
@@ -3023,9 +3044,10 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).liveOrderSize, 8);
   assert.equal(loadConfig({}).liveMinBookDepthShares, 10);
   assert.equal(loadConfig({}).livePolymarketFirstMinFillShares, 8);
-  assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 8);
+  // T1.1: MAX defaults to liveOrderSize + 1 so a natural FAK overfill routes into the floor-hedge.
+  assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 9);
   assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMinFillShares, 5);
-  assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMaxFillShares, 5);
+  assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMaxFillShares, 6);
   assert.equal(loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "4.5", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "5.5" }).livePolymarketFirstMinFillShares, 4.5);
   assert.throws(
     () => loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "6.1", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "6" }),
@@ -3960,6 +3982,130 @@ test("polymarket_first_exact submits Kalshi after fractional Polymarket fill ins
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
   assert.match(result.liveLockReason ?? "", /venue fill mismatch/);
   assert.equal(locks.engageCalls, 0);
+});
+
+test("polymarket_first_exact floor-hedges a natural FAK overfill just above order size and quarantines the sub-share residual (T1.1 regression for signal 2599386)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  // FAK overfilled to 8.97 (> requested 8). Before T1.1 the exact [8,8] range rejected this -> Kalshi
+  // never submitted -> the WHOLE 8.97 stranded one-sided. With MAX = size + 1 it now floor-hedges.
+  const polymarket = new FakeVenueClient("polymarket", {
+    status: "unexpected_fill_count",
+    fillCount: 8.97,
+    fillPrice: 0.4,
+    error: "Polymarket FAK overfilled above requested size",
+  });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      livePolymarketFirstMinFillShares: 8,
+      livePolymarketFirstMaxFillShares: 9,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  // The hedge MUST be submitted (the regression assertion) and sized to floor(8.97)=8.
+  assert.equal(kalshi.placed.length, 1);
+  assert.equal(kalshi.placed[0]?.context.size, 8);
+  assert.equal(result.kalshiFillCount, 8);
+  assert.equal(result.polymarketFillCount, 8.97);
+  // The matched 8/8 portion is fully hedged; only the <1-share residual is one-sided -> partial/quarantine.
+  assert.equal(result.partialFill, true);
+  assert.equal(result.action, "failed");
+  assert.match(result.liveLockReason ?? "", /venue fill mismatch/);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("polymarket_first_exact still rejects an overfill above the max band -> Kalshi not submitted, stays flat-of-hedge (T1.1 boundary)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+  // 9.4 is above the size+1 band (max 9); the hedge trigger must stay closed so an arbitrarily large
+  // overfill can never silently trigger an oversized floor-hedge.
+  const polymarket = new FakeVenueClient("polymarket", {
+    status: "unexpected_fill_count",
+    fillCount: 9.4,
+    fillPrice: 0.4,
+    error: "Polymarket FAK overfilled beyond band",
+  });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      livePolymarketFirstMinFillShares: 8,
+      livePolymarketFirstMaxFillShares: 9,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(kalshi.placed.length, 0);
+  assert.equal(result.polymarketFillCount, 9.4);
+  assert.equal(result.partialFill, true);
+});
+
+test("shadow ladder capture attaches a ladder to the below-threshold skip only when enabled (T2.4)", async () => {
+  const now = 1_799_999_900_000;
+  // Top-of-book executable (0.40 + 0.50 = 0.90 -> 0.10 edge) but the size-8 worst ask collapses the
+  // edge below threshold, so this skips with the "cushioned executable edge ... below threshold" reason.
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.56, size: 999 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 999 }], updatedAt: now });
+  const candidate = buildGuaranteedCandidate(poly, kalshi, 0.05);
+  assert.ok(candidate);
+
+  const makeExecutor = (captureEnabled: boolean) => {
+    const books = new BookStore();
+    books.setPolymarketContracts([poly]);
+    books.setKalshiContracts([kalshi]);
+    return new LiveExecutor(
+      config({
+        liveOrderSize: 8,
+        liveOrderPlacementMode: "polymarket_first_exact",
+        liveShadowLadderCaptureEnabled: captureEnabled,
+        liveShadowLadderProbeSizes: [1, 2, 3, 8],
+      }),
+      books,
+      new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 }),
+      new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 }),
+      () => now,
+    );
+  };
+
+  const enabled = await makeExecutor(true).execute(candidate!);
+  assert.equal(enabled.action, "skipped");
+  assert.match(enabled.failureReason ?? "", /cushioned executable edge/);
+  assert.ok(enabled.quoteSnapshot?.shadowLadder, "shadow ladder should be attached when enabled");
+  assert.deepEqual(enabled.quoteSnapshot?.shadowLadder?.probeSizes, [1, 2, 3, 8]);
+  assert.ok((enabled.quoteSnapshot?.shadowLadder?.polymarket?.probes.length ?? 0) >= 4);
+
+  const disabled = await makeExecutor(false).execute(candidate!);
+  assert.equal(disabled.action, "skipped");
+  assert.match(disabled.failureReason ?? "", /cushioned executable edge/);
+  // Default-off path is byte-identical to the legacy bare skip: no quoteSnapshot, no shadow ladder.
+  assert.equal(disabled.quoteSnapshot, undefined);
 });
 
 test("polymarket_first_exact treats configured Polymarket fill range boundaries as hedge triggers", async () => {

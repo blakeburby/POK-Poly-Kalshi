@@ -126,6 +126,42 @@ export interface QuoteSnapshotLeg {
   bookHash?: string | null;
   tickSize?: number | null;
   tickSizeChangedAt?: number | null;
+  // Anti-dust guard diagnostics (T2.5). Present only when LIVE_MIN_EXECUTABLE_LIQUIDITY_SHARES /
+  // LIVE_MAX_EXECUTABLE_ASK_SLIPPAGE_CENTS are enabled; omitted (undefined) on the default-off path so
+  // the serialized snapshot is byte-identical to today.
+  executableLiquidityShares?: number | null;
+  executableAskSlippageCents?: number | null;
+}
+
+// Shadow ladder capture (T2.4): read-only diagnostics persisted on below-threshold-edge skips when
+// LIVE_SHADOW_LADDER_CAPTURE_ENABLED=true, to classify phantom dust vs shallow-real depth.
+export interface ShadowLadderProbe {
+  size: number;
+  vwap: number | null;
+  worstAsk: number | null;
+  depth: number;
+  sufficientDepth: boolean;
+  levelsConsumed: BookLevel[];
+}
+
+export interface ShadowLadderLeg {
+  venue: Venue;
+  contractId: string;
+  direction: LegDirection;
+  topAsk: number | null;
+  probes: ShadowLadderProbe[];
+}
+
+export interface ShadowLadderCapture {
+  capturedAt: number;
+  probeSizes: number[];
+  minProfitDollars: number;
+  topOfBookEdge: number | null;
+  // Executable edge (1 - kalshiVwap(size) - polymarketVwap(size)) per probe size; null when either leg
+  // lacks sufficient depth at that size.
+  executableEdgeBySize: { size: number; executableEdge: number | null }[];
+  kalshi: ShadowLadderLeg | null;
+  polymarket: ShadowLadderLeg | null;
 }
 
 export interface QuoteSnapshot {
@@ -144,6 +180,7 @@ export interface QuoteSnapshot {
   polymarketMaxBuyPrice?: number | null;
   minProfitDollars: number;
   failureReason: string | null;
+  shadowLadder?: ShadowLadderCapture | null;
 }
 
 export type LeadLagVenue = Venue | "none";

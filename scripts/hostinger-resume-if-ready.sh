@@ -9,13 +9,15 @@ fi
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
 ALLOW_PARALLEL_QUICK="${HOSTINGER_RESUME_ALLOW_PARALLEL_QUICK:-false}"
+ALLOW_KALSHI_FIRST_EXACT="${HOSTINGER_RESUME_ALLOW_KALSHI_FIRST_EXACT:-false}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$ALLOW_PARALLEL_QUICK" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$APP_DIR" "$ENV_FILE" "$ALLOW_PARALLEL_QUICK" "$ALLOW_KALSHI_FIRST_EXACT" <<'REMOTE'
 set -euo pipefail
 
 APP_DIR="$1"
 ENV_FILE="$2"
 ALLOW_PARALLEL_QUICK="$3"
+ALLOW_KALSHI_FIRST_EXACT="$4"
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
@@ -84,8 +86,16 @@ apply_safety_env_policy() {
   if [ "$ALLOW_PARALLEL_QUICK" = "true" ] && [ "$current_placement_mode" = "parallel_quick" ]; then
     placement_mode=parallel_quick
   fi
+  # T1.3 canary: keep the staged kalshi_first_exact mode only when explicitly opted in. Default reverts
+  # to polymarket_first_exact, so omitting the flag is the automatic rollback.
+  if [ "$ALLOW_KALSHI_FIRST_EXACT" = "true" ] && [ "$current_placement_mode" = "kalshi_first_exact" ]; then
+    placement_mode=kalshi_first_exact
+  fi
   if [ "$current_placement_mode" = "parallel_quick" ] && [ "$placement_mode" != "parallel_quick" ]; then
     echo "Parallel quick was staged but is not resume-allowed; using polymarket_first_exact."
+  fi
+  if [ "$current_placement_mode" = "kalshi_first_exact" ] && [ "$placement_mode" != "kalshi_first_exact" ]; then
+    echo "kalshi_first_exact was staged but is not resume-allowed; using polymarket_first_exact."
   fi
   set_env_value LIVE_ORDER_PLACEMENT_MODE "$placement_mode"
   set_env_value LIVE_KALSHI_HEDGE_TIME_IN_FORCE fill_or_kill
@@ -158,7 +168,7 @@ const checks = [
   ["health.ok", health.ok === true],
   ["health.arbEnabled", !requireArbEnabled || health.arbEnabled === true],
   ["health.liveTrading=true", health.liveTrading === true],
-  ["health.liveOrderPlacementMode supported", liveOrderPlacementMode === "polymarket_first_exact" || liveOrderPlacementMode === "parallel_quick"],
+  ["health.liveOrderPlacementMode supported", liveOrderPlacementMode === "polymarket_first_exact" || liveOrderPlacementMode === "parallel_quick" || liveOrderPlacementMode === "kalshi_first_exact"],
   ["health.liveKalshiHedgeTimeInForce=ioc-or-fok", liveKalshiHedgeTimeInForce === "immediate_or_cancel" || liveKalshiHedgeTimeInForce === "fill_or_kill"],
   [
     "health.kalshiHedgeOrderMode=ui_quick_order, fix_ioc, or public_v2 when parallel_quick",
@@ -168,7 +178,7 @@ const checks = [
   ["health.liveMinBookDepthShares>=10", Number(health.liveMinBookDepthShares) >= 10],
   ["health.liveKalshiMinCashDollars>=5", Number(health.liveKalshiMinCashDollars) >= 5],
   ["health.livePolymarketFirstMinFillShares=5", Number(health.livePolymarketFirstMinFillShares) === 5],
-  ["health.livePolymarketFirstMaxFillShares=5", Number(health.livePolymarketFirstMaxFillShares) === 5],
+  ["health.livePolymarketFirstMaxFillShares=orderSize+1", Number(health.livePolymarketFirstMaxFillShares) === Number(health.liveOrderSize) + 1],
   ["health.liveAutoHardlocksEnabled=true", health.liveAutoHardlocksEnabled === true],
   [
     "health.kalshiUiQuickOrderCapValidated=true when ui_quick_order",

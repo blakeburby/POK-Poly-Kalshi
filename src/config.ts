@@ -59,6 +59,11 @@ export interface AppConfig {
   livePolymarketQuoteMaxAgeMs: number;
   liveQuoteSyncMaxSkewMs: number;
   liveMinBookDepthShares: number;
+  // Default-inert anti-dust guards (0 = off) that make a future LIVE_ORDER_SIZE cut safe: require N
+  // genuine ask contracts within a price band of the best ask, and/or bound worstAsk(size)-topAsk
+  // slippage, so a single-lot phantom/stale top-of-book quote cannot qualify even at size 1.
+  liveMinExecutableLiquidityShares: number;
+  liveMaxExecutableAskSlippageCents: number;
   liveOrderTimeoutMs: number;
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
@@ -99,6 +104,11 @@ export interface AppConfig {
   liveExecutionQualitySampleLimit: number;
   liveExecutionQualityMinSamples: number;
   liveExecutionQualityMinExactFillRate: number;
+  // Read-only diagnostics (default OFF): when enabled, below-threshold-edge skips persist per-leg ask
+  // ladders + executable edge at several probe sizes so we can classify phantom dust vs shallow-real
+  // depth before reducing LIVE_ORDER_SIZE. Zero trading impact; runs only on the already-rejected path.
+  liveShadowLadderCaptureEnabled: boolean;
+  liveShadowLadderProbeSizes: number[];
   liveFillQualityScoringEnabled: boolean;
   liveFillQualityGateEnabled: boolean;
   liveFillQualityMinExpectedEdge: number;
@@ -196,7 +206,14 @@ function envLiveKalshiPrearmPricePolicy(env: NodeJS.ProcessEnv): LiveKalshiPrear
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const liveOrderSize = envNumber(env, "LIVE_ORDER_SIZE", 8);
   const livePolymarketFirstMinFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES", liveOrderSize);
-  const livePolymarketFirstMaxFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES", liveOrderSize);
+  // Upper bound defaults to liveOrderSize + 1 so a natural Polymarket FAK OVERFILL (e.g. 5.17857 on a
+  // size-5 order, from CLOB maker-amount rounding) still passes the hedge-trigger range and routes into
+  // the A2 floor-hedge (hedge floor(fill) on Kalshi, leaving the <1-share remainder to the bounded
+  // quarantine) instead of being rejected as unexpected_fill_count and stranding the WHOLE fill
+  // one-sided (the live signal 2599386 failure). The floor-hedge can only shrink net exposure
+  // (hedgeShares = floor(fill) <= fill), never open opposite-side risk. MIN stays at liveOrderSize so a
+  // genuine underfill is still declined (no new opening-risk surface).
+  const livePolymarketFirstMaxFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES", liveOrderSize + 1);
   if (livePolymarketFirstMinFillShares <= 0 || livePolymarketFirstMaxFillShares <= 0 || livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares) {
     throw new Error("LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES");
   }
@@ -291,6 +308,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
     liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", 10),
+    liveMinExecutableLiquidityShares: Math.max(0, envNumber(env, "LIVE_MIN_EXECUTABLE_LIQUIDITY_SHARES", 0)),
+    liveMaxExecutableAskSlippageCents: Math.max(0, envNumber(env, "LIVE_MAX_EXECUTABLE_ASK_SLIPPAGE_CENTS", 0)),
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
     liveHedgeRetryAttempts: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_ATTEMPTS", 2)),
     liveHedgeRetryBudgetMs: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_BUDGET_MS", 1_500)),
@@ -331,6 +350,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveExecutionQualitySampleLimit: envNumber(env, "LIVE_EXECUTION_QUALITY_SAMPLE_LIMIT", 50),
     liveExecutionQualityMinSamples: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_SAMPLES", 5),
     liveExecutionQualityMinExactFillRate: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_EXACT_FILL_RATE", 0.4),
+    liveShadowLadderCaptureEnabled: envBoolean(env, "LIVE_SHADOW_LADDER_CAPTURE_ENABLED", false),
+    liveShadowLadderProbeSizes: envNumberList(env, "LIVE_SHADOW_LADDER_PROBE_SIZES", [1, 2, 3, 5]),
     liveFillQualityScoringEnabled: envBoolean(env, "LIVE_FILL_QUALITY_SCORING_ENABLED", true),
     liveFillQualityGateEnabled: envBoolean(env, "LIVE_FILL_QUALITY_GATE_ENABLED", false),
     liveFillQualityMinExpectedEdge: envNumber(env, "LIVE_FILL_QUALITY_MIN_EXPECTED_EDGE", 0.01),

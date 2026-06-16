@@ -11,8 +11,9 @@ APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
 RESTORE_ARB_AFTER_DEPLOY="${RESTORE_ARB_AFTER_DEPLOY:-true}"
 REQUIRE_DEPLOY_READINESS="${REQUIRE_DEPLOY_READINESS:-true}"
+ALLOW_KALSHI_FIRST_EXACT="${DEPLOY_ALLOW_KALSHI_FIRST_EXACT:-false}"
 
-ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$DEPLOY_BRANCH" "$APP_DIR" "$ENV_FILE" "$RESTORE_ARB_AFTER_DEPLOY" "$REQUIRE_DEPLOY_READINESS" <<'REMOTE'
+ssh "$HOSTINGER_SSH_TARGET" bash -s -- "$DEPLOY_BRANCH" "$APP_DIR" "$ENV_FILE" "$RESTORE_ARB_AFTER_DEPLOY" "$REQUIRE_DEPLOY_READINESS" "$ALLOW_KALSHI_FIRST_EXACT" <<'REMOTE'
 set -euo pipefail
 
 DEPLOY_BRANCH="$1"
@@ -20,6 +21,7 @@ APP_DIR="$2"
 ENV_FILE="$3"
 RESTORE_ARB_AFTER_DEPLOY="$4"
 REQUIRE_DEPLOY_READINESS="$5"
+ALLOW_KALSHI_FIRST_EXACT="$6"
 
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
@@ -87,7 +89,16 @@ NODE
 
 apply_deploy_env_policy() {
   echo "Applying Hostinger exact-share safety env policy."
-  set_env_value LIVE_ORDER_PLACEMENT_MODE polymarket_first_exact
+  # T1.3 canary: default-pin polymarket_first_exact, but preserve a staged kalshi_first_exact when the
+  # deploy is explicitly opted in (DEPLOY_ALLOW_KALSHI_FIRST_EXACT=true). Omitting the flag is the
+  # automatic rollback to polymarket_first_exact on the next deploy.
+  local current_placement_mode placement_mode
+  current_placement_mode="$(read_env_value LIVE_ORDER_PLACEMENT_MODE || true)"
+  placement_mode=polymarket_first_exact
+  if [ "$ALLOW_KALSHI_FIRST_EXACT" = "true" ] && [ "$current_placement_mode" = "kalshi_first_exact" ]; then
+    placement_mode=kalshi_first_exact
+  fi
+  set_env_value LIVE_ORDER_PLACEMENT_MODE "$placement_mode"
   set_env_value LIVE_KALSHI_HEDGE_TIME_IN_FORCE fill_or_kill
   set_env_value LIVE_ORDER_TIMEOUT_MS 2500
   set_env_value LIVE_HEDGE_RETRY_ATTEMPTS 2

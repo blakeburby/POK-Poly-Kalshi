@@ -1,10 +1,13 @@
 import type { AppConfig } from "../config";
-import type { ArbCandidate, ArbLeg, BinaryContract, BookLevel, LegDirection, QuoteSnapshot, QuoteSnapshotLeg, Venue } from "../types";
+import type { ArbCandidate, ArbLeg, BinaryContract, BookLevel, LegDirection, QuoteSnapshot, QuoteSnapshotLeg, ShadowLadderCapture, ShadowLadderLeg, ShadowLadderProbe, Venue } from "../types";
 
 export interface LiveQuoteBooks {
   kalshi: BinaryContract[];
   polymarket: BinaryContract[];
 }
+
+// Shared so the executor's shadow-capture predicate (T2.4) stays coupled to the exact gate wording.
+export const CUSHIONED_EDGE_REASON_PREFIX = "cushioned executable edge";
 
 export interface DepthVwapResult {
   vwap: number;
@@ -87,6 +90,28 @@ export function depthWeightedAsk(levels: BookLevel[], size: number): DepthVwapRe
   };
 }
 
+// Sum of genuine ask contracts priced within `bandCents` of the best ask. Used by the default-inert
+// anti-dust guard so a single-lot phantom/stale top-of-book quote (real depth only far above the band)
+// cannot qualify even when LIVE_ORDER_SIZE is small. Reuses the same validity filter as depthWeightedAsk.
+export function executableLiquidityWithinBand(levels: BookLevel[], topAsk: number, bandCents: number): number {
+  if (!finite(topAsk)) return 0;
+  const limit = topAsk + Math.max(0, bandCents) / 100 + 1e-9;
+  let total = 0;
+  for (const level of levels) {
+    if (
+      finite(level.price)
+      && finite(level.size)
+      && level.price >= 0
+      && level.price <= 1
+      && level.size > 0
+      && level.price <= limit
+    ) {
+      total += level.size;
+    }
+  }
+  return roundPrice(total);
+}
+
 function findContract(books: LiveQuoteBooks, leg: ArbLeg): BinaryContract | null {
   return books[leg.venue].find((contract) => contract.contractId === leg.contractId) ?? null;
 }
@@ -107,6 +132,21 @@ function quoteLeg(
   const bookLevels = levelsFor(contract, leg.direction);
   const executionVwap = depthWeightedAsk(bookLevels, config.liveOrderSize);
   const requiredDepthVwap = depthWeightedAsk(bookLevels, depthRequired);
+  // T2.5 anti-dust guard (default-inert: both knobs default 0 -> these are no-ops and the snapshot
+  // fields below serialize as undefined, so behavior is byte-identical to today). When enabled, they
+  // require genuine depth near the best ask so a single-lot phantom/stale quote cannot qualify even at
+  // a small LIVE_ORDER_SIZE (where worstAsk(1) == best ask).
+  const liquidityGuardOn = config.liveMinExecutableLiquidityShares > 0;
+  const slippageGuardOn = config.liveMaxExecutableAskSlippageCents > 0;
+  const liquidityBandCents = config.liveMaxExecutableAskSlippageCents > 0
+    ? config.liveMaxExecutableAskSlippageCents
+    : config.liveTakerPriceCushionCents;
+  const executableLiquidityShares = liquidityGuardOn && topAsk != null && finite(topAsk)
+    ? executableLiquidityWithinBand(bookLevels, topAsk, liquidityBandCents)
+    : null;
+  const executableAskSlippageCents = slippageGuardOn && executionVwap != null && topAsk != null && finite(topAsk)
+    ? roundPrice(100 * (executionVwap.worstAsk - topAsk))
+    : null;
   const quoteAgeMs = now - contract.updatedAt;
   const snapshot: QuoteSnapshotLeg = {
     venue: leg.venue,
@@ -128,6 +168,8 @@ function quoteLeg(
     bookHash: contract.bookHash ?? null,
     tickSize: contract.tickSize ?? null,
     tickSizeChangedAt: contract.tickSizeChangedAt ?? null,
+    executableLiquidityShares: liquidityGuardOn ? executableLiquidityShares : undefined,
+    executableAskSlippageCents: slippageGuardOn ? executableAskSlippageCents : undefined,
   };
 
   if (quoteAgeMs > maxAgeMs) {
@@ -143,6 +185,28 @@ function quoteLeg(
       maxBuyPrice: null,
       adjustedLeg: null,
     };
+  }
+  // T2.5 anti-dust guards: additive only (run after the depth gate, before maxBuyPrice/edge), so they
+  // can reject a leg the edge gate would have accepted but never the reverse. Both no-op when their
+  // knob is 0 (default). executionVwap and topAsk are non-null here (gated above).
+  if (liquidityGuardOn && (executableLiquidityShares ?? 0) + 1e-9 < config.liveMinExecutableLiquidityShares) {
+    return {
+      snapshot,
+      reason: `${leg.venue} ${leg.direction} executable liquidity ${roundPrice(executableLiquidityShares ?? 0)} within ${liquidityBandCents}c of top ask ${topAsk} below required ${config.liveMinExecutableLiquidityShares}`,
+      maxBuyPrice: null,
+      adjustedLeg: null,
+    };
+  }
+  if (slippageGuardOn) {
+    const slipCents = roundPrice(100 * (executionVwap.worstAsk - topAsk));
+    if (slipCents > config.liveMaxExecutableAskSlippageCents + 1e-9) {
+      return {
+        snapshot,
+        reason: `${leg.venue} ${leg.direction} executable ask slippage ${slipCents.toFixed(2)}c exceeds ${config.liveMaxExecutableAskSlippageCents}c`,
+        maxBuyPrice: null,
+        adjustedLeg: null,
+      };
+    }
   }
   if (contract.tickSizeChangedAt != null && now - contract.tickSizeChangedAt <= config.liveQuoteMaxAgeMs) {
     return { snapshot, reason: `${leg.venue} ${leg.direction} tick size changed within quote freshness window`, maxBuyPrice: null, adjustedLeg: null };
@@ -196,7 +260,7 @@ export function evaluateLiveQuoteQuality(
   const projectedEdgeAtLimit = projectedPremiumAtLimit == null ? null : roundPrice(1 - projectedPremiumAtLimit);
   const projectedEdgeAfterFees = projectedEdgeAtLimit;
   if (!failureReason && projectedEdgeAfterFees != null && projectedEdgeAfterFees + 1e-9 < config.minProfitDollars) {
-    failureReason = `cushioned executable edge ${projectedEdgeAfterFees.toFixed(4)} below threshold ${config.minProfitDollars.toFixed(4)}`;
+    failureReason = `${CUSHIONED_EDGE_REASON_PREFIX} ${projectedEdgeAfterFees.toFixed(4)} below threshold ${config.minProfitDollars.toFixed(4)}`;
   }
 
   const snapshot: QuoteSnapshot = {
@@ -224,5 +288,59 @@ export function evaluateLiveQuoteQuality(
     polymarketLeg: polymarket.adjustedLeg,
     kalshiMaxBuyPrice: kalshi.maxBuyPrice,
     polymarketMaxBuyPrice: polymarket.maxBuyPrice,
+  };
+}
+
+function shadowLadderLeg(leg: ArbLeg | null, contract: BinaryContract | null, probeSizes: number[]): ShadowLadderLeg | null {
+  if (!leg || !contract) return null;
+  const topAsk = askFor(contract, leg.direction);
+  const bookLevels = levelsFor(contract, leg.direction);
+  const totalDepth = bookLevels.reduce((sum, level) => sum + (finite(level.size) ? level.size : 0), 0);
+  const probes: ShadowLadderProbe[] = probeSizes.map((size) => {
+    const result = depthWeightedAsk(bookLevels, size);
+    if (!result) {
+      return { size, vwap: null, worstAsk: null, depth: roundPrice(totalDepth), sufficientDepth: false, levelsConsumed: [] };
+    }
+    return { size, vwap: result.vwap, worstAsk: result.worstAsk, depth: result.depth, sufficientDepth: true, levelsConsumed: result.levelsConsumed };
+  });
+  return {
+    venue: leg.venue,
+    contractId: leg.contractId,
+    direction: leg.direction,
+    topAsk: finite(topAsk) ? topAsk : null,
+    probes,
+  };
+}
+
+// T2.4: pure, read-only multi-size ladder capture used ONLY on the already-rejected below-threshold-edge
+// path (gated by LIVE_SHADOW_LADDER_CAPTURE_ENABLED). It performs only arithmetic over already-fetched
+// book arrays — no network, no order placement, no gate mutation — so it can never affect trading.
+export function captureShadowLadder(candidate: ArbCandidate, books: LiveQuoteBooks, config: AppConfig, now: number): ShadowLadderCapture {
+  const probeSizes = Array.from(new Set([...(config.liveShadowLadderProbeSizes ?? []), config.liveOrderSize]))
+    .filter((size) => Number.isFinite(size) && size > 0)
+    .sort((a, b) => a - b);
+  const kalshiLeg = legForVenue(candidate, "kalshi");
+  const polymarketLeg = legForVenue(candidate, "polymarket");
+  const kalshiContract = kalshiLeg ? findContract(books, kalshiLeg) : null;
+  const polymarketContract = polymarketLeg ? findContract(books, polymarketLeg) : null;
+  const kalshi = shadowLadderLeg(kalshiLeg, kalshiContract, probeSizes);
+  const polymarket = shadowLadderLeg(polymarketLeg, polymarketContract, probeSizes);
+  const topOfBookEdge = kalshi?.topAsk != null && polymarket?.topAsk != null
+    ? roundPrice(1 - (kalshi.topAsk + polymarket.topAsk))
+    : null;
+  const executableEdgeBySize = probeSizes.map((size) => {
+    const k = kalshi?.probes.find((probe) => probe.size === size);
+    const p = polymarket?.probes.find((probe) => probe.size === size);
+    const executableEdge = k?.vwap != null && p?.vwap != null ? roundPrice(1 - (k.vwap + p.vwap)) : null;
+    return { size, executableEdge };
+  });
+  return {
+    capturedAt: now,
+    probeSizes,
+    minProfitDollars: config.minProfitDollars,
+    topOfBookEdge,
+    executableEdgeBySize,
+    kalshi,
+    polymarket,
   };
 }

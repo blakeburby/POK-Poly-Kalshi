@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config";
-import { depthWeightedAsk, evaluateLiveQuoteQuality } from "../src/execution/quote-quality";
+import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder } from "../src/execution/quote-quality";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { AppConfig } from "../src/config";
 import type { BinaryContract } from "../src/types";
@@ -365,4 +365,123 @@ test("incident-shaped Kalshi 30 NO versus Polymarket 5 YES cannot pass live quot
   assert.equal(result.snapshot.polymarket?.depth, 5);
   assert.equal(result.snapshot.projectedPremium, 1.1);
   assert.match(result.reason ?? "", /cushioned executable edge -0.1000 below threshold 0.0500/);
+});
+
+// ---- T2.5 real-liquidity (anti-dust) guard ----
+
+test("executableLiquidityWithinBand sums only contracts within the price band of the best ask", () => {
+  const levels = [
+    { price: 0.4, size: 1 },
+    { price: 0.41, size: 3 },
+    { price: 0.95, size: 50 },
+  ];
+  assert.equal(executableLiquidityWithinBand(levels, 0.4, 2), 4); // 0.40 + 0.41 within 2c; 0.95 excluded
+  assert.equal(executableLiquidityWithinBand(levels, 0.4, 0), 1); // only the best-ask lot
+});
+
+test("T2.5 anti-dust guard is default-inert: serialized snapshot omits the guard fields and behavior is unchanged", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig(); // both knobs default 0
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 5 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(result.ok, true);
+  // undefined-valued fields are dropped by JSON.stringify, so the persisted snapshot is byte-identical.
+  assert.equal(JSON.stringify(result.snapshot.polymarket).includes("executableLiquidityShares"), false);
+  assert.equal(JSON.stringify(result.snapshot.polymarket).includes("executableAskSlippageCents"), false);
+  assert.equal(JSON.stringify(result.snapshot.kalshi).includes("executableLiquidityShares"), false);
+});
+
+test("T2.5 liquidity guard rejects a single-lot dust quote at size 1 that the edge gate alone would accept", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 1, liveMinBookDepthShares: 5, liveMinExecutableLiquidityShares: 5, liveMaxExecutableAskSlippageCents: 2 });
+  // One real contract at the marketable top (0.40), the rest of the book far above the band.
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.95, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(result.ok, false);
+  assert.match(result.reason ?? "", /executable liquidity 1 within 2c of top ask 0.4 below required 5/);
+  assert.equal(result.snapshot.polymarket?.executableLiquidityShares, 1);
+});
+
+test("T2.5 guard passes a genuine shallow-real book at size 1", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 1, liveMinBookDepthShares: 5, liveMinExecutableLiquidityShares: 5, liveMaxExecutableAskSlippageCents: 2 });
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 6 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 6 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(result.ok, true);
+  assert.equal(result.snapshot.polymarket?.executableLiquidityShares, 6);
+  assert.equal(result.snapshot.polymarket?.executableAskSlippageCents, 0);
+});
+
+test("T2.5 slippage guard independently rejects a thin top backed only by far-away depth", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 5, liveMinBookDepthShares: 5, liveMaxExecutableAskSlippageCents: 1 });
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.6, size: 10 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(result.ok, false);
+  assert.match(result.reason ?? "", /executable ask slippage 20.00c exceeds 1c/);
+});
+
+test("T2.5 guard composes: an existing staleness reason still wins over the guard", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 1, liveMinBookDepthShares: 5, liveMinExecutableLiquidityShares: 5 });
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.95, size: 50 }], yesTokenId: "yes-token", updatedAt: now - 5_000 });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(result.ok, false);
+  assert.match(result.reason ?? "", /stale/);
+});
+
+// ---- T2.4 shadow ladder capture ----
+
+test("captureShadowLadder probes each configured size and flags insufficient depth", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 5, liveShadowLadderProbeSizes: [1, 2, 3, 5, 8] });
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 2 }, { price: 0.42, size: 3 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.4, noAskLevels: [{ price: 0.4, size: 2 }, { price: 0.42, size: 3 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const ladder = captureShadowLadder(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.deepEqual(ladder.probeSizes, [1, 2, 3, 5, 8]);
+  const polyProbe1 = ladder.polymarket?.probes.find((p) => p.size === 1);
+  const polyProbe5 = ladder.polymarket?.probes.find((p) => p.size === 5);
+  const polyProbe8 = ladder.polymarket?.probes.find((p) => p.size === 8);
+  assert.equal(polyProbe1?.sufficientDepth, true);
+  assert.equal(polyProbe1?.vwap, 0.4);
+  assert.equal(polyProbe5?.sufficientDepth, true);
+  assert.equal(polyProbe5?.vwap, 0.412);
+  assert.equal(polyProbe8?.sufficientDepth, false);
+  assert.equal(polyProbe8?.vwap, null);
+  assert.equal(polyProbe8?.depth, 5);
+});
+
+test("captureShadowLadder surfaces phantom collapse: large top-of-book edge that vanishes at depth", () => {
+  const now = 1_800_000_000_000;
+  const config = safetyConfig({ liveOrderSize: 5, liveShadowLadderProbeSizes: [1, 5, 11] });
+  // topAsk sum 0.88 (>=10c top-of-book edge) but the size-5 VWAP collapses the edge to ~3c.
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.5, size: 9 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.48, noAskLevels: [{ price: 0.48, size: 1 }, { price: 0.49, size: 9 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+
+  const ladder = captureShadowLadder(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
+  assert.equal(ladder.topOfBookEdge, 0.12); // 1 - (0.40 + 0.48)
+  const edge1 = ladder.executableEdgeBySize.find((e) => e.size === 1)?.executableEdge;
+  const edge5 = ladder.executableEdgeBySize.find((e) => e.size === 5)?.executableEdge;
+  const edge11 = ladder.executableEdgeBySize.find((e) => e.size === 11)?.executableEdge;
+  assert.equal(edge1, 0.12); // size-1 VWAP == top of book
+  assert.equal(edge5, 0.032); // 1 - (0.48 + 0.488)
+  assert.equal(edge11, null); // insufficient depth on at least one leg
 });

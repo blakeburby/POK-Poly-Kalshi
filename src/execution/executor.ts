@@ -18,7 +18,7 @@ import {
 import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
 import { fillQualityBlockReason, scoreFillQuality } from "./fill-quality";
-import { evaluateLiveQuoteQuality } from "./quote-quality";
+import { evaluateLiveQuoteQuality, captureShadowLadder, CUSHIONED_EDGE_REASON_PREFIX } from "./quote-quality";
 import { leadLagBlockReason, scoreLeadLag, type LeadLagHistory } from "../signals/lead-lag";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
 
@@ -145,6 +145,18 @@ interface PreparedExecution {
   kalshi: PreparedLeg;
   polymarket: PreparedLeg;
   quoteSnapshot: QuoteSnapshot;
+}
+
+// prepareExecution returns this on a reject instead of a bare string, so the below-threshold-edge skip
+// can carry the (optional) shadow-ladder snapshot for persistence (T2.4). rejectedSnapshot is null
+// unless LIVE_SHADOW_LADDER_CAPTURE_ENABLED captured one — keeping the default path byte-identical.
+interface PrepareSkip {
+  skipReason: string;
+  rejectedSnapshot: QuoteSnapshot | null;
+}
+
+function isPrepareSkip(prepared: PreparedExecution | PrepareSkip): prepared is PrepareSkip {
+  return "skipReason" in prepared;
 }
 
 interface PreparedHedge {
@@ -433,8 +445,13 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketFirstCrossCents = this.config.liveOrderPlacementMode === "polymarket_first_exact"
       ? this.config.livePolymarketFirstCrossCents
       : 0;
-    let prepared = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
-    if (typeof prepared === "string") return skipped(prepared);
+    const preparedOrSkip = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
+    if (isPrepareSkip(preparedOrSkip)) {
+      return preparedOrSkip.rejectedSnapshot
+        ? this.skippedWithShadowLadder(preparedOrSkip.skipReason, preparedOrSkip.rejectedSnapshot)
+        : skipped(preparedOrSkip.skipReason);
+    }
+    let prepared: PreparedExecution = preparedOrSkip;
 
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
@@ -525,10 +542,10 @@ export class LiveExecutor implements ArbExecutor {
       );
     }
     const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
-    if (typeof refreshed === "string") {
+    if (isPrepareSkip(refreshed)) {
       return this.skippedWithQuoteQuality(
-        `live quote revalidation after preflight failed: ${refreshed}`,
-        prepared.quoteSnapshot,
+        `live quote revalidation after preflight failed: ${refreshed.skipReason}`,
+        refreshed.rejectedSnapshot ?? prepared.quoteSnapshot,
         this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
         fillQualitySnapshot,
       );
@@ -1149,6 +1166,18 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
+  // Early below-threshold-edge skip that carries the captured shadow-ladder snapshot (T2.4) for
+  // persistence, without the full timings/fill-quality context (not yet computed at this pre-dispatch
+  // point). No executionGroupId is assigned, so no exposure/lock/reconciliation logic is engaged.
+  private skippedWithShadowLadder(reason: string, quoteSnapshot: QuoteSnapshot): ExecutionResult {
+    return {
+      ...skipped(reason),
+      quoteSnapshot,
+      depthVwap: quoteSnapshot.projectedPremium,
+      projectedEdgeAfterFees: quoteSnapshot.projectedEdgeAfterFees,
+    };
+  }
+
   private withRecoveryMetadata(
     result: ExecutionResult,
     recovery: { status: LiveRecoveryStatus; attempts?: number | null; evidence?: Record<string, unknown> | null; finalizationMs?: number | null },
@@ -1235,14 +1264,29 @@ export class LiveExecutor implements ArbExecutor {
     return roundPrice(this.config.liveOrderSize * worstCaseHedgePrice + this.config.liveCollateralBufferDollars);
   }
 
-  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0): PreparedExecution | string {
+  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0): PreparedExecution | PrepareSkip {
     const now = this.now();
-    if (!Number.isFinite(this.config.liveOrderSize) || this.config.liveOrderSize <= 0) return "LIVE_ORDER_SIZE must be greater than 0";
-    if (candidate.expiryMs - now < this.config.liveMinExpiryMs) return "candidate too close to expiry for live execution";
-    const evaluation = evaluateLiveQuoteQuality(candidate, this.liveBooksForPreflight(kalshiLeg, polymarketLeg), this.config, now, polymarketFirstCrossCents);
-    if (!evaluation.ok) return evaluation.reason ?? "live quote quality preflight failed";
+    if (!Number.isFinite(this.config.liveOrderSize) || this.config.liveOrderSize <= 0) {
+      return { skipReason: "LIVE_ORDER_SIZE must be greater than 0", rejectedSnapshot: null };
+    }
+    if (candidate.expiryMs - now < this.config.liveMinExpiryMs) {
+      return { skipReason: "candidate too close to expiry for live execution", rejectedSnapshot: null };
+    }
+    const books = this.liveBooksForPreflight(kalshiLeg, polymarketLeg);
+    const evaluation = evaluateLiveQuoteQuality(candidate, books, this.config, now, polymarketFirstCrossCents);
+    if (!evaluation.ok) {
+      const skipReason = evaluation.reason ?? "live quote quality preflight failed";
+      // T2.4 read-only diagnostic: only on the dominant below-threshold-edge skip, and only when
+      // explicitly enabled. Attaches the multi-size ladder snapshot so the scanner persists it; the
+      // gate outcome is already decided (evaluation.ok === false) so this can never flip a reject.
+      let rejectedSnapshot: QuoteSnapshot | null = null;
+      if (this.config.liveShadowLadderCaptureEnabled && skipReason.startsWith(CUSHIONED_EDGE_REASON_PREFIX)) {
+        rejectedSnapshot = { ...evaluation.snapshot, shadowLadder: captureShadowLadder(candidate, books, this.config, now) };
+      }
+      return { skipReason, rejectedSnapshot };
+    }
     if (!evaluation.kalshiLeg || !evaluation.polymarketLeg || evaluation.kalshiMaxBuyPrice == null || evaluation.polymarketMaxBuyPrice == null) {
-      return "live quote quality preflight missing executable legs";
+      return { skipReason: "live quote quality preflight missing executable legs", rejectedSnapshot: null };
     }
     return {
       kalshi: { leg: evaluation.kalshiLeg, maxBuyPrice: evaluation.kalshiMaxBuyPrice },
