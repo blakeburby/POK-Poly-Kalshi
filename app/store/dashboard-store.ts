@@ -47,18 +47,23 @@ function demoMode(): boolean {
   return false;
 }
 
-/** Gap between snapshot polls (after the previous one resolves). The worker now
- *  serves warm cached snapshots in ~ms, so we can poll briskly for a near-live feel. */
-const POLL_MS = 2000;
+/** Fast poll of the lightweight live slice (books / scanner / candidates / op-status). */
+const POLL_LIVE_MS = 750;
+/** Slow poll of the heavy slice (trade ledger / analytics / balances / logs). */
+const POLL_HEAVY_MS = 6000;
+/** Heavy-slice keys pulled from the full snapshot; everything else comes from the live slice. */
+const HEAVY_KEYS = ["recentSignals", "analytics", "tradingActivity", "logs"] as const;
 
 /**
- * Feeds the store by polling the trimmed snapshot proxy. We deliberately do NOT
- * use the worker's SSE stream: the worker pushes a full ~1.9MB snapshot every
- * 250ms, and a long-lived proxied stream is cut by Vercel's function timeout —
- * together that produced the "slow / not connecting" behavior. Polling a
- * trimmed snapshot is short-lived, reliable on serverless, and keeps the last
- * good snapshot visible during a transient failure (never fabricated data). In
- * demo mode it renders from the mock generator instead.
+ * Two-rate polling for a near-live feel on serverless (no long-lived SSE/WS,
+ * which Vercel functions cut off):
+ *  - FAST (~750ms): the lightweight /dashboard/live slice (books, scanner, live
+ *    candidates, op-status) — a few KB the worker serves in ~ms.
+ *  - SLOW (~6s): the full snapshot, from which only the heavy slice (trade
+ *    ledger, analytics, balances, logs) is merged in.
+ * Both merge into one snapshot so views are unchanged. The last good snapshot
+ * stays visible on a transient failure (degraded badge, never fabricated data).
+ * Demo mode renders from the mock generator instead.
  */
 export function useDashboardStream(): void {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
@@ -66,40 +71,75 @@ export function useDashboardStream(): void {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let liveTimer: ReturnType<typeof setTimeout> | null = null;
+    let heavyTimer: ReturnType<typeof setTimeout> | null = null;
+    const current: { snap: DashboardSnapshot | null } = { snap: null };
+
+    const apply = (patch: Partial<DashboardSnapshot>) => {
+      if (cancelled) return;
+      current.snap = { ...(current.snap ?? {}), ...patch } as DashboardSnapshot;
+      setSnapshot(current.snap, "live");
+    };
 
     if (demoMode()) {
       const tick = () => {
         if (cancelled) return;
-        setSnapshot(generateMockSnapshot(), "mock");
-        timer = setTimeout(tick, 2000);
+        current.snap = generateMockSnapshot();
+        setSnapshot(current.snap, "mock");
+        liveTimer = setTimeout(tick, 1500);
       };
       tick();
       return () => {
         cancelled = true;
-        if (timer) clearTimeout(timer);
+        if (liveTimer) clearTimeout(liveTimer);
       };
     }
 
-    const poll = async () => {
+    const liveLoop = async () => {
       try {
-        const res = await fetch("/api/dashboard/snapshot", { cache: "no-store" });
+        const res = await fetch("/api/dashboard/live", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
-        const snap = (await res.json()) as DashboardSnapshot;
-        if (!cancelled) setSnapshot(snap, "live");
+        apply((await res.json()) as Partial<DashboardSnapshot>);
       } catch {
-        // Keep the last snapshot on screen; just flag the feed as degraded.
         if (!cancelled) setSource("degraded");
       } finally {
-        if (!cancelled) timer = setTimeout(poll, POLL_MS);
+        if (!cancelled) liveTimer = setTimeout(liveLoop, POLL_LIVE_MS);
       }
     };
 
-    void poll();
+    const heavyLoop = async () => {
+      try {
+        const res = await fetch("/api/dashboard/snapshot", { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        const full = (await res.json()) as DashboardSnapshot;
+        const heavy: Partial<DashboardSnapshot> = {};
+        for (const k of HEAVY_KEYS) (heavy as Record<string, unknown>)[k] = full[k];
+        apply(heavy);
+      } catch {
+        if (!cancelled) setSource("degraded");
+      } finally {
+        if (!cancelled) heavyTimer = setTimeout(heavyLoop, POLL_HEAVY_MS);
+      }
+    };
+
+    // Pull one full snapshot first so the initial render is complete, then split.
+    const bootstrap = async () => {
+      try {
+        const res = await fetch("/api/dashboard/snapshot", { cache: "no-store" });
+        if (res.ok) apply((await res.json()) as DashboardSnapshot);
+      } catch {
+        /* the loops below will retry */
+      }
+      if (cancelled) return;
+      void liveLoop();
+      heavyTimer = setTimeout(heavyLoop, POLL_HEAVY_MS);
+    };
+    void bootstrap();
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      if (liveTimer) clearTimeout(liveTimer);
+      if (heavyTimer) clearTimeout(heavyTimer);
     };
   }, [setSnapshot, setSource]);
 }

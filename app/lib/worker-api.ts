@@ -22,6 +22,15 @@ export async function fetchWorkerSnapshot(): Promise<DashboardSnapshot> {
   return response.json() as Promise<DashboardSnapshot>;
 }
 
+export async function fetchWorkerLive(): Promise<Partial<DashboardSnapshot>> {
+  const response = await fetch(`${workerBase()}/dashboard/live`, {
+    headers: { Authorization: `Bearer ${workerToken()}` },
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`Worker live failed ${response.status}: ${await response.text()}`);
+  return response.json() as Promise<Partial<DashboardSnapshot>>;
+}
+
 export async function fetchWorkerStream(): Promise<Response> {
   return fetch(`${workerBase()}/dashboard/stream`, {
     headers: { Authorization: `Bearer ${workerToken()}` },
