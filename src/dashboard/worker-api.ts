@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AppConfig } from "../config";
 import { buildDashboardAnalytics, oldestAnalyticsSinceMs } from "../analytics/performance";
@@ -369,6 +369,75 @@ async function writeStream(response: ServerResponse, runtime: DashboardRuntime):
   });
 }
 
+/** Validate a short-lived browser realtime token: `${expiryMs}.${HMAC(expiryMs)}`. */
+function realtimeTokenValid(token: string | null, secret: string): boolean {
+  if (!secret || !token) return false;
+  const [expStr, sig] = token.split(".", 2);
+  const exp = Number(expStr);
+  if (!expStr || !sig || !Number.isFinite(exp) || Date.now() > exp) return false;
+  const expected = createHmac("sha256", secret).update(expStr).digest("base64url");
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Stable signature of the meaningful live state — excludes volatile timestamps/ages
+ *  so the stream only pushes when something a viewer cares about actually changes. */
+function liveSignature(s: Partial<DashboardSnapshot>): string {
+  const e = s.execution;
+  return JSON.stringify({
+    b: s.books,
+    c: s.liveCandidates,
+    n: s.scanner?.lastCandidateCount,
+    sc: s.scanner?.scanning,
+    r: e?.riskState,
+    cb: e?.circuitBreakerLocked,
+    pf: e?.partialFillLocked,
+    kr: e?.kalshi?.ready,
+    pr: e?.polymarket?.ready,
+    kb: e?.kalshi?.balance,
+    pb: e?.polymarket?.balance,
+    ex: e?.reconciliation?.quarantinedExposureDollars,
+    kc: e?.userStreams?.kalshi?.connected,
+    pc: e?.userStreams?.polymarket?.connected,
+    eq: e?.executionQuality?.exactPairFillRate,
+    mm: e?.executionQuality?.mismatchRate,
+    est: e?.executionQuality?.estimatedExecutableEdge,
+    dx: s.diagnostics?.polymarket?.readyContracts,
+  });
+}
+
+/** SSE push of the live slice — emits a "live" event only when the signature changes
+ *  (heartbeat comment otherwise), so idle bandwidth stays near zero. */
+async function writeLiveStream(response: ServerResponse, runtime: DashboardRuntime, origin: string): Promise<void> {
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+    "Access-Control-Allow-Origin": origin || "*",
+    Vary: "Origin",
+  });
+  let lastSig = "";
+  const tick = async (): Promise<void> => {
+    try {
+      const slice = await createLiveSnapshot(runtime, Date.now(), sharedSnapshotCache);
+      const sig = liveSignature(slice);
+      if (sig !== lastSig) {
+        lastSig = sig;
+        response.write(formatSseEvent("live", slice));
+      } else {
+        response.write(": hb\n\n");
+      }
+    } catch (error) {
+      response.write(formatSseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+    }
+  };
+  await tick();
+  const timer = setInterval(() => void tick(), 500);
+  response.on("close", () => clearInterval(timer));
+}
+
 export async function handleDashboardRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -376,6 +445,32 @@ export async function handleDashboardRequest(
 ): Promise<boolean> {
   const url = new URL(request.url ?? "/", "http://localhost");
   const pathname = url.pathname;
+
+  // Direct browser realtime stream: token-query (or bearer) auth + CORS, handled
+  // before the generic bearer gate since EventSource can't set an Authorization header.
+  if (pathname === "/dashboard/live/stream") {
+    const origin = typeof request.headers.origin === "string" ? request.headers.origin : "";
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, {
+        "Access-Control-Allow-Origin": origin || "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Authorization",
+        Vary: "Origin",
+      });
+      response.end();
+      return true;
+    }
+    const authed = realtimeTokenValid(url.searchParams.get("token"), runtime.config.dashboardRealtimeSecret)
+      || (!!runtime.config.dashboardApiToken && dashboardRequestAuthorized(request.headers, runtime.config.dashboardApiToken));
+    if (!authed) {
+      response.writeHead(401, { "Content-Type": "application/json", "Access-Control-Allow-Origin": origin || "*", Vary: "Origin" });
+      response.end(JSON.stringify({ error: "unauthorized" }));
+      return true;
+    }
+    await writeLiveStream(response, runtime, origin);
+    return true;
+  }
+
   if (pathname !== "/dashboard/snapshot" && pathname !== "/dashboard/live" && pathname !== "/dashboard/stream" && pathname !== "/trading/activity") return false;
 
   if (!runtime.config.dashboardApiToken) {

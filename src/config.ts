@@ -121,6 +121,7 @@ export interface AppConfig {
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
+  dashboardRealtimeSecret: string;
 }
 
 function envString(env: NodeJS.ProcessEnv, key: string, fallback = ""): string {
@@ -356,5 +357,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
     polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),
     dashboardApiToken: envString(env, "DASHBOARD_API_TOKEN"),
+    dashboardRealtimeSecret: envString(env, "DASHBOARD_REALTIME_SECRET"),
   };
 }
