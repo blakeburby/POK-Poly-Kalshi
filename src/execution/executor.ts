@@ -77,6 +77,16 @@ function isTimeoutOrUnknownResult(result: VenueOrderResult): boolean {
   return result.status === "unknown" || result.error?.toLowerCase().includes("timeout") === true;
 }
 
+// A venue result that DEFINITIVELY did not fill: zero fill count and a terminal rejection/no-order status.
+// Keyed on status (not error text), because a stream-confirmation-timeout reason can bleed into the result
+// error even when the REST response was a clean rejection. "unknown" (an ambiguous order timeout, where the
+// order could still have been placed/filled) is deliberately excluded so it stays locked for reconciliation.
+function isDefinitiveNoFill(result: VenueOrderResult): boolean {
+  if ((result.fillCount ?? 0) > 0) return false;
+  const status = String(result.status ?? "").toLowerCase();
+  return ["failed", "rejected", "canceled", "cancelled", "unfilled", "not_submitted", "skipped"].includes(status);
+}
+
 function isUserStreamPreflightReason(reason: string): boolean {
   const normalized = reason.toLowerCase();
   const mentionsUserStream = normalized.includes("user stream") || normalized.includes("user subscription");
@@ -2124,11 +2134,19 @@ export class LiveExecutor implements ArbExecutor {
       autoUnwind = await this.attemptAutoUnwind(kalshi, polymarket, metadata.unwindLegs);
     }
     const autoUnwindFlattened = autoUnwind?.flattened === true;
-    const initialLiveLockReason = autoUnwindFlattened
+    // A stream-confirmation timeout/failed is only a SAFETY event if a fill could be left unconfirmed. When
+    // BOTH legs ended in a definitive terminal no-fill status there is no exposure to protect, so a transient
+    // Polymarket WS drop must NOT engage a critical circuit breaker — downgrade it to a clean zero-exposure
+    // miss. Any fill, size mismatch, or ambiguous (unknown/order-timeout) result is NOT provably flat and
+    // still locks for reconciliation. Reversible via LIVE_CONFIRMATION_FLAT_MISS_NONBLOCKING.
+    const provablyNoExposure = this.config.liveConfirmationFlatMissNonBlocking
+      && isDefinitiveNoFill(kalshi)
+      && isDefinitiveNoFill(polymarket);
+    const initialLiveLockReason = autoUnwindFlattened || provablyNoExposure
       ? null
       : this.confirmationLockReason(metadata.venueConfirmations)
         ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
-    const riskQuarantine = autoUnwindFlattened
+    const riskQuarantine = autoUnwindFlattened || provablyNoExposure
       ? null
       : await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
     const liveLockReason = riskQuarantine ? null : initialLiveLockReason;

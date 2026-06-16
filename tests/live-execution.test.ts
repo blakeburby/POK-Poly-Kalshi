@@ -152,6 +152,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveFinalRecoveryPollMs: 250,
     liveAutoResolveVerifiedIncidents: true,
     liveAutoHardlocksEnabled: true,
+    liveConfirmationFlatMissNonBlocking: true,
     liveExactExposureRequired: false,
     liveExecutionQualityGateEnabled: true,
     liveExecutionQualityLookbackMs: 30 * 60 * 1_000,
@@ -5404,6 +5405,48 @@ test("live executor locks when private stream confirmation times out", async () 
   assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(locks.engageCalls, 1);
   assert.match((await locks.getActiveLock())?.reason ?? "", /private stream confirmation timeout/);
+});
+
+test("stream confirmation timeout does NOT lock when both legs are definitively flat (zero exposure); flag-off restores the lock", async () => {
+  const now = 1_799_999_900_000;
+  const run = async (flatMissNonBlocking: boolean) => {
+    const { candidate, lower, higher } = liveCandidate(now);
+    const books = new BookStore();
+    books.setPolymarketContracts([lower]);
+    books.setKalshiContracts([higher]);
+    const locks = new FakeLiveLockStore();
+    const monitor = new FakeConfirmationMonitor();
+    monitor.resultStatus = "timeout"; // Polymarket WS drop -> first-leg confirmation times out
+    const executor = new LiveExecutor(
+      config({
+        liveOrderSize: 5,
+        liveUserStreamsEnabled: true,
+        liveOrderPlacementMode: "polymarket_first_exact",
+        liveConfirmationFlatMissNonBlocking: flatMissNonBlocking,
+      }),
+      books,
+      new FakeVenueClient("kalshi"), // hedge never submitted because the first leg fails
+      // Polymarket FAK definitively rejected (no fill): both legs end flat, so there is no exposure.
+      new FakeVenueClient("polymarket", { status: "failed", fillCount: 0, fillPrice: null, error: "polymarket FAK postOrder failed: no orders found to match" }),
+      () => now,
+      locks,
+      undefined,
+      monitor,
+    );
+    const result = await executor.execute(candidate);
+    return { result, engageCalls: locks.engageCalls };
+  };
+
+  // Flag ON (default): a transient WS drop on a zero-fill attempt is a clean miss, not a critical halt.
+  const on = await run(true);
+  assert.equal(on.result.action, "failed");
+  assert.equal(on.result.liveLockReason ?? null, null);
+  assert.equal(on.engageCalls, 0);
+
+  // Flag OFF: rollback to the previous behavior — the confirmation timeout still engages the breaker.
+  const off = await run(false);
+  assert.match(off.result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(off.engageCalls, 1);
 });
 
 test("live executor locks when realized fills no longer satisfy guaranteed edge", async () => {
