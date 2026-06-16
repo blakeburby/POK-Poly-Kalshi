@@ -182,6 +182,30 @@ const LIVE_SIGNAL_COLUMNS = `
   NULL::JSONB AS risk_quarantine_evidence
 `;
 
+// Read-only dashboard/analytics projection: keep everything the dashboard renders
+// (incl. lead_lag_snapshot, fill_quality_snapshot, execution_timings) but NULL the
+// large per-signal forensic blobs the dashboard never displays. This drops the
+// snapshot payload ~1.9MB -> ~0.7MB and cuts DB transfer + serialization cost.
+// NOT used by execution/recovery paths, which need the full SIGNAL_COLUMNS.
+const DASHBOARD_SIGNAL_COLUMNS = `
+  id, created_at, updated_at, pair_key, expiry_ms,
+  kalshi_contract_id, polymarket_contract_id,
+  lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
+  higher_venue, higher_contract_id, higher_strike, higher_direction, higher_ask,
+  premium, guaranteed_profit, overlap_profit, threshold, action, failure_reason,
+  kalshi_fill_id, polymarket_fill_id, kalshi_fill_price, polymarket_fill_price,
+  execution_group_id, kalshi_client_order_id, polymarket_client_order_id,
+  kalshi_status, polymarket_status, kalshi_fill_count, polymarket_fill_count,
+  kalshi_requested_at, kalshi_responded_at, polymarket_requested_at, polymarket_responded_at,
+  kalshi_error, polymarket_error, partial_fill,
+  NULL::JSONB AS quote_snapshot, depth_vwap, projected_edge_after_fees, lead_lag_snapshot, fill_quality_snapshot, expected_executable_edge,
+  execution_timings, NULL::JSONB AS venue_confirmations,
+  execution_strategy, risk_hedge, realized_guaranteed_profit, hedge_cap_price,
+  reconciliation_resolved_at, reconciliation_resolution_reason, NULL::JSONB AS reconciliation_resolution,
+  recovery_status, recovery_attempts, NULL::JSONB AS recovery_evidence, finalization_ms,
+  risk_quarantined_at, risk_quarantine_reason, risk_quarantine_exposure_dollars, NULL::JSONB AS risk_quarantine_evidence
+`;
+
 function numberFrom(value: string | number | null): number | null {
   if (value == null) return null;
   const parsed = Number(value);
@@ -742,7 +766,7 @@ export class SignalStore {
   async listRecentSignals(limit = 100): Promise<DashboardSignal[]> {
     const values: unknown[] = [limit];
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT ${SIGNAL_COLUMNS}
+      SELECT ${DASHBOARD_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
       ORDER BY created_at DESC
@@ -754,7 +778,7 @@ export class SignalStore {
   async listFilledSignalsSince(sinceMs: number, limit = 10_000): Promise<DashboardSignal[]> {
     const values: unknown[] = [sinceMs, limit];
     const result = await this.db.query<DashboardSignalRow>(`
-      SELECT ${SIGNAL_COLUMNS}
+      SELECT ${DASHBOARD_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
         AND execution_group_id IS NOT NULL
