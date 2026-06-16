@@ -26,10 +26,32 @@ export function norm(v: number, min: number, max: number): number {
 
 export const toScene = (n: number): number => (n - 0.5) * 2 * H;
 
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  const next = sorted[base + 1] ?? sorted[base];
+  return sorted[base] + (next - sorted[base]) * rest;
+}
+
 function axisRange(values: number[]): [number, number] {
   if (!values.length) return [0, 1];
-  let min = Math.min(...values);
-  let max = Math.max(...values);
+  const sorted = [...values].sort((a, b) => a - b);
+  let min = sorted[0];
+  let max = sorted[sorted.length - 1];
+  // With enough points, clip to the 5th–95th percentile so a single extreme
+  // outlier (e.g. one deeply negative worst-case point) doesn't squash the rest
+  // of the cloud into a corner. Out-of-range points are clamped to the cube face
+  // by norm(), so nothing is hidden — the bulk of the data just gets the room.
+  if (sorted.length >= 6) {
+    const lo = quantile(sorted, 0.05);
+    const hi = quantile(sorted, 0.95);
+    if (hi > lo) {
+      min = lo;
+      max = hi;
+    }
+  }
   if (min === max) {
     min -= 1;
     max += 1;
