@@ -34,18 +34,26 @@ export function toDollars(perShare: number | null | undefined, size: number): nu
 
 /**
  * Total account value for one venue = cash + market value of open positions.
- * NOT `portfolio.portfolioValue`: that field is venue-inconsistent at the source
- * (Kalshi reports positions-only there, Polymarket falls back to cash), so it
- * is neither cash nor total. Summing cash with the positions array — the same
- * data the Positions table shows — gives a correct, consistent account total.
+ *
+ * `portfolio.portfolioValue` is venue-inconsistent at the source: Kalshi reports
+ * its own position market value there (e.g. $6.11, matching the Kalshi app), while
+ * Polymarket has no separate figure and falls back to cash (portfolioValue ==
+ * cashValue). So we use the venue's reported portfolioValue as the position value
+ * when it's a distinct number (Kalshi → matches Kalshi's own valuation), and fall
+ * back to summing the positions array when it's just a cash duplicate (Polymarket),
+ * which avoids double-counting Polymarket's cash.
  */
 export function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
   if (!activity) return null;
   const cash = activity.portfolio.cashValue;
+  const reported = activity.portfolio.portfolioValue;
   const positions = activity.positions ?? [];
-  if (cash == null && positions.length === 0) return null;
-  const positionsValue = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
-  return (cash ?? 0) + positionsValue;
+  if (cash == null && reported == null && positions.length === 0) return null;
+  const cashNum = cash ?? 0;
+  const summedPositions = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
+  const positionsValue =
+    reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
+  return cashNum + positionsValue;
 }
 
 export function accountEquity(snap: DashboardSnapshot): {
