@@ -93,7 +93,7 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
           title="Edge Surface · Premium × Guaranteed Edge × Realized EV"
           dot="live"
           span={12}
-          bodyClassName="h-[320px] p-0 sm:h-[400px] lg:h-[440px]"
+          bodyClassName="h-[480px] p-0 sm:h-[620px] lg:h-[720px]"
           right={<Legend items={[["arb", CHART.up], ["sub-thr", CHART.amber], ["realized", CHART.cyan], ["prob/fail", CHART.down]]} />}
         >
           <Viz3DPanel
@@ -109,7 +109,7 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
           title="Execution-Quality Map · Time × Fill Delay × Profit"
           dot="info"
           span={6}
-          bodyClassName="h-[300px] p-0 sm:h-[360px] lg:h-[400px]"
+          bodyClassName="h-[440px] p-0 sm:h-[540px] lg:h-[620px]"
           right={<Legend items={[["exact", CHART.up], ["partial", CHART.amber], ["fail", CHART.down]]} />}
         >
           <Viz3DPanel points={execPts} axes={execAxes} />
@@ -118,7 +118,7 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
           title="Risk Landscape · Time × Exposure × Drawdown"
           dot="info"
           span={6}
-          bodyClassName="h-[300px] p-0 sm:h-[360px] lg:h-[400px]"
+          bodyClassName="h-[440px] p-0 sm:h-[540px] lg:h-[620px]"
           right={<Legend items={[["clean", CHART.up], ["drawdown", CHART.amber], ["unhedged", CHART.down]]} />}
         >
           <Viz3DPanel points={riskPts} axes={riskAxes} />
