@@ -47,23 +47,28 @@ function demoMode(): boolean {
   return false;
 }
 
-/** Fast poll of the lightweight live slice (books / scanner / candidates / op-status). */
+/** Fallback poll of the live slice when the realtime stream is unavailable. */
 const POLL_LIVE_MS = 750;
 /** Slow poll of the heavy slice (trade ledger / analytics / balances / logs). */
 const POLL_HEAVY_MS = 6000;
+/** Refresh the realtime token before its 60s expiry (reconnect with a fresh one). */
+const RT_REFRESH_MS = 50_000;
+/** Backoff before retrying the realtime connection after an error. */
+const RT_RECONNECT_MS = 8000;
 /** Heavy-slice keys pulled from the full snapshot; everything else comes from the live slice. */
 const HEAVY_KEYS = ["recentSignals", "analytics", "tradingActivity", "logs"] as const;
 
 /**
- * Two-rate polling for a near-live feel on serverless (no long-lived SSE/WS,
- * which Vercel functions cut off):
- *  - FAST (~750ms): the lightweight /dashboard/live slice (books, scanner, live
- *    candidates, op-status) — a few KB the worker serves in ~ms.
- *  - SLOW (~6s): the full snapshot, from which only the heavy slice (trade
- *    ledger, analytics, balances, logs) is merged in.
- * Both merge into one snapshot so views are unchanged. The last good snapshot
- * stays visible on a transient failure (degraded badge, never fabricated data).
- * Demo mode renders from the mock generator instead.
+ * Realtime-first feed:
+ *  - PRIMARY: a direct EventSource to the worker (api.pokstrategies.com/dashboard/
+ *    live/stream), authed with a short-lived token from /api/realtime-token. The
+ *    worker pushes the live slice the instant it changes — true sub-second updates,
+ *    bypassing the Vercel hop. Token is refreshed before expiry.
+ *  - FALLBACK: if realtime isn't configured/reachable, fast-poll /api/dashboard/live.
+ *  - HEAVY: always slow-poll the full snapshot for ledger/analytics/balances/logs.
+ * All sources merge into one snapshot (live keys vs heavy keys are disjoint), so
+ * views are unchanged. Last good snapshot stays on transient failure. Demo mode
+ * renders from the mock generator.
  */
 export function useDashboardStream(): void {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
@@ -73,6 +78,9 @@ export function useDashboardStream(): void {
     let cancelled = false;
     let liveTimer: ReturnType<typeof setTimeout> | null = null;
     let heavyTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let es: EventSource | null = null;
     const current: { snap: DashboardSnapshot | null } = { snap: null };
 
     const apply = (patch: Partial<DashboardSnapshot>) => {
@@ -95,7 +103,9 @@ export function useDashboardStream(): void {
       };
     }
 
+    // --- fallback live polling (only while the realtime stream is not active) ---
     const liveLoop = async () => {
+      if (cancelled || es) return;
       try {
         const res = await fetch("/api/dashboard/live", { cache: "no-store" });
         if (!res.ok) throw new Error(String(res.status));
@@ -103,10 +113,18 @@ export function useDashboardStream(): void {
       } catch {
         if (!cancelled) setSource("degraded");
       } finally {
-        if (!cancelled) liveTimer = setTimeout(liveLoop, POLL_LIVE_MS);
+        if (!cancelled && !es) liveTimer = setTimeout(liveLoop, POLL_LIVE_MS);
       }
     };
+    const startFallbackPoll = () => {
+      if (!cancelled && !liveTimer && !es) void liveLoop();
+    };
+    const stopFallbackPoll = () => {
+      if (liveTimer) clearTimeout(liveTimer);
+      liveTimer = null;
+    };
 
+    // --- heavy slice (always polled slowly) ---
     const heavyLoop = async () => {
       try {
         const res = await fetch("/api/dashboard/snapshot", { cache: "no-store" });
@@ -122,24 +140,78 @@ export function useDashboardStream(): void {
       }
     };
 
-    // Pull one full snapshot first so the initial render is complete, then split.
+    // --- realtime stream (primary) ---
+    const scheduleReconnect = () => {
+      if (!cancelled && !reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          void connectRealtime();
+        }, RT_RECONNECT_MS);
+      }
+    };
+    const connectRealtime = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch("/api/realtime-token", { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        const { token, url } = (await res.json()) as { token?: string; url?: string };
+        if (cancelled) return;
+        if (!token || !url) throw new Error("realtime_unconfigured");
+        const source = new EventSource(`${url}?token=${encodeURIComponent(token)}`);
+        es = source;
+        source.addEventListener("live", (event) => {
+          stopFallbackPoll();
+          try {
+            apply(JSON.parse((event as MessageEvent).data) as Partial<DashboardSnapshot>);
+          } catch {
+            /* ignore malformed frame */
+          }
+        });
+        source.onerror = () => {
+          source.close();
+          if (es === source) es = null;
+          if (refreshTimer) {
+            clearTimeout(refreshTimer);
+            refreshTimer = null;
+          }
+          startFallbackPoll();
+          scheduleReconnect();
+        };
+        // Reconnect with a fresh token before the current one expires.
+        refreshTimer = setTimeout(() => {
+          source.close();
+          if (es === source) es = null;
+          void connectRealtime();
+        }, RT_REFRESH_MS);
+      } catch {
+        es = null;
+        startFallbackPoll();
+        scheduleReconnect();
+      }
+    };
+
+    // Pull one full snapshot first for a complete initial render, then go live.
     const bootstrap = async () => {
       try {
         const res = await fetch("/api/dashboard/snapshot", { cache: "no-store" });
         if (res.ok) apply((await res.json()) as DashboardSnapshot);
       } catch {
-        /* the loops below will retry */
+        /* loops below will retry */
       }
       if (cancelled) return;
-      void liveLoop();
       heavyTimer = setTimeout(heavyLoop, POLL_HEAVY_MS);
+      startFallbackPoll();
+      void connectRealtime();
     };
     void bootstrap();
 
     return () => {
       cancelled = true;
+      es?.close();
       if (liveTimer) clearTimeout(liveTimer);
       if (heavyTimer) clearTimeout(heavyTimer);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }, [setSnapshot, setSource]);
 }
