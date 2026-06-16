@@ -200,6 +200,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       reconciliationStore?: LiveSignalReconciliationStore;
       maxUnresolvedExposureDollars?: number;
       autoHardlocksEnabled?: boolean;
+      flatMissNonBlocking?: boolean;
       allowUnresolvedRisk?: boolean;
       liveLocks?: LiveExecutionLockWriter;
       now?: () => number;
@@ -329,8 +330,15 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
   private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number): Promise<void> {
     const fillCount = event.fillCount ?? 0;
     const mismatch = fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
-    if (!isFailureStatus(event.status) && !mismatch) return;
-    const reason = isFailureStatus(event.status)
+    // A failure/cancel/reject that filled ZERO shares is a clean flat miss (no shares moved -> no
+    // exposure), not a circuit-breaker event. Only a failure that actually moved shares (fillCount > 0)
+    // or a genuine size mismatch is lock-worthy. Gated by flatMissNonBlocking (default on); when off, the
+    // legacy behavior (lock on any failure status) is preserved. A later event that DOES report a fill
+    // (fillCount > 0) still locks, so a delayed/real fill is never missed.
+    const failure = isFailureStatus(event.status);
+    const lockWorthyFailure = this.options.flatMissNonBlocking === true ? (failure && fillCount > 0) : failure;
+    if (!lockWorthyFailure && !mismatch) return;
+    const reason = failure
       ? `live safety lock engaged: ${event.venue} user stream reported ${event.status}`
       : `live safety lock engaged: ${event.venue} user stream fill mismatch ${fillCount}/${expectedSize}`;
     if (this.options.autoHardlocksEnabled === false) return;

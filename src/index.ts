@@ -83,6 +83,7 @@ async function main(): Promise<void> {
     reconciliationStore: liveExposure,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     autoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+    flatMissNonBlocking: config.liveConfirmationFlatMissNonBlocking,
     allowUnresolvedRisk: !config.liveAutoHardlocksEnabled,
     liveLocks,
     now: Date.now,

@@ -232,6 +232,92 @@ test("confirmation coordinator suppresses unsafe-event locks when auto-hardlocks
   assert.equal(store.events.some((event) => event.status === "failed"), true);
 });
 
+test("confirmation coordinator does NOT lock on a ZERO-fill failure when flatMissNonBlocking is on (clean flat miss)", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  // A FAK that fails to match fills zero shares -> flat, no exposure. This must NOT engage the breaker
+  // (the lock-16 / lock-14 false-positive that froze the bot for hours).
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 0 });
+  assert.equal((await pending).status, "failed");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(locks.lock, null);
+});
+
+test("confirmation coordinator STILL locks on a zero-fill failure when flatMissNonBlocking is off (legacy)", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 0 });
+  assert.equal((await pending).status, "failed");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(locks.lock?.reason ?? "", /user stream reported failed/);
+});
+
+test("confirmation coordinator STILL locks on a failure that moved shares (exposure) even with flatMissNonBlocking on", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  // A failure that actually moved shares (fillCount 3 > 0) is genuine one-sided exposure -> must hard-lock.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 3 });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(locks.lock?.reason ?? "", /user stream reported failed/);
+  assert.equal(locks.lock?.executionGroupId, "group");
+});
+
 test("confirmation coordinator blocks preflight when reconciliation is dirty", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);
