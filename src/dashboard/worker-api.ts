@@ -434,7 +434,9 @@ async function writeLiveStream(response: ServerResponse, runtime: DashboardRunti
     }
   };
   await tick();
-  const timer = setInterval(() => void tick(), 500);
+  // 250ms matches the scanner heartbeat (scanHeartbeatMs); the live slice can't
+  // change faster than the source data refreshes, so pushing more often gains nothing.
+  const timer = setInterval(() => void tick(), 250);
   response.on("close", () => clearInterval(timer));
 }
 
