@@ -47,8 +47,9 @@ function demoMode(): boolean {
   return false;
 }
 
-/** Gap between snapshot polls (after the previous one resolves). */
-const POLL_MS = 4000;
+/** Gap between snapshot polls (after the previous one resolves). The worker now
+ *  serves warm cached snapshots in ~ms, so we can poll briskly for a near-live feel. */
+const POLL_MS = 2000;
 
 /**
  * Feeds the store by polling the trimmed snapshot proxy. We deliberately do NOT

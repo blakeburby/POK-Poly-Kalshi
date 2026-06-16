@@ -49,6 +49,16 @@ export interface DashboardSnapshotCache {
     refreshedAt: number;
     value: TradingActivitySnapshot;
   };
+  execution?: {
+    refreshedAt: number;
+    value: LiveExecutionReadiness | undefined;
+  };
+}
+
+/** Venue-API-backed reads (readiness, trading activity) change slowly; cache them
+ *  longer than book/signal data so frequent dashboard polls stay cheap. */
+function heavyRefreshMs(runtime: DashboardRuntime): number {
+  return Math.max(runtime.config.dashboardSignalRefreshMs, 5_000);
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -113,7 +123,7 @@ async function cachedTradingActivity(
   cache?: DashboardSnapshotCache,
 ): Promise<TradingActivitySnapshot> {
   const cached = cache?.tradingActivity;
-  if (cached && now - cached.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
+  if (cached && now - cached.refreshedAt < heavyRefreshMs(runtime)) {
     return cached.value;
   }
   const value = runtime.getTradingActivity
@@ -121,6 +131,23 @@ async function cachedTradingActivity(
     : emptyTradingActivity(now);
   if (cache) {
     cache.tradingActivity = { refreshedAt: now, value };
+  }
+  return value;
+}
+
+async function cachedExecutionReadiness(
+  runtime: DashboardRuntime,
+  now: number,
+  cache?: DashboardSnapshotCache,
+): Promise<LiveExecutionReadiness | undefined> {
+  if (!runtime.getExecutionReadiness) return undefined;
+  const cached = cache?.execution;
+  if (cached && now - cached.refreshedAt < heavyRefreshMs(runtime)) {
+    return cached.value;
+  }
+  const value = await runtime.getExecutionReadiness(now);
+  if (cache) {
+    cache.execution = { refreshedAt: now, value };
   }
   return value;
 }
@@ -133,7 +160,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     cachedRecentSignals(runtime, now, cache),
     cachedAnalytics(runtime, now, cache),
   ]);
-  const execution = await runtime.getExecutionReadiness?.(now);
+  const execution = await cachedExecutionReadiness(runtime, now, cache);
   const tradingActivity = await cachedTradingActivity(runtime, now, execution, cache);
   const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
@@ -243,8 +270,13 @@ export function formatSseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+// Shared across all dashboard requests (snapshot polls + stream) so the
+// expensive reads (recent signals, readiness, trading activity) are reused
+// within their refresh windows instead of rebuilt on every poll.
+const sharedSnapshotCache: DashboardSnapshotCache = {};
+
 async function writeSnapshot(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
-  sendJson(response, 200, await createDashboardSnapshot(runtime));
+  sendJson(response, 200, await createDashboardSnapshot(runtime, Date.now(), sharedSnapshotCache));
 }
 
 async function writeTradingActivity(response: ServerResponse, runtime: DashboardRuntime, platform: TradingPlatform | null): Promise<void> {
@@ -265,10 +297,9 @@ async function writeStream(response: ServerResponse, runtime: DashboardRuntime):
     "X-Accel-Buffering": "no",
   });
 
-  const cache: DashboardSnapshotCache = {};
   const send = async (): Promise<void> => {
     try {
-      response.write(formatSseEvent("snapshot", await createDashboardSnapshot(runtime, Date.now(), cache)));
+      response.write(formatSseEvent("snapshot", await createDashboardSnapshot(runtime, Date.now(), sharedSnapshotCache)));
     } catch (error) {
       response.write(formatSseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
     }

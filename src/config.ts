@@ -166,7 +166,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     arbScanHeartbeatMs: envNumber(env, "ARB_SCAN_HEARTBEAT_MS", 250),
     staleBookMs: envNumber(env, "STALE_BOOK_MS", 10_000),
     marketDiscoveryIntervalMs: envNumber(env, "MARKET_DISCOVERY_INTERVAL_MS", 30_000),
-    dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 250),
+    dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 1_000),
     dashboardSignalRefreshMs: envNumber(env, "DASHBOARD_SIGNAL_REFRESH_MS", 1_000),
     dashboardAnalyticsRefreshMs: envNumber(env, "DASHBOARD_ANALYTICS_REFRESH_MS", 5_000),
     executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 2),
