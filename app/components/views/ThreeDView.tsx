@@ -92,8 +92,8 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
         <GridPanel
           title="Edge Surface · Premium × Guaranteed Edge × Realized EV"
           dot="live"
-          span={12}
-          bodyClassName="h-[480px] p-0 sm:h-[620px] lg:h-[720px]"
+          span={6}
+          bodyClassName="aspect-square w-full flex-none p-0"
           right={<Legend items={[["arb", CHART.up], ["sub-thr", CHART.amber], ["realized", CHART.cyan], ["prob/fail", CHART.down]]} />}
         >
           <Viz3DPanel
@@ -102,33 +102,35 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
             plane={{ value: threshold, axisMin: edgeAxes.y.min, axisMax: edgeAxes.y.max, label: "threshold" }}
           />
         </GridPanel>
-      </Grid>
 
-      <Grid>
         <GridPanel
           title="Execution-Quality Map · Time × Fill Delay × Profit"
           dot="info"
           span={6}
-          bodyClassName="h-[440px] p-0 sm:h-[540px] lg:h-[620px]"
+          bodyClassName="aspect-square w-full flex-none p-0"
           right={<Legend items={[["exact", CHART.up], ["partial", CHART.amber], ["fail", CHART.down]]} />}
         >
           <Viz3DPanel points={execPts} axes={execAxes} />
         </GridPanel>
+
         <GridPanel
           title="Risk Landscape · Time × Exposure × Drawdown"
           dot="info"
           span={6}
-          bodyClassName="h-[440px] p-0 sm:h-[540px] lg:h-[620px]"
+          bodyClassName="aspect-square w-full flex-none p-0"
           right={<Legend items={[["clean", CHART.up], ["drawdown", CHART.amber], ["unhedged", CHART.down]]} />}
         >
           <Viz3DPanel points={riskPts} axes={riskAxes} />
         </GridPanel>
-      </Grid>
 
-      <div className="rounded-md border border-line bg-surface/40 px-3 py-2 font-mono text-[10px] text-fg-muted">
-        Drag to orbit · scroll to zoom. Surfaces encode only deterministic, realized data — no simulated distributions.
-        The amber plane on the Edge Surface marks the executable threshold ({fmtCents(threshold)} guaranteed edge).
-      </div>
+        <div className="col-span-12 flex items-center rounded-md border border-line bg-surface/40 px-4 py-3 font-mono text-[10.5px] leading-relaxed text-fg-muted lg:col-span-6">
+          <span>
+            Drag to orbit · scroll to zoom. Surfaces encode only deterministic, realized data — no simulated
+            distributions. The amber plane on the Edge Surface marks the executable threshold ({fmtCents(threshold)}{" "}
+            guaranteed edge).
+          </span>
+        </div>
+      </Grid>
     </ViewScroll>
   );
 }
