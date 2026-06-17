@@ -420,6 +420,73 @@ test("confirmation coordinator STILL locks on a LATE in-band overfill via the kn
   assert.match(locks.lock?.reason ?? "", /fill mismatch 5.054944\/5/);
 });
 
+test("confirmation coordinator does NOT re-lock on a LATE DUPLICATE of an already-reconciled in-band overfill (lock-18 fix)", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  // First event is the in-band fractional OVERFILL the executor reconciles now (floor-hedge + cap-quarantine
+  // of the residual). No lock on the pending path, and the reconciled magnitude (5.116278) is remembered.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.116278 });
+  await pending;
+  assert.equal(locks.lock, null);
+  // A LATE DUPLICATE of that SAME governed fill (Polymarket user streams re-emit trade events) arrives with
+  // no live pending. It is at/below the reconciled ceiling, so it must NOT re-trip the breaker. This is the
+  // lock-18 production freeze: a benign 5.116278/5 overfill re-reported late hard-locked the bot for hours.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.116278 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(locks.lock, null);
+});
+
+test("confirmation coordinator STILL locks on a LATE fill that EXCEEDS the already-reconciled in-band overfill", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.1 });
+  await pending;
+  assert.equal(locks.lock, null);
+  // A larger late fill (still within the band [5,6] but MORE than the reconciled 5.1) is a genuine surprise
+  // additional fill the executor never hedged -> the ceiling is exceeded, so it MUST lock.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.6 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(locks.lock?.reason ?? "", /fill mismatch 5.6\/5/);
+});
+
 test("confirmation coordinator blocks preflight when reconciliation is dirty", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);
