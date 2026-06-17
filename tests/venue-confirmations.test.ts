@@ -453,7 +453,7 @@ test("confirmation coordinator STILL locks on a within-band overfill when flatMi
   assert.match(locks.lock?.reason ?? "", /fill mismatch 5.054944\/5/);
 });
 
-test("confirmation coordinator STILL locks on a LATE in-band overfill via the knownOrderFor path (no live pending) even with the band on", async () => {
+test("confirmation coordinator does NOT lock on a LATE in-band overfill via the knownOrderFor path (no live pending) — band applies regardless of arrival timing", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);
   const locks = new MemoryLocks();
@@ -479,13 +479,15 @@ test("confirmation coordinator STILL locks on a LATE in-band overfill via the kn
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
   assert.equal((await pending).status, "confirmed");
   assert.equal(locks.lock, null);
-  // A LATE in-band overfill arrives for the same KNOWN order with NO live pending. The executor has
-  // already finalized and will not re-reconcile, so this coordinator lock is the sole detector and MUST
-  // fire despite the floor-hedge band (the regression the adversarial review caught).
+  // A LATE in-band overfill (5.054944, within reconciled 5 + tolerance 1) arrives for the same KNOWN order
+  // with NO live pending. This is the same benign sub-share FAK over-hedge the floor-hedge band exists to
+  // absorb — it is a property of the FILL, not of when the "trade" event arrives — so it must NOT lock.
+  // (lock-21 production freeze: a 5.256/5 overfill surfacing only via a late stream event hard-locked the
+  // bot for hours despite overfillToleranceShares=1.)
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.054944 });
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.match(locks.lock?.reason ?? "", /fill mismatch 5.054944\/5/);
+  assert.equal(locks.lock, null);
 });
 
 test("confirmation coordinator does NOT re-lock on a LATE DUPLICATE of an already-reconciled in-band overfill (lock-18 fix)", async () => {
@@ -524,7 +526,7 @@ test("confirmation coordinator does NOT re-lock on a LATE DUPLICATE of an alread
   assert.equal(locks.lock, null);
 });
 
-test("confirmation coordinator STILL locks on a LATE fill that EXCEEDS the already-reconciled in-band overfill", async () => {
+test("confirmation coordinator STILL locks on a LATE fill BEYOND accountedFill + the floor-hedge band", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);
   const locks = new MemoryLocks();
@@ -550,11 +552,52 @@ test("confirmation coordinator STILL locks on a LATE fill that EXCEEDS the alrea
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.1 });
   await pending;
   assert.equal(locks.lock, null);
-  // A larger late fill (MORE than the reconciled 5.1) is a genuine surprise additional fill the finalized
-  // executor never booked -> exceeds the strict late-path ceiling, so it MUST lock.
+  // A late fill within the band (e.g. 5.6 <= reconciled 5.1 + 1) is a benign over-hedge and is tolerated.
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.6 });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(locks.lock?.reason ?? "", /fill mismatch 5.6\/5/);
+  assert.equal(locks.lock, null);
+  // But a late fill BEYOND accountedFill + band (6.5 > 5.1 + 1) is a materially-too-large surprise the
+  // finalized executor never booked -> it MUST lock (the coordinator is the sole detector on the late path).
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 6.5 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(locks.lock?.reason ?? "", /fill mismatch 6.5\/5/);
+});
+
+test("confirmation coordinator does NOT lock on the lock-21 production overfill (5.256409/5) arriving late after a REST-5 reconcile", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  // Exact lock-21 production sequence: the Polymarket hedge REST-confirmed an integer 5 (the executor
+  // floor-hedged 5), the pending path resolved clean, then Polymarket re-emitted the order on the user
+  // stream as a "matched" trade reporting the TRUE FAK fill of 5.256409 — within the operator's
+  // overfillToleranceShares=1 band over the size-5 order. The pre-fix code hard-locked here ("polymarket
+  // user stream fill mismatch 5.256409/5", lockId 21) and halted live trading on Montreal until an operator
+  // cleared it. With the band applied on the late path, this benign sub-share over-hedge must NOT lock.
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
+  assert.equal((await pending).status, "confirmed");
+  assert.equal(locks.lock, null);
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.256409 });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(locks.lock, null);
 });
 
 test("confirmation coordinator blocks preflight when reconciliation is dirty", async () => {

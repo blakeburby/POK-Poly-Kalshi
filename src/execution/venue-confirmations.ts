@@ -317,21 +317,23 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       }, pending.executionGroupId, pending.expectedSize);
       pending.resolve(confirmation);
       // Live pending path: the executor is reconciling its REST fill right now (floor-hedge + cap-quarantine
-      // of any in-tolerance residual), so accountedFill = the REST fill and the overfill tolerance applies.
-      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize, pending.result.fillCount ?? 0, true);
+      // of any in-tolerance residual), so accountedFill = the REST fill. The overfill band applies (see
+      // lockOnUnsafeEvent) — identically on the LATE path below, since the band is a property of the fill.
+      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize, pending.result.fillCount ?? 0);
     }
 
     // Only treat the event via the knownOrderFor path when it did NOT just match a live pending in this
     // call. An event that resolved a pending is authoritatively handled by the executor (pending path);
     // the knownOrderFor path exists for LATER events on the same order, where the executor has finalized
-    // and will not re-reconcile. There the lock is STRICT (no overfill tolerance): a stream fill AT OR BELOW
-    // the order's reconciled (REST) fill is a consistent partial/duplicate -> no lock; a fill ABOVE it is a
-    // surprise the finalized executor never booked -> lock (the coordinator is the sole detector here). An
-    // order never reconciled (reconciledFillCount unset -> 0) locks on any surprise fill.
+    // and will not re-reconcile, so the coordinator is the SOLE detector. A stream fill AT OR BELOW the
+    // order's reconciled (REST) fill is a consistent partial/duplicate -> no lock; a fill within the
+    // operator's floor-hedge overfill band above it is the same benign FAK over-hedge the band exists to
+    // absorb -> no lock; only a fill BEYOND accountedFill + the band is a genuine surplus -> lock. An order
+    // never reconciled (reconciledFillCount unset -> 0) gets no band and locks on any surprise fill.
     if (!matchedPending) {
       const known = this.knownOrderFor(event);
       if (known) {
-        await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize, known.reconciledFillCount ?? 0, false);
+        await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize, known.reconciledFillCount ?? 0);
       }
     }
   }
@@ -374,7 +376,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     return null;
   }
 
-  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number, accountedFill: number, allowTolerance: boolean): Promise<void> {
+  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number, accountedFill: number): Promise<void> {
     const fillCount = event.fillCount ?? 0;
     // A failure/cancel/reject that filled ZERO shares is a clean flat miss (no shares moved -> no
     // exposure), not a circuit-breaker event. Only a failure that actually moved shares (fillCount > 0)
@@ -385,23 +387,25 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     // Defer to the EXECUTOR's authoritative reconciliation. `accountedFill` is the fill the executor has
     // accounted for on this order — its REST order-response fill on the live pending path, or the order's
     // recorded reconciled fill on the knownOrderFor LATE path. A user-stream fill event is CONSISTENT (not
-    // lock-worthy) when it does not reveal more shares than the executor already accounted for:
+    // lock-worthy) when it does not reveal more shares than the executor accounted for, PLUS the operator's
+    // floor-hedge overfill band:
     //  - INTERMEDIATE PARTIALS (e.g. Kalshi streams a 5-share fill as "1": 1 <= REST 5) — lock-19 fix.
-    //  - in-tolerance fractional OVERFILLS the executor floor-hedges + cap-quarantines (Polymarket FAK
-    //    5.05 on a size-5 REST 5, within +overfillToleranceShares) — lock-17 case. Tolerance applies only
-    //    on the pending path (allowTolerance), where the executor books the residual into the cap quarantine
-    //    right now; on the LATE path it is strict (any fill ABOVE the reconciled amount is a surprise the
-    //    finalized executor will not re-book, so the coordinator stays the sole detector and locks).
-    // Only a fill that EXCEEDS what the executor accounted for is a surplus/surprise -> lock. Genuine
-    // UNDERFILLS (the order really only partially filled) are caught by the executor's own
-    // resultFromVenueOrders venue-fill-mismatch lock + the exposure-cap quarantine; they are not the
-    // coordinator's job and a partial stream report of them must not pre-emptively freeze the bot.
-    // Apply the floor-hedge overfill tolerance ONLY when the executor actually accounted for a positive
-    // fill. When accountedFill is 0 (a timeout/unknown/no-fill REST coerced from undefined, or an order the
-    // executor never reconciled), there is no booked residual for the tolerance to cover — so use a STRICT
-    // ceiling (any stream fill > 0 locks), or a tiny real fill in (0, tolerance] on a timed-out order would
-    // escape both the coordinator and the executor (which only saw the undefined/no-fill REST).
-    const tolerance = (allowTolerance && accountedFill > 0) ? Math.max(0, this.options.overfillToleranceShares ?? 0) : 0;
+    //  - in-band fractional OVERFILLS the executor floor-hedges + cap-quarantines (Polymarket FAK 5.05/5.256
+    //    on a size-5 REST 5, within +overfillToleranceShares) — lock-17/20/21 case.
+    // The overfill band is a property of the FILL, not of WHEN the confirming event arrives, so it applies
+    // identically on the live-pending path AND the LATE knownOrderFor path. A benign 5.256/5 FAK overfill
+    // surfacing only via a late "trade" event is the same sub-share over-hedge (self-resolving at the 15-min
+    // expiry, bounded by overfillToleranceShares) as one seen while pending — it must NOT hard-lock the bot
+    // (lock-21 production freeze). Only a fill that EXCEEDS accountedFill + the band is a genuine surplus ->
+    // lock; that still fires for materially-too-large fills (e.g. 6.5/5), on both paths. Genuine UNDERFILLS
+    // are caught by the executor's own resultFromVenueOrders venue-fill-mismatch lock + exposure-cap
+    // quarantine, not here, so a partial stream report must not pre-emptively freeze the bot.
+    // Apply the band ONLY when the executor actually accounted for a positive fill. When accountedFill is 0
+    // (a timeout/unknown/no-fill REST coerced from undefined, or an order the executor never reconciled),
+    // there is no booked fill for the band to extend — use a STRICT ceiling (any stream fill > 0 locks), or
+    // a tiny real fill in (0, tolerance] on a timed-out order would escape both the coordinator and the
+    // executor (which only saw the undefined/no-fill REST).
+    const tolerance = accountedFill > 0 ? Math.max(0, this.options.overfillToleranceShares ?? 0) : 0;
     const consistentCeiling = accountedFill + tolerance;
     const revealsSurplus = this.options.flatMissNonBlocking === true
       ? fillCount > consistentCeiling + 0.000001
