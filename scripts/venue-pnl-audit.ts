@@ -76,9 +76,22 @@ async function polyGet(path: string, address: string, params: Record<string, str
   return text ? JSON.parse(text) : {};
 }
 
+// "2026-06-16 11:30" -> cutoff ms under both UTC and ET (EDT, -04:00) interpretations.
+function parseCutoffs(arg: string | undefined): { utc: number; et: number } | null {
+  if (!arg) return null;
+  const iso = arg.trim().replace(" ", "T");
+  const withSecs = /T\d{2}:\d{2}$/.test(iso) ? `${iso}:00` : iso;
+  return { utc: Date.parse(`${withSecs}Z`), et: Date.parse(`${withSecs}-04:00`) };
+}
+const kalshiSettledMs = (s: Rec): number | null => { const t = Date.parse(String(s.settled_time ?? s.settled_at ?? "")); return Number.isFinite(t) ? t : null; };
+// Polymarket window start is encoded in the slug, e.g. "btc-updown-15m-1781714700".
+const polyWindowMs = (p: Rec): number | null => { const m = /(\d{9,})/.exec(String(p.slug ?? p.eventSlug ?? "")); return m ? Number(m[1]) * 1000 : null; };
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const out: Rec = {};
+  const cutoffs = parseCutoffs(process.argv[2]);
+  out.cutoff = cutoffs ? { input: process.argv[2], asUTC: new Date(cutoffs.utc).toISOString(), asET: new Date(cutoffs.et).toISOString() } : "none (lifetime)";
 
   // ---- KALSHI (BTC 15m) ----
   // Kalshi splits realized P&L across endpoints, so compute multiple candidates and
@@ -114,14 +127,21 @@ async function main(): Promise<void> {
     const realized_via_cashflow = round(fillCash + settledRevenue);
     const openExposure = sum(btcPos.filter((p) => Math.abs(firstNum(p, ["position", "position_fp", "net_position"]) ?? 0) > 1e-6)
       .map((p) => money(p, ["market_value", "market_exposure"], ["market_exposure_dollars"])));
+    // Per-settlement net keyed by settled_time, so we can scope to the new model.
+    const netSince = (cutoffMs: number) => {
+      const inWin = btcSettled.filter((s) => { const t = kalshiSettledMs(s); return t != null && t >= cutoffMs; });
+      return { count: inWin.length, realizedNet: sum(inWin.map((s) => round(settRevenue(s) - settCost(s) - settFee(s)))), fees: sum(inWin.map(settFee)) };
+    };
+    const settledTimes = btcSettled.map(kalshiSettledMs).filter((t): t is number => t != null).sort((a, b) => a - b);
     out.kalshi = {
       counts: { positions: positions.length, btcPositions: btcPos.length, btcSettlements: btcSettled.length, btcFills: btcFills.length, fillsTruncated: btcFills.length < btcSettled.length },
-      realized_via_settlements_net,
+      settledTimeRange: settledTimes.length ? { earliest: new Date(settledTimes[0]).toISOString(), latest: new Date(settledTimes[settledTimes.length - 1]).toISOString() } : null,
+      lifetime: { realized_via_settlements_net, settledRevenue, settledCost, settledFees },
+      sinceCutoff_UTC: cutoffs ? netSince(cutoffs.utc) : null,
+      sinceCutoff_ET: cutoffs ? netSince(cutoffs.et) : null,
       realized_via_cashflow_fills_plus_settlement: realized_via_cashflow,
-      settledRevenue, settledCost, settledFees, fillFees,
-      openExposure,
+      fillFees, openExposure,
       SAMPLE_settlement: btcSettled[0] ?? settlements[0] ?? null,
-      SAMPLE_fill: btcFills[0] ?? fills[0] ?? null,
     };
   } catch (e) { out.kalshi = { ERROR: e instanceof Error ? e.message : String(e) }; }
 
@@ -140,25 +160,34 @@ async function main(): Promise<void> {
     const openExposure = sum(btc.filter((p) => !isEnded(p) && (firstNum(p, ["size"]) ?? 0) > 1e-6)
       .map((p) => firstNum(p, ["currentValue", "current_value", "value"])));
     const unredeemed = btc.filter((p) => p.redeemable === true);
+    const polyNetSince = (cutoffMs: number) => {
+      const inWin = btc.filter(isEnded).filter((p) => { const t = polyWindowMs(p); return t != null && t >= cutoffMs; });
+      return { count: inWin.length, realized: sum(inWin.map((p) => firstNum(p, ["cashPnl", "cash_pnl"]))) };
+    };
+    const polyTimes = btc.map(polyWindowMs).filter((t): t is number => t != null).sort((a, b) => a - b);
     out.polymarket = {
       address, btcPositions: btc.length, totalPositions: positions.length, endedCount: btc.filter(isEnded).length, unredeemedCount: unredeemed.length,
-      realizedTakeHome_netFees: realized, realizedPnl_redeemedOnly, openExposure,
+      windowRange: polyTimes.length ? { earliest: new Date(polyTimes[0]).toISOString(), latest: new Date(polyTimes[polyTimes.length - 1]).toISOString() } : null,
+      lifetime: { realizedTakeHome_netFees: realized, realizedPnl_redeemedOnly, openExposure },
+      sinceCutoff_UTC: cutoffs ? polyNetSince(cutoffs.utc) : null,
+      sinceCutoff_ET: cutoffs ? polyNetSince(cutoffs.et) : null,
       SAMPLE_position: btc[0] ?? positions[0] ?? null,
     };
   } catch (e) { out.polymarket = { ERROR: e instanceof Error ? e.message : String(e) }; }
 
-  const kRs = (out.kalshi as Rec)?.realized_via_settlements_net as number | undefined;
-  const kRc = (out.kalshi as Rec)?.realized_via_cashflow_fills_plus_settlement as number | undefined;
-  const pR = (out.polymarket as Rec)?.realizedTakeHome_netFees as number | undefined;
-  const kE = (out.kalshi as Rec)?.openExposure as number | undefined;
-  const pE = (out.polymarket as Rec)?.openExposure as number | undefined;
+  const kLife = (out.kalshi as Rec)?.lifetime as Rec | undefined;
+  const pLife = (out.polymarket as Rec)?.lifetime as Rec | undefined;
+  const kUtc = (out.kalshi as Rec)?.sinceCutoff_UTC as Rec | null | undefined;
+  const kEt = (out.kalshi as Rec)?.sinceCutoff_ET as Rec | null | undefined;
+  const pUtc = (out.polymarket as Rec)?.sinceCutoff_UTC as Rec | null | undefined;
+  const pEt = (out.polymarket as Rec)?.sinceCutoff_ET as Rec | null | undefined;
+  const n = (v: unknown) => typeof v === "number" ? v : 0;
   out.COMBINED = {
-    NOTE: "Kalshi settlement-net is the robust source (fills are truncated). Combined = Kalshi realized + Polymarket cashPnl. Verify against account balances.",
-    kalshi_realized_settlementNet: round(kRs ?? 0),
-    kalshi_realized_cashflow_crossCheck: round(kRc ?? 0),
-    polymarket_realized_cashPnl: round(pR ?? 0),
-    COMBINED_realizedTakeHome_netFees: round((kRs ?? 0) + (pR ?? 0)),
-    openExposure_markedToMarket: round((kE ?? 0) + (pE ?? 0)),
+    NOTE: "Kalshi settlement-net is the robust source. Combined = Kalshi realized + Polymarket cashPnl. sinceCutoff = new-model take-home; pick UTC or ET per how you meant the cutoff.",
+    lifetime_realizedTakeHome_netFees: round(n(kLife?.realized_via_settlements_net) + n(pLife?.realizedTakeHome_netFees)),
+    newModel_sinceCutoff_UTC: cutoffs ? { realizedTakeHome_netFees: round(n(kUtc?.realizedNet) + n(pUtc?.realized)), kalshi: round(n(kUtc?.realizedNet)), kalshiFees: round(n(kUtc?.fees)), polymarket: round(n(pUtc?.realized)), kalshiSettlements: kUtc?.count ?? 0, polyPositions: pUtc?.count ?? 0 } : null,
+    newModel_sinceCutoff_ET: cutoffs ? { realizedTakeHome_netFees: round(n(kEt?.realizedNet) + n(pEt?.realized)), kalshi: round(n(kEt?.realizedNet)), kalshiFees: round(n(kEt?.fees)), polymarket: round(n(pEt?.realized)), kalshiSettlements: kEt?.count ?? 0, polyPositions: pEt?.count ?? 0 } : null,
+    openExposure_markedToMarket: round(n((pLife as Rec)?.openExposure) + n((out.kalshi as Rec)?.openExposure)),
   };
   console.log(JSON.stringify(out, null, 2));
 }
