@@ -57,12 +57,11 @@ interface KnownOrder {
   executionGroupId: string;
   expectedSize: number;
   venue: Venue;
-  // The largest in-band fill the executor has already reconciled for this order on the live pending-
-  // confirmation path (floor-hedge of the matched pair + cap-governed quarantine of the residual + persisted
-  // partial_fill row). A LATER duplicate/follow-up stream event reporting a fill at or below this amount is
-  // already governed and must NOT re-trip the breaker. A late event reporting MORE than this (a genuine
-  // surprise additional fill) still locks. Unset for orders the executor never reconciled (e.g. finalized as
-  // a clean no-fill), so any surprise late fill there is strictly locked — that lock is the sole detector.
+  // The executor's REST-confirmed fill for this order (the fill it floor-hedged + reconciled). A user-stream
+  // event reporting a fill AT OR BELOW this (an intermediate partial, or a duplicate/in-tolerance overfill)
+  // is consistent with what the executor accounted for and must NOT trip the breaker. A stream event
+  // revealing MORE than this (a genuine surplus the executor never booked) still locks. Unset for orders the
+  // executor never confirmed (e.g. a timeout/no-fill), so any surprise stream fill there is strictly locked.
   reconciledFillCount?: number;
 }
 
@@ -270,16 +269,11 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       };
     }
 
+    // Records the order with reconciledFillCount = this REST result's fillCount (the executor's accounted
+    // fill), so any later stream event for the order is judged against what the executor actually reconciled.
     this.rememberKnownOrder(result, options.executionGroupId, options.expectedSize);
     const existing = this.recentEvents.find((event) => eventMatchesExpected(event, { result, leg: options.leg, submittedAtMs: options.submittedAtMs }));
-    if (existing) {
-      // Same reconciliation marker as the pending path: if the executor is reconciling an in-band fill via
-      // this already-arrived event, record its magnitude so a later duplicate at or below it does not re-lock.
-      if (this.withinOverfillBand(existing.fillCount ?? 0, options.expectedSize)) {
-        this.rememberKnownOrder(result, options.executionGroupId, options.expectedSize, existing.fillCount ?? 0);
-      }
-      return confirmationFromEvent(existing, result, options.expectedSize);
-    }
+    if (existing) return confirmationFromEvent(existing, result, options.expectedSize);
 
     return await new Promise<VenueConfirmationResult>((resolve) => {
       const pending: PendingConfirmation = {
@@ -313,44 +307,43 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       clearTimeout(pending.timeout);
       this.pending.delete(pending);
       const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize);
-      // If this fill is in-band, the executor reconciles it now (floor-hedge + cap-quarantine + partial_fill
-      // row). Record the reconciled fill magnitude on the known order so a LATER duplicate/follow-up stream
-      // event AT OR BELOW it is recognized as already-governed; a later event reporting MORE still locks.
-      const reconciledFillCount = this.withinOverfillBand(event.fillCount ?? 0, pending.expectedSize) ? (event.fillCount ?? 0) : undefined;
+      // Record the executor's REST-confirmed fill (pending.result.fillCount) as the order's reconciled fill,
+      // so LATER stream events for the same order (partials or duplicates AT OR BELOW it) are recognized as
+      // already-accounted and do not re-lock; a later event revealing MORE still locks.
       this.rememberKnownOrder({
         ...pending.result,
         orderId: confirmation.venueOrderId,
         clientOrderId: confirmation.clientOrderId ?? pending.result.clientOrderId,
-      }, pending.executionGroupId, pending.expectedSize, reconciledFillCount);
+      }, pending.executionGroupId, pending.expectedSize);
       pending.resolve(confirmation);
-      // Live pending path: the executor reconciles this event's fill right now, so an in-band fill is
-      // suppressed (ceiling = +Infinity: no prior-reconciled constraint, the band alone governs).
-      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize, Number.POSITIVE_INFINITY);
+      // Live pending path: the executor is reconciling its REST fill right now (floor-hedge + cap-quarantine
+      // of any in-tolerance residual), so accountedFill = the REST fill and the overfill tolerance applies.
+      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize, pending.result.fillCount ?? 0, true);
     }
 
     // Only treat the event via the knownOrderFor path when it did NOT just match a live pending in this
     // call. An event that resolved a pending is authoritatively handled by the executor (pending path);
     // the knownOrderFor path exists for LATER events on the same order, where the executor has finalized
-    // and will not re-reconcile. There this lock is the sole detector for a genuine surprise fill, so it
-    // stays strict UNLESS the executor already reconciled an in-band fill for this order (reconciledFillCount
-    // is set) and this event is at/below it — a duplicate/follow-up report of that governed fill must not re-lock.
+    // and will not re-reconcile. There the lock is STRICT (no overfill tolerance): a stream fill AT OR BELOW
+    // the order's reconciled (REST) fill is a consistent partial/duplicate -> no lock; a fill ABOVE it is a
+    // surprise the finalized executor never booked -> lock (the coordinator is the sole detector here). An
+    // order never reconciled (reconciledFillCount unset -> 0) locks on any surprise fill.
     if (!matchedPending) {
       const known = this.knownOrderFor(event);
       if (known) {
-        // Suppress only a late in-band fill AT OR BELOW the already-reconciled magnitude; a surprise larger
-        // fill (or any fill on a never-reconciled order) exceeds the ceiling and still locks.
-        await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize, known.reconciledFillCount ?? Number.NEGATIVE_INFINITY);
+        await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize, known.reconciledFillCount ?? 0, false);
       }
     }
   }
 
-  private rememberKnownOrder(result: VenueOrderResult, executionGroupId: string, expectedSize: number, reconciledFillCount?: number): void {
+  private rememberKnownOrder(result: VenueOrderResult, executionGroupId: string, expectedSize: number): void {
     const clientKey = result.clientOrderId ? `${result.venue}:client:${result.clientOrderId}` : null;
     const orderKey = result.orderId ? `${result.venue}:order:${result.orderId}` : null;
-    // Inherit a prior reconciled-fill ceiling ONLY from an entry that belongs to the SAME order (matching
-    // executionGroupId). A key reused by a DIFFERENT order starts fresh, so a stale ceiling can never
-    // cross-contaminate and suppress a genuine mismatch on a different order (defends against any venue
-    // client/order id reuse). Within one order the ceiling is monotonic — it never shrinks across re-remembers.
+    // reconciledFillCount = the executor's REST-confirmed fill for this order (result.fillCount). Inherit a
+    // prior value ONLY from an entry that belongs to the SAME order (matching executionGroupId), and keep
+    // the LARGEST across re-remembers — so a key reused by a DIFFERENT order starts fresh (no cross-order
+    // contamination) and the accounted fill never shrinks within one order.
+    const restFill = typeof result.fillCount === "number" ? result.fillCount : Number.NEGATIVE_INFINITY;
     const priorFor = (key: string | null): number => {
       if (!key) return Number.NEGATIVE_INFINITY;
       const prior = this.knownOrders.get(key);
@@ -358,7 +351,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
         ? (prior.reconciledFillCount ?? Number.NEGATIVE_INFINITY)
         : Number.NEGATIVE_INFINITY;
     };
-    const merged = Math.max(reconciledFillCount ?? Number.NEGATIVE_INFINITY, priorFor(clientKey), priorFor(orderKey));
+    const merged = Math.max(restFill, priorFor(clientKey), priorFor(orderKey));
     const known: KnownOrder = {
       executionGroupId,
       expectedSize,
@@ -381,44 +374,39 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     return null;
   }
 
-  // The floor-hedge band: a fractional fill within [expectedSize, expectedSize + overfillToleranceShares].
-  // Gated by flatMissNonBlocking. This is the designed T1.1 Polymarket-FAK-overfill case (the executor
-  // hedges floor(fill) and quarantines the sub-tolerance residual under the unresolved-exposure cap), not a
-  // circuit-breaker event. Underfills (fillCount < expectedSize) and overfills BEYOND the band are excluded.
-  private withinOverfillBand(fillCount: number, expectedSize: number): boolean {
-    if (this.options.flatMissNonBlocking !== true) return false;
-    const overfillTolerance = Math.max(0, this.options.overfillToleranceShares ?? 0);
-    return fillCount >= expectedSize - 0.000001 && fillCount <= expectedSize + overfillTolerance + 0.000001;
-  }
-
-  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number, reconciledCeiling: number): Promise<void> {
+  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number, accountedFill: number, allowTolerance: boolean): Promise<void> {
     const fillCount = event.fillCount ?? 0;
-    const rawMismatch = fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
     // A failure/cancel/reject that filled ZERO shares is a clean flat miss (no shares moved -> no
     // exposure), not a circuit-breaker event. Only a failure that actually moved shares (fillCount > 0)
     // or a genuine size mismatch is lock-worthy. Gated by flatMissNonBlocking (default on); when off, the
-    // legacy behavior (lock on any failure status) is preserved. A later event that DOES report a fill
-    // (fillCount > 0) still locks, so a delayed/real fill is never missed.
+    // legacy behavior (lock on any failure status / any size mismatch) is preserved.
     const failure = isFailureStatus(event.status);
     const lockWorthyFailure = this.options.flatMissNonBlocking === true ? (failure && fillCount > 0) : failure;
-    // Polymarket FAK fills are essentially always fractional OVERFILLS (e.g. 5.05 on a size-5 order). An
-    // in-band fill is the designed T1.1 case: the executor hedges floor(fill) (a matched pair) and
-    // quarantines the sub-tolerance residual under the unresolved-exposure cap. That is a bounded,
-    // cap-governed residual, NOT a circuit-breaker event, so it must not freeze the bot after every filling
-    // trade. Underfills and overfills BEYOND the band still lock, and the executor's exposure-cap
-    // quarantine/hard-lock plus reconciliation still govern any genuine one-sided exposure.
-    //
-    // CRITICAL: reconciledCeiling is the largest in-band fill the executor has ALREADY reconciled for this
-    // order. The pending-confirmation path passes +Infinity (the executor floor-hedges + cap-quarantines +
-    // persists a partial_fill row for THIS fill right now, so the band alone governs). The knownOrderFor
-    // LATE-event path passes the order's stored reconciledFillCount (or -Infinity if the executor never
-    // reconciled it, e.g. finalized as a clean no-fill). So a late event is suppressed only when it is BOTH
-    // in-band AND at/below what was already governed — a genuine surprise larger late fill exceeds the
-    // ceiling and still locks (the coordinator remains the sole detector there; venue_order_events is never
-    // reconciled against signals).
-    const withinFloorHedgeBand = this.withinOverfillBand(fillCount, expectedSize) && fillCount <= reconciledCeiling + 0.000001;
-    const mismatch = rawMismatch && !withinFloorHedgeBand;
-    if (!lockWorthyFailure && !mismatch) return;
+    // Defer to the EXECUTOR's authoritative reconciliation. `accountedFill` is the fill the executor has
+    // accounted for on this order — its REST order-response fill on the live pending path, or the order's
+    // recorded reconciled fill on the knownOrderFor LATE path. A user-stream fill event is CONSISTENT (not
+    // lock-worthy) when it does not reveal more shares than the executor already accounted for:
+    //  - INTERMEDIATE PARTIALS (e.g. Kalshi streams a 5-share fill as "1": 1 <= REST 5) — lock-19 fix.
+    //  - in-tolerance fractional OVERFILLS the executor floor-hedges + cap-quarantines (Polymarket FAK
+    //    5.05 on a size-5 REST 5, within +overfillToleranceShares) — lock-17 case. Tolerance applies only
+    //    on the pending path (allowTolerance), where the executor books the residual into the cap quarantine
+    //    right now; on the LATE path it is strict (any fill ABOVE the reconciled amount is a surprise the
+    //    finalized executor will not re-book, so the coordinator stays the sole detector and locks).
+    // Only a fill that EXCEEDS what the executor accounted for is a surplus/surprise -> lock. Genuine
+    // UNDERFILLS (the order really only partially filled) are caught by the executor's own
+    // resultFromVenueOrders venue-fill-mismatch lock + the exposure-cap quarantine; they are not the
+    // coordinator's job and a partial stream report of them must not pre-emptively freeze the bot.
+    // Apply the floor-hedge overfill tolerance ONLY when the executor actually accounted for a positive
+    // fill. When accountedFill is 0 (a timeout/unknown/no-fill REST coerced from undefined, or an order the
+    // executor never reconciled), there is no booked residual for the tolerance to cover — so use a STRICT
+    // ceiling (any stream fill > 0 locks), or a tiny real fill in (0, tolerance] on a timed-out order would
+    // escape both the coordinator and the executor (which only saw the undefined/no-fill REST).
+    const tolerance = (allowTolerance && accountedFill > 0) ? Math.max(0, this.options.overfillToleranceShares ?? 0) : 0;
+    const consistentCeiling = accountedFill + tolerance;
+    const revealsSurplus = this.options.flatMissNonBlocking === true
+      ? fillCount > consistentCeiling + 0.000001
+      : fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
+    if (!lockWorthyFailure && !revealsSurplus) return;
     const reason = failure
       ? `live safety lock engaged: ${event.venue} user stream reported ${event.status}`
       : `live safety lock engaged: ${event.venue} user stream fill mismatch ${fillCount}/${expectedSize}`;

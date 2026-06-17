@@ -364,15 +364,83 @@ test("confirmation coordinator STILL locks on an overfill BEYOND the floor-hedge
   assert.match(locks.lock?.reason ?? "", /fill mismatch 6.5\/5/);
 });
 
-test("confirmation coordinator STILL locks on an UNDERfill (not in the overfill band)", async () => {
+test("confirmation coordinator does NOT lock on a PARTIAL stream fill at/below the executor's REST fill (lock-19 fix)", async () => {
   const locks = new MemoryLocks();
+  // result("polymarket") carries the executor's REST-confirmed fill of 5. A user-stream event reporting 4.5
+  // is an intermediate PARTIAL of that already-reconciled 5, not a real underfill -> must NOT trip the
+  // breaker. A genuine underfill (the REST fill itself short) is caught by the executor's own
+  // resultFromVenueOrders venue-fill-mismatch lock + exposure-cap quarantine, not by this coordinator.
   const { hub, pending } = overfillBandCoordinator(locks, { flatMissNonBlocking: true, overfillToleranceShares: 1 });
-  // 4.5 < size -> underfill, outside the overfill band -> still lock-worthy.
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 4.5 });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.match(locks.lock?.reason ?? "", /fill mismatch 4.5\/5/);
+  assert.equal(locks.lock, null);
+});
+
+test("confirmation coordinator does NOT lock on a Kalshi intermediate partial-fill stream event (lock-19: stream 1, REST-confirmed 5)", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  // The Kalshi FOK hedge filled 5 (REST authoritative), but the user stream emits the fill as an
+  // intermediate "1 share" partial. 1 <= REST 5 -> consistent -> must NOT lock. This is the lock-19 prod
+  // freeze that hard-locked Montreal on its first trade ("kalshi user stream fill mismatch 1/5").
+  const pending = coordinator.waitForVenueResult(result("kalshi"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "kalshi", venueOrderId: "kalshi-order", eventType: "user_order", status: "matched", fillCount: 1 });
+  await pending.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(locks.lock, null);
+});
+
+test("confirmation coordinator LOCKS on a stream fill after a timeout/no-fill REST (accountedFill 0 -> tolerance must NOT apply)", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  // REST timed out (status unknown, no fill) -> the executor accounted for 0. A real partial fill (0.05)
+  // then arrives on the user stream. Because accountedFill is 0 (not a positive reconciled fill), the
+  // overfill tolerance must NOT apply, so this surprise fill on a timed-out order LOCKS -> it cannot escape
+  // both the coordinator and the executor (which only saw the undefined REST). (lock-19 review hardening.)
+  const pending = coordinator.waitForVenueResult({ ...result("kalshi"), status: "unknown", fillCount: 0, error: null }, {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "kalshi", venueOrderId: "kalshi-order", eventType: "user_order", status: "matched", fillCount: 0.05 });
+  await pending.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(locks.lock?.reason ?? "", /fill mismatch 0.05\/5/);
 });
 
 test("confirmation coordinator STILL locks on a within-band overfill when flatMissNonBlocking is off (legacy)", async () => {
@@ -435,7 +503,8 @@ test("confirmation coordinator does NOT re-lock on a LATE DUPLICATE of an alread
     overfillToleranceShares: 1,
     now: () => 1_800_000_000_200,
   });
-  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+  // The REST order-response reported the FAK overfill (5.116278) — that is the executor's accounted fill.
+  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), fillCount: 5.116278 }, {
     executionGroupId: "group",
     expectedSize: 5,
     leg,
@@ -470,7 +539,8 @@ test("confirmation coordinator STILL locks on a LATE fill that EXCEEDS the alrea
     overfillToleranceShares: 1,
     now: () => 1_800_000_000_200,
   });
-  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+  // REST reported the 5.1 fill — the executor's reconciled amount for this order.
+  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), fillCount: 5.1 }, {
     executionGroupId: "group",
     expectedSize: 5,
     leg,
@@ -480,8 +550,8 @@ test("confirmation coordinator STILL locks on a LATE fill that EXCEEDS the alrea
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.1 });
   await pending;
   assert.equal(locks.lock, null);
-  // A larger late fill (still within the band [5,6] but MORE than the reconciled 5.1) is a genuine surprise
-  // additional fill the executor never hedged -> the ceiling is exceeded, so it MUST lock.
+  // A larger late fill (MORE than the reconciled 5.1) is a genuine surprise additional fill the finalized
+  // executor never booked -> exceeds the strict late-path ceiling, so it MUST lock.
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.6 });
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(locks.lock?.reason ?? "", /fill mismatch 5.6\/5/);
