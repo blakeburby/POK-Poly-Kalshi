@@ -8,7 +8,7 @@ import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
 import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 import { emptyTradingActivity } from "../trading/activity";
-import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity } from "../../types/trading";
+import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity, VenuePnlSnapshot } from "../../types/trading";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -31,6 +31,7 @@ export interface DashboardRuntime {
   getLatencySnapshot?: (now: number, snapshotBuildMs: number) => DashboardLatencySnapshot;
   getExecutionReadiness?: (now: number) => LiveExecutionReadiness | Promise<LiveExecutionReadiness>;
   getTradingActivity?: (now: number, readiness?: LiveExecutionReadiness) => TradingActivitySnapshot | Promise<TradingActivitySnapshot>;
+  getVenuePnl?: (now: number) => VenuePnlSnapshot | Promise<VenuePnlSnapshot>;
   getTradingPlatformActivity?: (platform: TradingPlatform, now: number, readiness?: LiveExecutionReadiness) => TradingPlatformActivity | Promise<TradingPlatformActivity>;
   subscribeTradingActivityEvents?: (listener: (event: TradingActivityEvent) => void) => () => void;
   getLogs: (limit?: number) => DashboardLogEntry[];
@@ -48,6 +49,10 @@ export interface DashboardSnapshotCache {
   tradingActivity?: {
     refreshedAt: number;
     value: TradingActivitySnapshot;
+  };
+  venuePnl?: {
+    refreshedAt: number;
+    value: VenuePnlSnapshot | undefined;
   };
   execution?: {
     refreshedAt: number;
@@ -131,6 +136,30 @@ async function cachedTradingActivity(
     : emptyTradingActivity(now);
   if (cache) {
     cache.tradingActivity = { refreshedAt: now, value };
+  }
+  return value;
+}
+
+/** Venue-truth P&L changes only on settlements (~every 15m), so cache it well past the
+ *  heavy-read window to keep the venue API load light on the live worker. */
+function venuePnlRefreshMs(runtime: DashboardRuntime): number {
+  return Math.max(heavyRefreshMs(runtime), 30_000);
+}
+
+async function cachedVenuePnl(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<VenuePnlSnapshot | undefined> {
+  if (!runtime.getVenuePnl) return undefined;
+  const cached = cache?.venuePnl;
+  if (cached && now - cached.refreshedAt < venuePnlRefreshMs(runtime)) {
+    return cached.value;
+  }
+  let value: VenuePnlSnapshot | undefined;
+  try {
+    value = await runtime.getVenuePnl(now);
+  } catch {
+    value = cached?.value; // keep the last good P&L on a transient venue failure
+  }
+  if (cache) {
+    cache.venuePnl = { refreshedAt: now, value };
   }
   return value;
 }
@@ -288,7 +317,10 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     cachedAnalytics(runtime, now, cache),
   ]);
   const execution = await cachedExecutionReadiness(runtime, now, cache);
-  const tradingActivity = await cachedTradingActivity(runtime, now, execution, cache);
+  const [tradingActivity, venuePnl] = await Promise.all([
+    cachedTradingActivity(runtime, now, execution, cache),
+    cachedVenuePnl(runtime, now, cache),
+  ]);
   const { liveCandidates, syntheticStructures } = sortedCandidates(runtime, now);
 
   const snapshotBuildMs = Math.max(0, Date.now() - snapshotStartedAt);
@@ -310,6 +342,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     recentSignals,
     analytics,
     tradingActivity,
+    venuePnl,
     execution,
     logs: runtime.getLogs(150),
   };

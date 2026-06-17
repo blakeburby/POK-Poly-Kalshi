@@ -26,6 +26,7 @@ import { PolymarketPriceToBeatService } from "./polymarket/price-to-beat";
 import { PolymarketUserStreamClient } from "./polymarket/user-stream";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
+import { computeVenuePnl } from "./trading/venue-pnl";
 import { CoalescedScanScheduler, createScanHeartbeat } from "./scanner/scheduler";
 import { createIdempotentShutdown } from "./shutdown";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "./trading/activity";
@@ -264,6 +265,7 @@ async function main(): Promise<void> {
           return liveReadinessProbe.readiness(now);
         },
         getTradingActivity: (now, readiness) => tradingActivity.getSnapshot({ now, readiness }),
+        getVenuePnl: (now) => computeVenuePnl(config, now),
         getTradingPlatformActivity: (platform, now, readiness) => tradingActivity.getPlatformActivity(platform, { now, readiness }),
         subscribeTradingActivityEvents: (listener) => orderEvents.onEvent((event) => {
           listener(tradingActivityEventFromVenueEvent(event));

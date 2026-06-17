@@ -7,6 +7,7 @@ import { PerformanceView } from "./PerformanceView";
 import { ExecutionView } from "./ExecutionView";
 import { RiskView } from "./RiskView";
 import { LedgerView } from "./LedgerView";
+import { VenuePnlView } from "./VenuePnlView";
 import { EdgeView } from "./EdgeView";
 import { BooksView } from "./BooksView";
 import { HealthView } from "./HealthView";
@@ -28,6 +29,8 @@ export function ViewRouter() {
       return <RiskView snap={snap} />;
     case "ledger":
       return <LedgerView snap={snap} />;
+    case "venuePnl":
+      return <VenuePnlView snap={snap} />;
     case "edge":
       return <EdgeView snap={snap} />;
     case "books":

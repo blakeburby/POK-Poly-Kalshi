@@ -37,4 +37,6 @@ export type {
   TradingHistoryRow,
   TradingPortfolioSummary,
   TradingActivityEvent,
+  VenuePnlSnapshot,
+  VenuePnlLeg,
 } from "@root/types/trading";

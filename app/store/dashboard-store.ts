@@ -12,6 +12,7 @@ export type ViewId =
   | "execution"
   | "risk"
   | "ledger"
+  | "venuePnl"
   | "edge"
   | "books"
   | "health"

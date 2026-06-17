@@ -1,4 +1,4 @@
-import type { TradingActivitySnapshot } from "../types/trading";
+import type { TradingActivitySnapshot, VenuePnlSnapshot } from "../types/trading";
 
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
@@ -918,6 +918,8 @@ export interface DashboardSnapshot {
   recentSignals: DashboardSignal[];
   analytics?: DashboardAnalytics;
   tradingActivity: TradingActivitySnapshot;
+  /** Venue-sourced realized take-home P&L (net of fees) + open exposure, BTC-15m arb only. */
+  venuePnl?: VenuePnlSnapshot;
   execution?: LiveExecutionReadiness;
   logs: DashboardLogEntry[];
 }

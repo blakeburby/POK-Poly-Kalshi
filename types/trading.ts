@@ -69,6 +69,38 @@ export interface TradingActivitySnapshot {
   polymarket: TradingPlatformActivity;
 }
 
+/** Venue-sourced realized take-home P&L (net of fees) + open exposure, per leg.
+ *  Computed directly from Kalshi settlements/positions and Polymarket positions —
+ *  the authoritative source — NOT from the bot's internal signal estimates. */
+export interface VenuePnlLeg {
+  platform: TradingPlatform;
+  connectionStatus: TradingConnectionState;
+  /** Realized cash from settled arb markets, net of fees. */
+  realizedTakeHome: number;
+  feesPaid: number;
+  grossRevenue: number;
+  cost: number;
+  /** Currently-open arb positions marked to current venue value. */
+  openExposure: number;
+  settledCount: number;
+  openCount: number;
+  /** Polymarket positions that resolved but haven't been redeemed to cash (0 for Kalshi). */
+  unredeemedCount: number;
+  lastUpdatedAt: number | null;
+}
+
+export interface VenuePnlSnapshot {
+  generatedAt: number;
+  /** Human label for which trades are counted, e.g. "BTC 15-minute arb". */
+  scope: string;
+  kalshi: VenuePnlLeg;
+  polymarket: VenuePnlLeg;
+  combinedRealizedTakeHome: number;
+  combinedOpenExposure: number;
+  combinedFeesPaid: number;
+  note: string;
+}
+
 export interface TradingActivityEvent {
   platform: TradingPlatform;
   receivedAt: number;
