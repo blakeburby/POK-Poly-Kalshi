@@ -600,6 +600,72 @@ test("confirmation coordinator does NOT lock on the lock-21 production overfill 
   assert.equal(locks.lock, null);
 });
 
+test("confirmation coordinator does NOT lock on the lock-22 polymarket-first overfill (5.172412/5) confirmed via stream with no accounted REST fill", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  // lock-22 production sequence (execution_strategy=polymarket_first_exact): the Polymarket order's REST
+  // result carried NO positive accounted fill (status unknown / fillCount 0) because the fill is confirmed
+  // via the private user stream -> accountedFill = 0. The stream then reports the true FAK fill 5.172412 —
+  // a FULL fill, slightly over the size-5 order, within the +1 band. The executor cap-quarantines the
+  // ~$0.05 residual; the coordinator must NOT also hard-lock (the freeze that halted Montreal post-deploy).
+  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), status: "unknown", fillCount: 0, error: null }, {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.172412 });
+  await pending.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(locks.lock, null);
+});
+
+test("confirmation coordinator STILL locks on a stray sub-expected fill on an unaccounted order (0.05/5, accountedFill 0) — not a full in-band fill", async () => {
+  const store = new MemoryEventStore();
+  const hub = new VenueOrderEventHub(store);
+  const locks = new MemoryLocks();
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: locks,
+    flatMissNonBlocking: true,
+    overfillToleranceShares: 1,
+    now: () => 1_800_000_000_200,
+  });
+  // Guard for the lock-22 fix: a stray 0.05 fill on a size-5 order whose REST never accounted a fill is
+  // NEITHER over-accounted (accountedFill 0) NOR filled-in-band (0.05 is far below expectedSize 5), so it
+  // MUST still lock — it would otherwise escape both the coordinator and the executor.
+  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), status: "unknown", fillCount: 0, error: null }, {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 0.05 });
+  await pending.catch(() => {});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.match(locks.lock?.reason ?? "", /fill mismatch 0.05\/5/);
+});
+
 test("confirmation coordinator blocks preflight when reconciliation is dirty", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);
