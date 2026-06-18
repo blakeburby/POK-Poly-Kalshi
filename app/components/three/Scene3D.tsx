@@ -25,11 +25,11 @@ function Points({ points, axes }: { points: Point3[]; axes: { x: AxisDef; y: Axi
         const x = toScene(norm(p.x, axes.x.min, axes.x.max));
         const y = toScene(norm(p.y, axes.y.min, axes.y.max));
         const z = toScene(norm(p.z, axes.z.min, axes.z.max));
-        const r = (p.size ?? 0.05) + 0.03;
+        const r = (p.size ?? 0.05) + 0.06;
         return (
           <mesh key={i} position={[x, y, z]}>
-            <sphereGeometry args={[r, 12, 12]} />
-            <meshStandardMaterial color={p.color} emissive={p.color} emissiveIntensity={0.35} roughness={0.4} metalness={0.1} />
+            <sphereGeometry args={[r, 16, 16]} />
+            <meshStandardMaterial color={p.color} emissive={p.color} emissiveIntensity={0.5} roughness={0.35} metalness={0.1} />
           </mesh>
         );
       })}
@@ -37,42 +37,63 @@ function Points({ points, axes }: { points: Point3[]; axes: { x: AxisDef; y: Axi
   );
 }
 
-function Ticks({ axis, plane }: { axis: AxisDef; plane: "x" | "y" | "z" }) {
-  const labels = [0, 0.5, 1].map((t) => ({ t, val: axis.min + t * (axis.max - axis.min) }));
+/** Screen-space label (constant size, always on top, never scales with zoom). */
+function AxisLabel({
+  position,
+  color,
+  title = false,
+  children,
+}: {
+  position: [number, number, number];
+  color: string;
+  title?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <>
-      {labels.map(({ t, val }) => {
-        const s = toScene(t);
-        const pos: [number, number, number] =
-          plane === "x" ? [s, -H - 0.25, H] : plane === "y" ? [-H - 0.25, s, H] : [-H - 0.25, -H - 0.25, s];
-        return (
-          <Html key={`${plane}-${t}`} position={pos} center distanceFactor={9} style={{ pointerEvents: "none" }}>
-            <span style={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: 9, color: "#6b7280", whiteSpace: "nowrap" }}>
-              {axis.fmt(val)}
-            </span>
-          </Html>
-        );
-      })}
-    </>
+    <Html position={position} center style={{ pointerEvents: "none", userSelect: "none" }}>
+      <span
+        style={{
+          display: "inline-block",
+          fontFamily: "var(--font-geist-mono), monospace",
+          fontSize: title ? 9 : 8,
+          lineHeight: 1,
+          letterSpacing: title ? "0.14em" : "0.01em",
+          textTransform: title ? "uppercase" : "none",
+          fontWeight: title ? 600 : 400,
+          color,
+          whiteSpace: "nowrap",
+          padding: title ? "2px 5px" : "1px 3px",
+          borderRadius: 3,
+          background: "rgba(7,9,12,0.82)",
+          boxShadow: title ? "inset 0 0 0 1px rgba(255,255,255,0.07)" : "none",
+        }}
+      >
+        {children}
+      </span>
+    </Html>
   );
 }
 
-function AxisTitle({ text, position, color }: { text: string; position: [number, number, number]; color: string }) {
+/** Min/max tick values, placed just outside each axis edge so they don't pile up. */
+function Ticks({ axis, plane }: { axis: AxisDef; plane: "x" | "y" | "z" }) {
+  const ends = [0, 1].map((t) => ({ t, val: axis.min + t * (axis.max - axis.min) }));
   return (
-    <Html position={position} center distanceFactor={8} style={{ pointerEvents: "none" }}>
-      <span
-        style={{
-          fontFamily: "var(--font-geist-mono), monospace",
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {text}
-      </span>
-    </Html>
+    <>
+      {ends.map(({ t, val }) => {
+        const s = toScene(t);
+        const pos: [number, number, number] =
+          plane === "x"
+            ? [s, -H - 0.42, H]
+            : plane === "y"
+              ? [-H - 0.5, s, H]
+              : [-H - 0.02, -H - 0.18, s];
+        return (
+          <AxisLabel key={`${plane}-${t}`} position={pos} color="#828c9b">
+            {axis.fmt(val)}
+          </AxisLabel>
+        );
+      })}
+    </>
   );
 }
 
@@ -93,13 +114,19 @@ function Frame({
       <Ticks axis={axes.x} plane="x" />
       <Ticks axis={axes.y} plane="y" />
       <Ticks axis={axes.z} plane="z" />
-      <AxisTitle text={axes.x.label} position={[0, -H - 0.7, H]} color="#22d3ee" />
-      <AxisTitle text={axes.y.label} position={[-H - 0.9, 0, H]} color="#26d67c" />
-      <AxisTitle text={axes.z.label} position={[-H - 0.9, -H - 0.7, 0]} color="#a855f7" />
+      <AxisLabel position={[0, -H - 0.92, H]} color="#22d3ee" title>
+        {axes.x.label}
+      </AxisLabel>
+      <AxisLabel position={[-H - 1.14, 0, H]} color="#26d67c" title>
+        {axes.y.label}
+      </AxisLabel>
+      <AxisLabel position={[-H - 0.02, -H - 0.92, 0]} color="#a855f7" title>
+        {axes.z.label}
+      </AxisLabel>
       {planeY != null ? (
         <mesh position={[0, planeY, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <planeGeometry args={[H * 2, H * 2]} />
-          <meshBasicMaterial color="#f5a623" transparent opacity={0.08} side={THREE.DoubleSide} />
+          <meshBasicMaterial color="#f5a623" transparent opacity={0.1} side={THREE.DoubleSide} />
         </mesh>
       ) : null}
     </group>
@@ -118,17 +145,24 @@ export function Scene3D({
   return (
     <Canvas
       frameloop="demand"
-      dpr={[1, 1.5]}
-      camera={{ position: [4.6, 3.4, 5.2], fov: 46 }}
+      dpr={[1, 2]}
+      camera={{ position: [5.8, 4.1, 6.6], fov: 40, near: 0.1, far: 100 }}
       gl={{ antialias: true, alpha: true }}
       style={{ background: "transparent" }}
     >
-      <ambientLight intensity={0.55} />
-      <directionalLight position={[6, 8, 4]} intensity={0.8} />
-      <pointLight position={[-5, 2, -3]} intensity={0.25} color="#22d3ee" />
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[6, 8, 4]} intensity={0.85} />
+      <pointLight position={[-5, 2, -3]} intensity={0.3} color="#22d3ee" />
       <Frame axes={axes} plane={plane} />
       <Points points={points} axes={axes} />
-      <OrbitControls enableDamping={false} enablePan={false} minDistance={4} maxDistance={14} />
+      <OrbitControls
+        makeDefault
+        target={[0, -0.2, 0]}
+        enableDamping={false}
+        enablePan={false}
+        minDistance={6}
+        maxDistance={22}
+      />
     </Canvas>
   );
 }

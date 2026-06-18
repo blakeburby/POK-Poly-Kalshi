@@ -9,6 +9,7 @@ import type {
   DashboardSignal,
   DashboardAnalyticsWindow,
   LiveExecutionReadiness,
+  TradingPlatformActivity,
   Venue,
 } from "./types";
 import type { StatusTone } from "./format";
@@ -31,21 +32,47 @@ export function toDollars(perShare: number | null | undefined, size: number): nu
   return perShare * size;
 }
 
+/**
+ * Total account value for one venue = cash + market value of open positions.
+ *
+ * `portfolio.portfolioValue` is venue-inconsistent at the source: Kalshi reports
+ * its own position market value there (e.g. $6.11, matching the Kalshi app), while
+ * Polymarket has no separate figure and falls back to cash (portfolioValue ==
+ * cashValue). So we use the venue's reported portfolioValue as the position value
+ * when it's a distinct number (Kalshi → matches Kalshi's own valuation), and fall
+ * back to summing the positions array when it's just a cash duplicate (Polymarket),
+ * which avoids double-counting Polymarket's cash.
+ */
+export function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
+  if (!activity) return null;
+  const cash = activity.portfolio.cashValue;
+  const reported = activity.portfolio.portfolioValue;
+  const positions = activity.positions ?? [];
+  if (cash == null && reported == null && positions.length === 0) return null;
+  const cashNum = cash ?? 0;
+  const summedPositions = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
+  const positionsValue =
+    reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
+  return cashNum + positionsValue;
+}
+
 export function accountEquity(snap: DashboardSnapshot): {
   total: number | null;
   cash: number | null;
   kalshi: number | null;
   polymarket: number | null;
 } {
-  const k = snap.tradingActivity?.kalshi.portfolio;
-  const p = snap.tradingActivity?.polymarket.portfolio;
+  const k = snap.tradingActivity?.kalshi;
+  const p = snap.tradingActivity?.polymarket;
   const sum = (a: number | null | undefined, b: number | null | undefined) =>
     a == null && b == null ? null : (a ?? 0) + (b ?? 0);
+  const kalshi = venueAccountValue(k);
+  const polymarket = venueAccountValue(p);
   return {
-    total: sum(k?.portfolioValue, p?.portfolioValue),
-    cash: sum(k?.cashValue, p?.cashValue),
-    kalshi: k?.portfolioValue ?? null,
-    polymarket: p?.portfolioValue ?? null,
+    total: sum(kalshi, polymarket),
+    cash: sum(k?.portfolio.cashValue, p?.portfolio.cashValue),
+    kalshi,
+    polymarket,
   };
 }
 

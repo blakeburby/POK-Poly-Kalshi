@@ -5,9 +5,9 @@ import { setDashboardSession, verifyDashboardPassword } from "../lib/dashboard-s
 
 export async function loginAction(formData: FormData): Promise<void> {
   const configured = Boolean(process.env.DASHBOARD_PASSWORD?.trim());
-  if (!configured) redirect("/login?missing=1");
+  if (!configured) redirect("/Terminal?missing=1");
   const password = String(formData.get("password") ?? "");
-  if (!verifyDashboardPassword(password)) redirect("/login?error=1");
+  if (!verifyDashboardPassword(password)) redirect("/Terminal?error=1");
   await setDashboardSession();
-  redirect("/");
+  redirect("/Terminal");
 }
