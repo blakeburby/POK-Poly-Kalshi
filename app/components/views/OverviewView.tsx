@@ -72,7 +72,7 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
           title="Portfolio Equity · Combined (Kalshi + Polymarket)"
           dot="live"
           span={12}
-          bodyClassName="h-[320px] p-2"
+          bodyClassName="h-[320px] flex-none p-2"
           right={
             <Tabs value={range} onValueChange={(v) => setRange(v as EquityRange)}>
               <TabsList className="rounded-md border border-line bg-surface p-0.5">
