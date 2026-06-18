@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { healthChecks, operationalStatus, orderSize } from "@/lib/selectors";
+import { accountEquity, healthChecks, operationalStatus, orderSize } from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents } from "@/lib/format";
 import { useNow } from "@/hooks/useNow";
 import { StatusDot, Label, MiniBar } from "@/components/ui/stat";
@@ -31,6 +31,8 @@ export function HealthRailBody() {
   const eq = exec?.executionQuality;
   const recon = exec?.reconciliation;
   const size = orderSize(snap);
+  // Account value per venue = cash + mark-to-market positions (NOT exec.balance, which is cash only).
+  const acct = accountEquity(snap);
 
   return (
     <>
@@ -101,8 +103,8 @@ export function HealthRailBody() {
       {/* venue capital */}
       <div className="px-3 py-2.5">
         <Label className="mb-2 block">Venue Capital</Label>
-        <VenueLine name="Kalshi" tone="kalshi" balance={exec?.kalshi.balance} ready={exec?.kalshi.ready} />
-        <VenueLine name="Polymarket" tone="poly" balance={exec?.polymarket.balance} ready={exec?.polymarket.ready} />
+        <VenueLine name="Kalshi" tone="kalshi" balance={acct.kalshi} ready={exec?.kalshi.ready} />
+        <VenueLine name="Polymarket" tone="poly" balance={acct.polymarket} ready={exec?.polymarket.ready} />
         <div className="mt-2 flex items-center justify-between border-t border-line/60 pt-2">
           <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">Clip Size</span>
           <span className="font-mono text-[11px] tabular-nums text-fg-secondary">{size} sh</span>

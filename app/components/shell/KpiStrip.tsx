@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { accountEquity, openPositionCount, orderSize, tradeableNow } from "@/lib/selectors";
+import { accountEquity, equityPnlOverMs, openPositionCount, tradeableNow } from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone } from "@/lib/format";
 import { Sparkline } from "@/components/ui/stat";
 import { cn } from "@/lib/utils";
@@ -35,37 +35,38 @@ export function KpiStrip() {
   if (!snap) {
     return <div className="h-[var(--kpi-h)] shrink-0 border-b border-line bg-surface/50" />;
   }
-  const size = orderSize(snap);
   const a = snap.analytics;
   const eq = accountEquity(snap);
   const exec = snap.execution;
-  const equitySpark = snap.tradingActivity
-    ? [
-        ...(snap.tradingActivity.kalshi.sparkline ?? []),
-        ...(snap.tradingActivity.polymarket.sparkline ?? []),
-      ]
-        .sort((x, y) => x.timestamp - y.timestamp)
-        .slice(-40)
-        .map((p) => p.value)
-    : [];
-  const pnlSpark = a?.hourly.buckets.map((b) => b.cumulativePnl * size) ?? [];
+  const now = snap.generatedAt;
+  const HOUR = 60 * 60_000;
+  const DAY = 24 * HOUR;
+  const WEEK = 7 * DAY;
+  // Real equity history (cash + mark-to-market positions, both venues) — not the old cash-flow sparkline.
+  const equityPts = snap.equityCurve?.points ?? [];
+  const equitySpark = equityPts.map((p) => p.v).slice(-60);
+  const dayPts = equityPts.filter((p) => p.t >= now - DAY);
+  const pnlSpark = dayPts.length > 1 ? dayPts.map((p) => p.v - dayPts[0].v) : [];
 
-  const day = (a?.daily.netPnl ?? 0) * size;
-  const hour = (a?.hourly.netPnl ?? 0) * size;
-  const week = (a?.weekly.netPnl ?? 0) * size;
+  // Venue-truth P&L = change in combined account value over the window (equity-curve delta).
+  const day = equityPnlOverMs(snap, DAY, now);
+  const hour = equityPnlOverMs(snap, HOUR, now);
+  const week = equityPnlOverMs(snap, WEEK, now);
   const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? 0;
+  const pnlValue = (v: number | null) => (v == null ? "–" : fmtUsd(v, { sign: true }));
+  const pnlTone = (v: number | null): Kpi["tone"] => (v == null ? "neutral" : v >= 0 ? "up" : "down");
 
   // Key metrics first so the most important are visible before any horizontal scroll on mobile.
   const kpis: Kpi[] = [
-    { label: "Net PnL · Today", value: fmtUsd(day, { sign: true }), tone: day >= 0 ? "up" : "down", emphasis: true, spark: pnlSpark },
+    { label: "Net PnL · Today", value: pnlValue(day), tone: pnlTone(day), emphasis: true, spark: pnlSpark },
     { label: "Account Equity", value: fmtUsd(eq.total), tone: "neutral", emphasis: true, spark: equitySpark },
     { label: "Open Positions", value: fmtNum(openPositionCount(snap)), tone: "neutral" },
     { label: "Unhedged Exposure", value: fmtUsd(unhedged), tone: unhedged > 0 ? "down" : "up" },
     { label: "Fill Success", value: fmtPct(a?.daily.fillRate), tone: (a?.daily.fillRate ?? 0) >= 0.6 ? "up" : "stale" },
     { label: "Hedge / Exact-Pair", value: fmtPct(exec?.executionQuality?.exactPairFillRate), tone: (exec?.executionQuality?.exactPairFillRate ?? 0) >= 0.6 ? "up" : "stale" },
     { label: "Avg Edge Captured", value: fmtCents(exec?.executionQuality?.estimatedExecutableEdge), tone: "up" },
-    { label: "Net PnL · 1H", value: fmtUsd(hour, { sign: true }), tone: hour >= 0 ? "up" : "down" },
-    { label: "Net PnL · 7D", value: fmtUsd(week, { sign: true }), tone: week >= 0 ? "up" : "down" },
+    { label: "Net PnL · 1H", value: pnlValue(hour), tone: pnlTone(hour) },
+    { label: "Net PnL · 7D", value: pnlValue(week), tone: pnlTone(week) },
     { label: "Win Rate", value: fmtPct(a?.daily.winRate), tone: "neutral" },
     { label: "Per-Trade Sharpe", value: a?.daily.sharpeRatio != null ? a.daily.sharpeRatio.toFixed(2) : "–", tone: "neutral" },
   ];

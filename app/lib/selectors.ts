@@ -76,9 +76,11 @@ export function accountEquity(snap: DashboardSnapshot): {
   };
 }
 
-/** Current unified portfolio equity: prefer the sampled curve's latest, fall back to live sum. */
+/** Current unified portfolio equity. Prefer the LIVE venue sum (cash + position MTM, both
+ *  venues) so the headline matches ACCOUNT EQUITY / VENUE CAPITAL; fall back to the last
+ *  sampled value only when live trading-activity is unavailable. */
 export function currentCombinedEquity(snap: DashboardSnapshot): number | null {
-  return snap.equityCurve?.currentCombinedValue ?? accountEquity(snap).total;
+  return accountEquity(snap).total ?? snap.equityCurve?.currentCombinedValue ?? null;
 }
 
 export type EquityRange = "24h" | "7d" | "30d" | "all";
@@ -99,10 +101,17 @@ export function equitySeriesForRange(
 ): { t: number; v: number }[] {
   const all = snap.equityCurve?.points ?? [];
   const rangeMs = EQUITY_RANGE_MS[range];
-  const sliced = rangeMs == null ? all : all.filter((p) => p.t >= now - rangeMs);
-  if (sliced.length > 1) return sliced;
+  const base = rangeMs == null ? all : all.filter((p) => p.t >= now - rangeMs);
   const current = currentCombinedEquity(snap);
-  if (current == null) return sliced;
+  // Append a live "now" point (new array — never mutate the snapshot) so the curve's right edge
+  // and the change tiles match the live headline value rather than the last ≤60s-old sample.
+  let series = base;
+  if (current != null) {
+    const last = base[base.length - 1];
+    series = !last || now - last.t > 1_000 ? [...base, { t: now, v: current }] : [...base.slice(0, -1), { t: now, v: current }];
+  }
+  if (series.length > 1) return series;
+  if (current == null) return series;
   const span = rangeMs ?? 24 * 60 * 60_000;
   return [{ t: now - span, v: current }, { t: now, v: current }];
 }
@@ -115,6 +124,17 @@ export function equityRangeChange(points: { t: number; v: number }[]): { absolut
   const absolute = last - first;
   const percent = Math.abs(first) < 1e-9 ? null : absolute / first;
   return { absolute, percent };
+}
+
+/** Venue-truth total P&L over a trailing window = change in combined account value (the equity
+ *  curve delta). Captures realized + unrealized across both venues. Returns null when there is
+ *  no sampled history in the window yet (so the UI can show "–"/building instead of a fake $0). */
+export function equityPnlOverMs(snap: DashboardSnapshot, ms: number, now: number): number | null {
+  const pts = snap.equityCurve?.points ?? [];
+  const live = currentCombinedEquity(snap);
+  const inWindow = pts.filter((p) => p.t >= now - ms);
+  if (live == null || inWindow.length < 1) return null;
+  return Math.round((live - inWindow[0].v) * 1e6) / 1e6;
 }
 
 export function openPositionCount(snap: DashboardSnapshot): number {

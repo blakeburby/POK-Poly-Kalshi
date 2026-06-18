@@ -10,10 +10,10 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   currentCombinedEquity,
   edgeCapture,
+  equityPnlOverMs,
   equityRangeChange,
   equitySeriesForRange,
   openPositionCount,
-  orderSize,
   tradeableNow,
   type EquityRange,
 } from "@/lib/selectors";
@@ -21,7 +21,6 @@ import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone, fmtPctRaw } from "@/
 import { cn } from "@/lib/utils";
 
 export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
-  const size = orderSize(snap);
   const a = snap.analytics;
   const exec = snap.execution;
   const cap = edgeCapture(a?.daily, snap);
@@ -34,7 +33,8 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
   const change = hasHistory ? equityRangeChange(series) : { absolute: null, percent: null };
   const changeTone: "up" | "down" = (change.absolute ?? 0) >= 0 ? "up" : "down";
 
-  const day = (a?.daily.netPnl ?? 0) * size;
+  // Venue-truth: change in combined account value over the last 24h (equity-curve delta).
+  const day = equityPnlOverMs(snap, 24 * 60 * 60_000, now);
   const fillRate = a?.daily.fillRate ?? 0;
   const exactRate = exec?.executionQuality?.exactPairFillRate ?? 0;
   const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? 0;
@@ -42,7 +42,7 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
   const estEdge = exec?.executionQuality?.estimatedExecutableEdge ?? 0;
 
   const answers: AnswerProps[] = [
-    { q: "Making money?", value: fmtUsd(day, { sign: true }), tone: day >= 0 ? "live" : "halt", sub: `${a?.daily.filledTrades ?? 0} fills today` },
+    { q: "Making money?", value: day == null ? "–" : fmtUsd(day, { sign: true }), tone: day == null ? "stale" : day >= 0 ? "live" : "halt", sub: "24h account P&L" },
     { q: "Edge working?", value: fmtCents(estEdge), tone: estEdge > 0 && candidates >= 0 ? "live" : "stale", sub: `${candidates} live candidates` },
     { q: "Filling?", value: fmtPct(fillRate), tone: fillRate >= 0.6 ? "live" : fillRate >= 0.4 ? "stale" : "halt", sub: "filled / opportunities" },
     { q: "Hedging?", value: fmtPct(exactRate), tone: exactRate >= 0.6 ? "live" : exactRate >= 0.4 ? "stale" : "halt", sub: "exact-pair fills" },

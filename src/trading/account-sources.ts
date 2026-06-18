@@ -346,6 +346,15 @@ async function polymarketDataApi(path: string, address: string, fetchFn: FetchFn
   return fetchJsonWithTimeout(fetchFn, url, undefined, POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS);
 }
 
+/** Mark-to-market of a Polymarket position = size × current price. The data-api zeroes
+ *  `currentValue` for resolved/redeemable positions, which would drop unredeemed WINNERS to $0;
+ *  the price-based mark keeps them valued (loser curPrice 0 -> $0, winner curPrice ~1 -> ~size). */
+function polymarketPositionValue(row: JsonRecord, shares: number): number | null {
+  const curPrice = firstNumber(row, ["curPrice", "cur_price"]);
+  if (curPrice != null && curPrice >= 0) return shares * curPrice;
+  return firstNumber(row, ["currentValue", "current_value", "value"]);
+}
+
 function normalizePolymarketPosition(row: JsonRecord, now: number): TradingPosition | null {
   const asset = firstString(row, ["asset", "token", "asset_id"]);
   const market = firstString(row, ["title", "slug", "conditionId", "condition_id"]);
@@ -356,7 +365,7 @@ function normalizePolymarketPosition(row: JsonRecord, now: number): TradingPosit
     market,
     outcome: firstString(row, ["outcome"]) ?? "OUTCOME",
     shares,
-    value: rounded(firstNumber(row, ["currentValue", "current_value", "value"])),
+    value: rounded(polymarketPositionValue(row, shares)),
     averagePrice: rounded(firstNumber(row, ["avgPrice", "avg_price", "averagePrice"])),
     updatedAt: timestampMs(row.updatedAt ?? row.updateTime ?? row.endDate) ?? now,
   };
@@ -458,7 +467,11 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
     .filter((row): row is TradingPosition => row != null)
     .sort((left, right) => (right.value ?? 0) - (left.value ?? 0));
   const valueRecord = rowsFromPayload(valuePayload, ["value"])[0] ?? asRecord(valuePayload);
-  const positionsValue = firstNumber(valueRecord, ["value"]) ?? positions.reduce((total, position) => total + (position.value ?? 0), 0);
+  const summedPositions = positions.reduce((total, position) => total + (position.value ?? 0), 0);
+  const reportedValue = firstNumber(valueRecord, ["value"]);
+  // Prefer the /value endpoint only when it reports a positive total; it returns 0/empty for
+  // resolved positions, which would zero out genuine open MTM — fall back to the summed marks.
+  const positionsValue = reportedValue != null && reportedValue > 0 ? reportedValue : summedPositions;
   const cashValue = accountState.cashValue ?? options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null;
   const portfolioValue = rounded((cashValue ?? 0) + positionsValue);
   const accountPnl = positionRows.reduce((total, row) => {

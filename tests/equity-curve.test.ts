@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { downsampleEquity } from "../src/db/portfolio-equity";
-import { equityRangeChange, equitySeriesForRange } from "../app/lib/selectors";
+import { equityPnlOverMs, equityRangeChange, equitySeriesForRange } from "../app/lib/selectors";
 
 test("downsampleEquity caps point count, stays ascending, and preserves the newest point exactly", () => {
   const pts = Array.from({ length: 5000 }, (_, i) => ({ t: 1_000 + i * 1_000, v: i }));
@@ -45,4 +45,30 @@ test("equitySeriesForRange falls back to a flat 2-point line at current equity w
   assert.equal(out.length, 2);
   assert.equal(out[0].v, 250);
   assert.equal(out[1].v, 250);
+});
+
+test("equitySeriesForRange appends the live value as the latest point", () => {
+  const day = 24 * 60 * 60_000;
+  const now = 5 * day;
+  const points = [{ t: 1 * day, v: 100 }, { t: 2 * day, v: 110 }];
+  const snap = { equityCurve: { points, currentCombinedValue: 130 }, tradingActivity: null } as never;
+  const out = equitySeriesForRange(snap, "all", now);
+  assert.equal(out.length, 3, "appends live now-point");
+  assert.equal(out[out.length - 1].t, now);
+  assert.equal(out[out.length - 1].v, 130, "right edge == live headline");
+});
+
+test("equityPnlOverMs returns combined-equity delta over the window, null without history", () => {
+  const day = 24 * 60 * 60_000;
+  const now = 10 * day;
+  const points = [
+    { t: now - 3 * day, v: 100 },
+    { t: now - 2 * day, v: 120 },
+    { t: now - 1 * day, v: 90 },
+    { t: now - 60_000, v: 110 },
+  ];
+  const snap = { equityCurve: { points, currentCombinedValue: 115 }, tradingActivity: null } as never;
+  assert.equal(equityPnlOverMs(snap, day, now), 25); // live 115 − first-in-24h 90
+  assert.equal(equityPnlOverMs(snap, 7 * day, now), 15); // live 115 − first-in-7d 100
+  assert.equal(equityPnlOverMs({ equityCurve: { points: [] }, tradingActivity: null } as never, day, now), null);
 });
