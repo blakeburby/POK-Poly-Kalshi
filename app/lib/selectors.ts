@@ -49,6 +49,47 @@ export function accountEquity(snap: DashboardSnapshot): {
   };
 }
 
+/** Current unified portfolio equity: prefer the sampled curve's latest, fall back to live sum. */
+export function currentCombinedEquity(snap: DashboardSnapshot): number | null {
+  return snap.equityCurve?.currentCombinedValue ?? accountEquity(snap).total;
+}
+
+export type EquityRange = "24h" | "7d" | "30d" | "all";
+
+export const EQUITY_RANGE_MS: Record<EquityRange, number | null> = {
+  "24h": 24 * 60 * 60_000,
+  "7d": 7 * 24 * 60 * 60_000,
+  "30d": 30 * 24 * 60 * 60_000,
+  all: null,
+};
+
+/** Equity series for the chart, sliced to the selected range. Falls back to a flat 2-point
+ *  line at current equity so the panel still renders before history accrues. */
+export function equitySeriesForRange(
+  snap: DashboardSnapshot,
+  range: EquityRange,
+  now: number,
+): { t: number; v: number }[] {
+  const all = snap.equityCurve?.points ?? [];
+  const rangeMs = EQUITY_RANGE_MS[range];
+  const sliced = rangeMs == null ? all : all.filter((p) => p.t >= now - rangeMs);
+  if (sliced.length > 1) return sliced;
+  const current = currentCombinedEquity(snap);
+  if (current == null) return sliced;
+  const span = rangeMs ?? 24 * 60 * 60_000;
+  return [{ t: now - span, v: current }, { t: now, v: current }];
+}
+
+/** Absolute and percent change between the first and last points of a series. */
+export function equityRangeChange(points: { t: number; v: number }[]): { absolute: number | null; percent: number | null } {
+  if (points.length < 2) return { absolute: null, percent: null };
+  const first = points[0].v;
+  const last = points[points.length - 1].v;
+  const absolute = last - first;
+  const percent = Math.abs(first) < 1e-9 ? null : absolute / first;
+  return { absolute, percent };
+}
+
 export function openPositionCount(snap: DashboardSnapshot): number {
   return (snap.tradingActivity?.kalshi.positions.length ?? 0) + (snap.tradingActivity?.polymarket.positions.length ?? 0);
 }

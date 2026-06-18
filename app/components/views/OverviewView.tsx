@@ -1,18 +1,21 @@
 "use client";
 
 import * as React from "react";
-import type { DashboardSnapshot, TradingPlatformActivity } from "@/lib/types";
-import { ViewScroll, Grid, GridPanel } from "./_layout";
+import type { DashboardSnapshot } from "@/lib/types";
+import { ViewScroll, Grid, GridPanel, StatTile } from "./_layout";
 import { EChart } from "@/components/charts/echart";
 import { equityAreaOption } from "@/components/charts/options";
-import { Sparkline, StatusDot, Empty, MiniBar } from "@/components/ui/stat";
-import { Badge } from "@/components/ui/badge";
+import { StatusDot, Empty, MiniBar } from "@/components/ui/stat";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  accountEquity,
+  currentCombinedEquity,
   edgeCapture,
+  equityRangeChange,
+  equitySeriesForRange,
   openPositionCount,
   orderSize,
   tradeableNow,
+  type EquityRange,
 } from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone, fmtPctRaw } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -21,11 +24,15 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
   const size = orderSize(snap);
   const a = snap.analytics;
   const exec = snap.execution;
-  const eq = accountEquity(snap);
   const cap = edgeCapture(a?.daily, snap);
+  const [range, setRange] = React.useState<EquityRange>("24h");
 
-  const equityPoints =
-    a?.daily.buckets.map((b) => ({ t: b.startMs, v: b.cumulativePnl * size })) ?? [];
+  const now = snap.generatedAt;
+  const current = currentCombinedEquity(snap);
+  const hasHistory = (snap.equityCurve?.points?.length ?? 0) > 1;
+  const series = equitySeriesForRange(snap, range, now);
+  const change = hasHistory ? equityRangeChange(series) : { absolute: null, percent: null };
+  const changeTone: "up" | "down" = (change.absolute ?? 0) >= 0 ? "up" : "down";
 
   const day = (a?.daily.netPnl ?? 0) * size;
   const fillRate = a?.daily.fillRate ?? 0;
@@ -53,38 +60,38 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
         ))}
       </div>
 
+      {/* Unified combined-portfolio equity */}
+      <div className="grid grid-cols-3 gap-3">
+        <StatTile label="Combined Value" value={fmtUsd(current)} tone="cyan" sub="cash + open positions · both venues" />
+        <StatTile label="Change ($)" value={change.absolute != null ? fmtUsd(change.absolute, { sign: true }) : "–"} tone={changeTone} sub={range.toUpperCase()} />
+        <StatTile label="Change (%)" value={change.percent != null ? fmtPctRaw(change.percent * 100, 2, true) : "–"} tone={changeTone} sub={range.toUpperCase()} />
+      </div>
+
       <Grid>
         <GridPanel
-          title="Equity Composite · Cumulative Arb PnL (Today)"
+          title="Portfolio Equity · Combined (Kalshi + Polymarket)"
           dot="live"
-          span={8}
-          bodyClassName="h-[300px] p-2"
+          span={12}
+          bodyClassName="h-[320px] p-2"
           right={
-            <div className="flex items-center gap-3 font-mono text-[10px]">
-              <span className="text-fg-muted">EQUITY</span>
-              <span className="tabular-nums text-fg">{fmtUsd(eq.total)}</span>
-              <span className={cn("tabular-nums", day >= 0 ? "text-up" : "text-down")}>{fmtUsd(day, { sign: true })}</span>
-            </div>
+            <Tabs value={range} onValueChange={(v) => setRange(v as EquityRange)}>
+              <TabsList className="rounded-md border border-line bg-surface p-0.5">
+                <TabsTrigger value="24h">24H</TabsTrigger>
+                <TabsTrigger value="7d">7D</TabsTrigger>
+                <TabsTrigger value="30d">30D</TabsTrigger>
+                <TabsTrigger value="all">All</TabsTrigger>
+              </TabsList>
+            </Tabs>
           }
         >
-          {equityPoints.length > 1 ? (
-            <EChart option={equityAreaOption(equityPoints, { positive: day >= 0, fmt: (v) => fmtUsd(v, { sign: true }) })} />
+          {hasHistory ? (
+            <EChart option={equityAreaOption(series, { positive: (change.absolute ?? 0) >= 0, fmt: (v) => fmtUsd(v) })} />
           ) : (
-            <Empty>No filled trades in window</Empty>
-          )}
-        </GridPanel>
-
-        <GridPanel title="Capital · Per Venue" dot="info" span={4} bodyClassName="flex flex-col gap-3">
-          {snap.tradingActivity ? (
-            <>
-              <VenueCard activity={snap.tradingActivity.kalshi} accent="var(--color-kalshi)" />
-              <VenueCard activity={snap.tradingActivity.polymarket} accent="var(--color-poly)" />
-            </>
-          ) : (
-            <Empty />
+            <Empty>Equity history is warming up — samples accrue while the dashboard runs.</Empty>
           )}
         </GridPanel>
       </Grid>
+      {/* TODO(v2): markPoint overlay for fills/hedges/locks */}
 
       <Grid>
         <GridPanel title="Open Positions" dot="live" span={7} bodyClassName="p-0">
@@ -121,33 +128,6 @@ function AnswerCard({ q, value, tone, sub }: AnswerProps) {
       </div>
       <span className={cn("font-mono text-[19px] tabular-nums leading-none", accent)}>{value}</span>
       <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">{sub}</span>
-    </div>
-  );
-}
-
-function VenueCard({ activity, accent }: { activity: TradingPlatformActivity; accent: string }) {
-  const p = activity.portfolio;
-  const spark = activity.sparkline?.map((s) => s.value) ?? [];
-  const dayPct = p.dayChangePercent;
-  return (
-    <div className="rounded-md border border-line bg-surface-2/40 p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="size-2 rounded-full" style={{ background: accent }} />
-          <span className="text-[12px] font-medium capitalize text-fg">{activity.platform}</span>
-          <StatusDot tone={activity.connectionStatus === "live" ? "live" : "stale"} className="size-1.5" />
-        </div>
-        <Badge variant={(dayPct ?? 0) >= 0 ? "up" : "down"}>{fmtPctRaw(dayPct, 2, true)}</Badge>
-      </div>
-      <div className="mt-2 flex items-end justify-between">
-        <div className="flex flex-col">
-          <span className="font-mono text-[20px] tabular-nums leading-none text-fg">{fmtUsd(p.portfolioValue)}</span>
-          <span className="mt-1 font-mono text-[10px] text-fg-muted">
-            cash {fmtUsd(p.cashValue)} · {activity.positions.length} pos
-          </span>
-        </div>
-        <Sparkline data={spark} width={84} height={30} stroke={accent} />
-      </div>
     </div>
   );
 }

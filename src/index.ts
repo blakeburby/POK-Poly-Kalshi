@@ -27,6 +27,8 @@ import { PolymarketUserStreamClient } from "./polymarket/user-stream";
 import { ReentryThrottle } from "./scanner/reentry";
 import { CrossVenueArbScanner } from "./scanner/scanner";
 import { computeVenuePnl } from "./trading/venue-pnl";
+import { PortfolioEquityStore } from "./db/portfolio-equity";
+import { EquitySampler } from "./trading/equity-sampler";
 import { CoalescedScanScheduler, createScanHeartbeat } from "./scanner/scheduler";
 import { createIdempotentShutdown } from "./shutdown";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "./trading/activity";
@@ -55,6 +57,38 @@ async function main(): Promise<void> {
   const liveExposure = liveExposureCache ?? signals;
   const orderEvents = new VenueOrderEventHub(new VenueOrderEventStore(pool));
   const tradingActivity = new TradingActivityStore(pool, config);
+  // Dashboard-only: persistent combined-portfolio equity curve. Sampled passively off the
+  // dashboard's trading-activity refresh (no extra venue calls), failure-isolated; the
+  // trading path never reads this table.
+  const portfolioEquity = new PortfolioEquityStore(pool);
+  const equitySampler = new EquitySampler(portfolioEquity);
+  // Optional one-time seed (off by default): reconstruct an APPROXIMATE historical curve from
+  // realized arb P&L, anchored to today's real equity. Realized-only (no historical open-position
+  // MTM), ignores deposits/withdrawals — the live sampler is the source of truth going forward.
+  if (config.equityBackfillOnBoot) {
+    void (async (): Promise<void> => {
+      try {
+        if ((await portfolioEquity.count()) > 0) return;
+        const now = Date.now();
+        const activity = await tradingActivity.getSnapshot({ now });
+        const current = (activity.kalshi.portfolio.portfolioValue ?? 0) + (activity.polymarket.portfolio.portfolioValue ?? 0);
+        const fills = (await signals.listFilledSignalsSince(0, 50_000))
+          .map((s) => ({ t: new Date(s.updatedAt).getTime(), pnl: (s.realizedGuaranteedProfit ?? 0) * config.liveOrderSize }))
+          .filter((f) => Number.isFinite(f.t))
+          .sort((a, b) => a.t - b.t);
+        const total = fills.reduce((acc, f) => acc + f.pnl, 0);
+        let cum = 0;
+        const points = fills.map((f) => {
+          cum += f.pnl;
+          return { sampledAtMs: f.t, kalshiValue: null, polymarketValue: null, combinedValue: current - (total - cum), kalshiCash: null, polymarketCash: null, source: "reconstructed" as const };
+        });
+        if (points.length) await portfolioEquity.recordMany(points);
+        logEvent({ severity: "INFO", category: "DB", message: "equity curve backfilled", context: { points: points.length } });
+      } catch (error) {
+        logEvent({ severity: "WARN", category: "DB", message: "equity backfill failed", context: { error: error instanceof Error ? error.message : String(error) } });
+      }
+    })();
+  }
   const priceBeats = new PolymarketPriceBeatStore(pool);
   const reentry = new ReentryThrottle(config.reentryIntervalMs);
   const latency = new LatencyMonitor();
@@ -266,6 +300,16 @@ async function main(): Promise<void> {
         },
         getTradingActivity: (now, readiness) => tradingActivity.getSnapshot({ now, readiness }),
         getVenuePnl: (now) => computeVenuePnl(config, now),
+        getEquityCurve: async (now) => {
+          const points = await portfolioEquity.listSince(0, 400);
+          return {
+            generatedAt: now,
+            currentCombinedValue: points.at(-1)?.v ?? null,
+            earliestSampledAtMs: await portfolioEquity.earliestSampledAtMs(),
+            points,
+          };
+        },
+        recordEquitySample: (activity, now) => equitySampler.maybeSample(activity, now),
         getTradingPlatformActivity: (platform, now, readiness) => tradingActivity.getPlatformActivity(platform, { now, readiness }),
         subscribeTradingActivityEvents: (listener) => orderEvents.onEvent((event) => {
           listener(tradingActivityEventFromVenueEvent(event));

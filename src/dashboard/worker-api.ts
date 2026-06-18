@@ -8,7 +8,7 @@ import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
 import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 import { emptyTradingActivity } from "../trading/activity";
-import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity, VenuePnlSnapshot } from "../../types/trading";
+import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity, VenuePnlSnapshot, EquityCurveSnapshot } from "../../types/trading";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -32,6 +32,9 @@ export interface DashboardRuntime {
   getExecutionReadiness?: (now: number) => LiveExecutionReadiness | Promise<LiveExecutionReadiness>;
   getTradingActivity?: (now: number, readiness?: LiveExecutionReadiness) => TradingActivitySnapshot | Promise<TradingActivitySnapshot>;
   getVenuePnl?: (now: number) => VenuePnlSnapshot | Promise<VenuePnlSnapshot>;
+  getEquityCurve?: (now: number) => EquityCurveSnapshot | Promise<EquityCurveSnapshot>;
+  /** Dashboard-only equity sampler hook; called when a fresh trading-activity value is built. */
+  recordEquitySample?: (activity: TradingActivitySnapshot, now: number) => void;
   getTradingPlatformActivity?: (platform: TradingPlatform, now: number, readiness?: LiveExecutionReadiness) => TradingPlatformActivity | Promise<TradingPlatformActivity>;
   subscribeTradingActivityEvents?: (listener: (event: TradingActivityEvent) => void) => () => void;
   getLogs: (limit?: number) => DashboardLogEntry[];
@@ -53,6 +56,10 @@ export interface DashboardSnapshotCache {
   venuePnl?: {
     refreshedAt: number;
     value: VenuePnlSnapshot | undefined;
+  };
+  equityCurve?: {
+    refreshedAt: number;
+    value: EquityCurveSnapshot | undefined;
   };
   execution?: {
     refreshedAt: number;
@@ -137,6 +144,8 @@ async function cachedTradingActivity(
   if (cache) {
     cache.tradingActivity = { refreshedAt: now, value };
   }
+  // Sample combined equity off the freshly-built activity (throttled + failure-isolated downstream).
+  runtime.recordEquitySample?.(value, now);
   return value;
 }
 
@@ -160,6 +169,30 @@ async function cachedVenuePnl(runtime: DashboardRuntime, now: number, cache?: Da
   }
   if (cache) {
     cache.venuePnl = { refreshedAt: now, value };
+  }
+  return value;
+}
+
+/** Equity curve reads the persisted series; it only changes as samples accrue (~60s), so a
+ *  30s cache keeps the polled snapshot cheap. Keeps last-good on a transient DB failure. */
+function equityCurveRefreshMs(runtime: DashboardRuntime): number {
+  return Math.max(heavyRefreshMs(runtime), 30_000);
+}
+
+async function cachedEquityCurve(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<EquityCurveSnapshot | undefined> {
+  if (!runtime.getEquityCurve) return undefined;
+  const cached = cache?.equityCurve;
+  if (cached && now - cached.refreshedAt < equityCurveRefreshMs(runtime)) {
+    return cached.value;
+  }
+  let value: EquityCurveSnapshot | undefined;
+  try {
+    value = await runtime.getEquityCurve(now);
+  } catch {
+    value = cached?.value;
+  }
+  if (cache) {
+    cache.equityCurve = { refreshedAt: now, value };
   }
   return value;
 }
@@ -317,9 +350,10 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     cachedAnalytics(runtime, now, cache),
   ]);
   const execution = await cachedExecutionReadiness(runtime, now, cache);
-  const [tradingActivity, venuePnl] = await Promise.all([
+  const [tradingActivity, venuePnl, equityCurve] = await Promise.all([
     cachedTradingActivity(runtime, now, execution, cache),
     cachedVenuePnl(runtime, now, cache),
+    cachedEquityCurve(runtime, now, cache),
   ]);
   const { liveCandidates, syntheticStructures } = sortedCandidates(runtime, now);
 
@@ -343,6 +377,7 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     analytics,
     tradingActivity,
     venuePnl,
+    equityCurve,
     execution,
     logs: runtime.getLogs(150),
   };

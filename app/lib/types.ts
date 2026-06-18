@@ -39,4 +39,5 @@ export type {
   TradingActivityEvent,
   VenuePnlSnapshot,
   VenuePnlLeg,
+  EquityCurveSnapshot,
 } from "@root/types/trading";

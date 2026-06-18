@@ -101,6 +101,15 @@ export interface VenuePnlSnapshot {
   note: string;
 }
 
+/** Persistent unified equity curve: combined portfolio value (cash + MTM positions, both
+ *  venues) sampled over time. Downsampled server-side; the FE slices ranges client-side. */
+export interface EquityCurveSnapshot {
+  generatedAt: number;
+  currentCombinedValue: number | null;
+  earliestSampledAtMs: number | null;
+  points: { t: number; v: number }[];
+}
+
 export interface TradingActivityEvent {
   platform: TradingPlatform;
   receivedAt: number;

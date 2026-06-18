@@ -12,6 +12,7 @@ export interface AppConfig {
   dashboardStreamIntervalMs: number;
   dashboardSignalRefreshMs: number;
   dashboardAnalyticsRefreshMs: number;
+  equityBackfillOnBoot: boolean;
   executionConcurrency: number;
   discoveryBoundaryRefreshEnabled: boolean;
   kalshiApiBase: string;
@@ -244,6 +245,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 1_000),
     dashboardSignalRefreshMs: envNumber(env, "DASHBOARD_SIGNAL_REFRESH_MS", 1_000),
     dashboardAnalyticsRefreshMs: envNumber(env, "DASHBOARD_ANALYTICS_REFRESH_MS", 5_000),
+    // Dashboard-only: one-time realized-P&L reconstruction to seed the equity curve when empty.
+    equityBackfillOnBoot: envBoolean(env, "EQUITY_BACKFILL_ON_BOOT", false),
     // Default 1 (P0-4): serialize live attempts so two concurrent scans cannot both reserve the same
     // Kalshi hedge collateral and double-spend it. Raise only after per-attempt collateral reservation lands.
     executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 1),

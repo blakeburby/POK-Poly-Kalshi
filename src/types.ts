@@ -1,4 +1,4 @@
-import type { TradingActivitySnapshot, VenuePnlSnapshot } from "../types/trading";
+import type { TradingActivitySnapshot, VenuePnlSnapshot, EquityCurveSnapshot } from "../types/trading";
 
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
@@ -920,6 +920,8 @@ export interface DashboardSnapshot {
   tradingActivity: TradingActivitySnapshot;
   /** Venue-sourced realized take-home P&L (net of fees) + open exposure, BTC-15m arb only. */
   venuePnl?: VenuePnlSnapshot;
+  /** Persistent unified combined-portfolio equity curve (cash + MTM, both venues) over time. */
+  equityCurve?: EquityCurveSnapshot;
   execution?: LiveExecutionReadiness;
   logs: DashboardLogEntry[];
 }
