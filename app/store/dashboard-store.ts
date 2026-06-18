@@ -57,7 +57,7 @@ const RT_REFRESH_MS = 50_000;
 /** Backoff before retrying the realtime connection after an error. */
 const RT_RECONNECT_MS = 8000;
 /** Heavy-slice keys pulled from the full snapshot; everything else comes from the live slice. */
-const HEAVY_KEYS = ["recentSignals", "analytics", "tradingActivity", "logs"] as const;
+const HEAVY_KEYS = ["recentSignals", "analytics", "tradingActivity", "venuePnl", "equityCurve", "logs"] as const;
 
 /**
  * Realtime-first feed:

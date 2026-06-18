@@ -1,4 +1,4 @@
-import type { TradingActivitySnapshot } from "../../types/trading";
+import type { TradingActivitySnapshot, TradingPlatformActivity } from "../../types/trading";
 import type { PortfolioEquitySampleInput, PortfolioEquityStore } from "../db/portfolio-equity";
 import { logEvent } from "../logger";
 
@@ -7,23 +7,39 @@ const DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60_000;
 const PRUNE_EVERY_N = 60; // at ~60s cadence, prune about once per hour
 
 /**
- * Combined portfolio equity sample from a trading-activity snapshot. Combined value sums each
- * venue's portfolioValue (cash + mark-to-market positions) — the same fields the dashboard's
+ * Total account value for one venue = cash + market value of open positions. Mirrors the
+ * frontend `venueAccountValue()` selector: Kalshi reports its position MTM in portfolioValue,
+ * but Polymarket's portfolioValue is just cash (no separate figure), so fall back to summing the
+ * positions array for it to avoid undercounting Polymarket's open exposure.
+ */
+function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
+  if (!activity) return null;
+  const cash = activity.portfolio?.cashValue ?? null;
+  const reported = activity.portfolio?.portfolioValue ?? null;
+  const positions = activity.positions ?? [];
+  if (cash == null && reported == null && positions.length === 0) return null;
+  const cashNum = cash ?? 0;
+  const summedPositions = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
+  const positionsValue = reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
+  return cashNum + positionsValue;
+}
+
+/**
+ * Combined portfolio equity sample from a trading-activity snapshot. Sums each venue's account
+ * value (cash + mark-to-market positions) via venueAccountValue — the same basis the dashboard's
  * accountEquity() selector uses. Null-tolerant; returns null only when neither venue reported.
  */
 export function buildEquitySample(activity: TradingActivitySnapshot, now: number): PortfolioEquitySampleInput | null {
-  const k = activity.kalshi?.portfolio;
-  const p = activity.polymarket?.portfolio;
-  const kv = k?.portfolioValue ?? null;
-  const pv = p?.portfolioValue ?? null;
+  const kv = venueAccountValue(activity.kalshi);
+  const pv = venueAccountValue(activity.polymarket);
   if (kv == null && pv == null) return null;
   return {
     sampledAtMs: now,
     kalshiValue: kv,
     polymarketValue: pv,
     combinedValue: (kv ?? 0) + (pv ?? 0),
-    kalshiCash: k?.cashValue ?? null,
-    polymarketCash: p?.cashValue ?? null,
+    kalshiCash: activity.kalshi?.portfolio?.cashValue ?? null,
+    polymarketCash: activity.polymarket?.portfolio?.cashValue ?? null,
     source: "sampled",
   };
 }
