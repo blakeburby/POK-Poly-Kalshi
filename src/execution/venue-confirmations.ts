@@ -147,10 +147,17 @@ function confirmationFromEvent(
   event: VenueOrderEventInput,
   result: VenueOrderResult,
   expectedSize: number,
+  overfillBand = 0,
 ): VenueConfirmationResult {
   const fillCount = event.fillCount ?? null;
   const status = event.status;
-  const mismatch = fillCount != null && Math.abs(fillCount - expectedSize) > 0.000001;
+  // A fill within [expectedSize, expectedSize + band] is the intended, bounded FAK over-hedge (the Kalshi
+  // integer floor-hedge covers the whole shares; the sub-share residual is cap-bounded by the band) and
+  // confirms cleanly. An UNDERFILL (< expectedSize) or an OVERFILL beyond the band is still a mismatch.
+  // band defaults to 0 -> reduces exactly to the strict |fillCount - expectedSize| > eps behavior.
+  const band = Math.max(0, overfillBand);
+  const mismatch = fillCount != null
+    && (fillCount < expectedSize - 0.000001 || fillCount > expectedSize + band + 0.000001);
   const failed = isFailureStatus(status);
   const confirmed = isConfirmingStatus(status) && !mismatch && !failed;
   return {
@@ -208,6 +215,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       autoHardlocksEnabled?: boolean;
       flatMissNonBlocking?: boolean;
       overfillToleranceShares?: number;
+      confirmationOverfillTolerant?: boolean;
       allowUnresolvedRisk?: boolean;
       liveLocks?: LiveExecutionLockWriter;
       now?: () => number;
@@ -273,7 +281,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     // fill), so any later stream event for the order is judged against what the executor actually reconciled.
     this.rememberKnownOrder(result, options.executionGroupId, options.expectedSize);
     const existing = this.recentEvents.find((event) => eventMatchesExpected(event, { result, leg: options.leg, submittedAtMs: options.submittedAtMs }));
-    if (existing) return confirmationFromEvent(existing, result, options.expectedSize);
+    if (existing) return confirmationFromEvent(existing, result, options.expectedSize, this.confirmationBand());
 
     return await new Promise<VenueConfirmationResult>((resolve) => {
       const pending: PendingConfirmation = {
@@ -296,6 +304,14 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     return this.options.now?.() ?? Date.now();
   }
 
+  // The overfill band applied to confirmation CLASSIFICATION (whether a fill confirms vs. mismatches).
+  // Off by default so classification stays strict-exact; when enabled it reuses the same band the
+  // lock-suppression path (lockOnUnsafeEvent) already honors, so an in-band FAK over-hedge confirms
+  // cleanly instead of being reported as a mismatch the executor then quarantines.
+  private confirmationBand(): number {
+    return this.options.confirmationOverfillTolerant ? Math.max(0, this.options.overfillToleranceShares ?? 0) : 0;
+  }
+
   private async handleEvent(event: VenueOrderEventInput): Promise<void> {
     this.recentEvents.push(event);
     while (this.recentEvents.length > 500) this.recentEvents.shift();
@@ -306,7 +322,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       matchedPending = true;
       clearTimeout(pending.timeout);
       this.pending.delete(pending);
-      const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize);
+      const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize, this.confirmationBand());
       // Record the executor's REST-confirmed fill (pending.result.fillCount) as the order's reconciled fill,
       // so LATER stream events for the same order (partials or duplicates AT OR BELOW it) are recognized as
       // already-accounted and do not re-lock; a later event revealing MORE still locks.

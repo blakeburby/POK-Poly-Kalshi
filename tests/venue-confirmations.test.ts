@@ -666,6 +666,90 @@ test("confirmation coordinator STILL locks on a stray sub-expected fill on an un
   assert.match(locks.lock?.reason ?? "", /fill mismatch 0.05\/5/);
 });
 
+function classificationCoordinator(opts: { confirmationOverfillTolerant?: boolean; overfillToleranceShares?: number }) {
+  const hub = new VenueOrderEventHub(new MemoryEventStore());
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    flatMissNonBlocking: true,
+    overfillToleranceShares: opts.overfillToleranceShares,
+    confirmationOverfillTolerant: opts.confirmationOverfillTolerant,
+    now: () => 1_800_000_000_200,
+  });
+  return { hub, coordinator };
+}
+
+test("P0: an in-band overfill CONFIRMS (not mismatch) when confirmationOverfillTolerant is on", async () => {
+  const { hub, coordinator } = classificationCoordinator({ confirmationOverfillTolerant: true, overfillToleranceShares: 1 });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  // Polymarket FAK over-hedged to 5.162 (within [5, 6]); the Kalshi integer floor-hedge already covers the
+  // 5 whole shares. This is a near-complete two-sided fill, so it must CONFIRM — not report a mismatch the
+  // executor then quarantines and books as a failure.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.162 });
+  const confirmation = await pending;
+
+  assert.equal(confirmation.status, "confirmed");
+  assert.equal(confirmation.reason, null);
+  assert.equal(confirmation.fillCount, 5.162); // fill reported verbatim for exposure accounting
+});
+
+test("P0: the SAME in-band overfill stays a mismatch when the flag is OFF (byte-identical default)", async () => {
+  const { hub, coordinator } = classificationCoordinator({ overfillToleranceShares: 1 });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.162 });
+  const confirmation = await pending;
+
+  assert.equal(confirmation.status, "mismatch");
+  assert.match(confirmation.reason ?? "", /filled 5.162 shares for expected size 5/);
+});
+
+test("P0: an UNDERFILL still mismatches even when confirmationOverfillTolerant is on", async () => {
+  const { hub, coordinator } = classificationCoordinator({ confirmationOverfillTolerant: true, overfillToleranceShares: 1 });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  // Below the expected size -> a genuine underfill, never tolerated by the overfill band.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 4 });
+  const confirmation = await pending;
+
+  assert.equal(confirmation.status, "mismatch");
+});
+
+test("P0: an overfill BEYOND the band still mismatches even when confirmationOverfillTolerant is on", async () => {
+  const { hub, coordinator } = classificationCoordinator({ confirmationOverfillTolerant: true, overfillToleranceShares: 1 });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  // 6.5 > size + band (6) -> materially too large -> still a mismatch on the classification path too.
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 6.5 });
+  const confirmation = await pending;
+
+  assert.equal(confirmation.status, "mismatch");
+});
+
 test("confirmation coordinator blocks preflight when reconciliation is dirty", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);

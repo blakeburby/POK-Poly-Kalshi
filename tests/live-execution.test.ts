@@ -116,6 +116,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveKalshiMinCashDollars: 0,
     liveQuoteMaxAgeMs: 750,
     livePolymarketQuoteMaxAgeMs: 750,
+    liveHedgeQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
     liveMinBookDepthShares: 1,
     liveMinExecutableLiquidityShares: 0,
@@ -157,6 +158,8 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveAutoResolveVerifiedIncidents: true,
     liveAutoHardlocksEnabled: true,
     liveConfirmationFlatMissNonBlocking: true,
+    liveConfirmationOverfillTolerant: false,
+    liveConfirmationAcceptRestEvidence: false,
     liveExactExposureRequired: false,
     liveExecutionQualityGateEnabled: true,
     liveExecutionQualityLookbackMs: 30 * 60 * 1_000,
@@ -3059,6 +3062,10 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).livePolymarketQuoteMaxAgeMs, 750); // default = general bar (inert)
   assert.equal(loadConfig({ LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "300" }).livePolymarketQuoteMaxAgeMs, 300);
   assert.equal(loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "600", LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "900" }).livePolymarketQuoteMaxAgeMs, 600); // clamped: never looser than general bar
+  // P3: the hedge (second leg) quote bound can only LOOSEN the general bar (default = inert).
+  assert.equal(loadConfig({}).liveHedgeQuoteMaxAgeMs, 750);
+  assert.equal(loadConfig({ LIVE_HEDGE_QUOTE_MAX_AGE_MS: "2000" }).liveHedgeQuoteMaxAgeMs, 2000);
+  assert.equal(loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "750", LIVE_HEDGE_QUOTE_MAX_AGE_MS: "300" }).liveHedgeQuoteMaxAgeMs, 750); // clamped: never tighter than general bar
   assert.equal(loadConfig({}).liveHedgeMinCrossTicks, 2);
   assert.equal(loadConfig({}).liveHedgeMaxLossDollars, 0.03); // max(0.03 default, 0.01 + 2*0.01)
   assert.equal(loadConfig({ LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.01" }).liveHedgeMaxLossDollars, 0.03); // floor still applies
@@ -3456,6 +3463,57 @@ test("live executor uses parallel_fak and audits fractional Polymarket fills wit
   const readiness = await executor.readiness(now);
   assert.equal(readiness.riskState, "auto_hardlocks_disabled");
   assert.equal(readiness.partialFillLocked, false);
+});
+
+test("P0: an in-band Polymarket overfill classifies as a clean FILLED pair when liveConfirmationOverfillTolerant is on", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 5, fillPrice: 0.16 });
+  const polymarket = new FakeVenueClient("polymarket", {
+    status: "unexpected_fill_count",
+    fillCount: 5.128204,
+    fillPrice: 0.78,
+    metadata: {
+      orderPlacementMode: "parallel_fak",
+      polymarketOrderType: OrderType.FAK,
+      polymarketRequestedSpend: 4,
+      polymarketWorstPrice: 0.8,
+      polymarketTakingAmount: 5.128204,
+      polymarketMakingAmount: 4,
+    },
+  });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      // band = max(0, max - size) = max(0, 6 - 5) = 1.0 share, covering the 0.128 over-hedge.
+      livePolymarketFirstMaxFillShares: 6,
+      liveParallelExecutionEnabled: true,
+      liveOrderPlacementMode: "parallel_fak",
+      liveConfirmationOverfillTolerant: true,
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  // Same overfill the strict path books as a failed/partial/quarantine is now the completed hedged pair it
+  // actually is: Kalshi 5 + Polymarket ~5.13 (the integer floor-hedge covers 5; the sub-share residual is
+  // the bounded, intended FAK over-hedge). Fill count is preserved verbatim for venue-truth accounting.
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.liveLockReason ?? null, null);
+  assert.equal(result.polymarketFillCount, 5.128204);
+  assert.equal(result.kalshiFillCount, 5);
+  assert.equal(locks.engageCalls, 0);
 });
 
 test("live executor uses polymarket_first_exact and submits Kalshi after Polymarket fill is inside configured range", async () => {
@@ -5600,6 +5658,45 @@ test("live executor locks when private stream confirmation times out", async () 
   assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(locks.engageCalls, 1);
   assert.match((await locks.getActiveLock())?.reason ?? "", /private stream confirmation timeout/);
+});
+
+test("P1: a confirmation timeout does NOT lock when REST already evidenced both fills (accept REST evidence); flag-off restores the lock", async () => {
+  const now = 1_799_999_900_000;
+  const run = async (acceptRestEvidence: boolean) => {
+    const { candidate, lower, higher } = liveCandidate(now);
+    const books = new BookStore();
+    books.setPolymarketContracts([lower]);
+    books.setKalshiContracts([higher]);
+    const locks = new FakeLiveLockStore();
+    const monitor = new FakeConfirmationMonitor();
+    // Both legs FILLED via the REST order response, but the private user stream is slow and the
+    // confirmation times out — the ~half of timeouts that actually completed both legs.
+    monitor.resultStatus = "timeout";
+    const executor = new LiveExecutor(
+      config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveConfirmationAcceptRestEvidence: acceptRestEvidence }),
+      books,
+      new FakeVenueClient("kalshi"),
+      new FakeVenueClient("polymarket"),
+      () => now,
+      locks,
+      undefined,
+      monitor,
+    );
+    const result = await executor.execute(candidate);
+    return { result, engageCalls: locks.engageCalls };
+  };
+
+  // Flag ON: the order responses confirm the fills, so a slow stream is not unconfirmed exposure -> filled.
+  const on = await run(true);
+  assert.equal(on.result.action, "filled");
+  assert.equal(on.result.liveLockReason ?? null, null);
+  assert.equal(on.engageCalls, 0);
+
+  // Flag OFF (default): a confirmation timeout still engages the breaker (today's behavior).
+  const off = await run(false);
+  assert.equal(off.result.action, "failed");
+  assert.match(off.result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(off.engageCalls, 1);
 });
 
 test("stream confirmation timeout does NOT lock when both legs are definitively flat (zero exposure); flag-off restores the lock", async () => {

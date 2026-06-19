@@ -58,6 +58,7 @@ export interface AppConfig {
   liveKalshiMinCashDollars: number;
   liveQuoteMaxAgeMs: number;
   livePolymarketQuoteMaxAgeMs: number;
+  liveHedgeQuoteMaxAgeMs: number;
   liveQuoteSyncMaxSkewMs: number;
   liveMinBookDepthShares: number;
   // Default-inert anti-dust guards (0 = off) that make a future LIVE_ORDER_SIZE cut safe: require N
@@ -99,6 +100,8 @@ export interface AppConfig {
   liveAutoResolveVerifiedIncidents: boolean;
   liveAutoHardlocksEnabled: boolean;
   liveConfirmationFlatMissNonBlocking: boolean;
+  liveConfirmationOverfillTolerant: boolean;
+  liveConfirmationAcceptRestEvidence: boolean;
   liveExactExposureRequired: boolean;
   liveExecutionQualityGateEnabled: boolean;
   liveExecutionQualityLookbackMs: number;
@@ -309,6 +312,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
       Math.max(1, envNumber(env, "LIVE_POLYMARKET_QUOTE_MAX_AGE_MS", envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750))),
     ),
+    // P3: optional LOOSER freshness bound for the second (hedge) leg only. The first (committing) leg has
+    // already filled by the time the hedge is priced, so rejecting the hedge on a slightly-stale hedge quote
+    // strands the filled leg one-sided. A looser hedge bound submits the FOK hedge anyway (the hedge-cap
+    // price check still bounds loss; a moved book simply kills the FOK cleanly). Clamped to >= the general
+    // bar so it can only loosen, never tighten. Default = the general bar (inert / byte-identical).
+    liveHedgeQuoteMaxAgeMs: Math.max(
+      envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750),
+      envNumber(env, "LIVE_HEDGE_QUOTE_MAX_AGE_MS", envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750)),
+    ),
     liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
     liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", 10),
     liveMinExecutableLiquidityShares: Math.max(0, envNumber(env, "LIVE_MIN_EXECUTABLE_LIQUIDITY_SHARES", 0)),
@@ -347,6 +359,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveAutoResolveVerifiedIncidents: envBoolean(env, "LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS", true),
     liveAutoHardlocksEnabled: envBoolean(env, "LIVE_AUTO_HARDLOCKS_ENABLED", true),
     liveConfirmationFlatMissNonBlocking: envBoolean(env, "LIVE_CONFIRMATION_FLAT_MISS_NONBLOCKING", true),
+    // When true, a Polymarket FAK fill within the operator's overfill band
+    // ([liveOrderSize, livePolymarketFirstMaxFillShares]) is classified as a clean two-sided fill
+    // instead of an unexpected_fill_count mismatch/quarantine. The Kalshi integer floor-hedge already
+    // covers the whole-share portion; the sub-share residual is the intended, bounded FAK over-hedge.
+    // Default off = byte-identical strict-exact classification (the 1e-6 mismatch behavior).
+    liveConfirmationOverfillTolerant: envBoolean(env, "LIVE_CONFIRMATION_OVERFILL_TOLERANT", false),
+    // When true, a private-stream confirmation TIMEOUT on a venue whose REST order response already
+    // evidenced the fill (error-free, fillCount > 0) is NOT treated as unconfirmed exposure: the order
+    // response itself confirms the fill, and a genuine late surplus still locks via the coordinator's
+    // knownOrder reconciliation. Recovers the ~half of confirmation timeouts that actually filled both legs.
+    // Default off = a stream timeout still quarantines (today's behavior).
+    liveConfirmationAcceptRestEvidence: envBoolean(env, "LIVE_CONFIRM_ACCEPT_REST_EVIDENCE", false),
     liveExactExposureRequired: envBoolean(env, "LIVE_EXACT_EXPOSURE_REQUIRED", false),
     liveExecutionQualityGateEnabled: envBoolean(env, "LIVE_EXECUTION_QUALITY_GATE_ENABLED", true),
     liveExecutionQualityLookbackMs: envNumber(env, "LIVE_EXECUTION_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),

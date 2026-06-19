@@ -1348,8 +1348,8 @@ export class LiveExecutor implements ArbExecutor {
     const evaluation = evaluateLiveQuoteQuality(candidate, this.liveBooksForPreflight(kalshiLeg, polymarketLeg), this.config, now);
     const hedgeQuote = hedgeLeg.venue === "kalshi" ? evaluation.snapshot.kalshi : evaluation.snapshot.polymarket;
     if (!hedgeQuote) return `${hedgeVenue} quote missing for hedge`;
-    if (hedgeQuote.quoteAgeMs != null && hedgeQuote.quoteAgeMs > this.config.liveQuoteMaxAgeMs) {
-      return `${hedgeVenue} hedge quote is stale: age ${hedgeQuote.quoteAgeMs}ms exceeds ${this.config.liveQuoteMaxAgeMs}ms`;
+    if (hedgeQuote.quoteAgeMs != null && hedgeQuote.quoteAgeMs > this.config.liveHedgeQuoteMaxAgeMs) {
+      return `${hedgeVenue} hedge quote is stale: age ${hedgeQuote.quoteAgeMs}ms exceeds ${this.config.liveHedgeQuoteMaxAgeMs}ms`;
     }
     if (hedgeQuote.topAsk == null) return `${hedgeVenue} hedge ask is unavailable`;
     if (hedgeQuote.worstAsk == null || hedgeQuote.vwap == null) {
@@ -1643,10 +1643,21 @@ export class LiveExecutor implements ArbExecutor {
     return failed(`live preflight blocked before order submission: ${reason}`);
   }
 
+  // Overfill band applied to fill CLASSIFICATION (whether a leg counts as a clean fill and whether the two
+  // legs' fill counts are treated as matched). Off by default (band 0) -> strict-exact behavior; when
+  // LIVE_CONFIRMATION_OVERFILL_TOLERANT is set it reuses the operator's floor-hedge band so a Polymarket
+  // FAK over-hedge within [liveOrderSize, livePolymarketFirstMaxFillShares] is a filled leg, not a partial.
+  private confirmationOverfillBand(): number {
+    return this.config.liveConfirmationOverfillTolerant
+      ? Math.max(0, this.config.livePolymarketFirstMaxFillShares - this.config.liveOrderSize)
+      : 0;
+  }
+
   private isExactVenueFill(result: VenueOrderResult): boolean {
+    const band = this.confirmationOverfillBand();
     return !result.error
       && (result.fillCount ?? 0) >= this.config.liveOrderSize
-      && Math.abs((result.fillCount ?? 0) - this.config.liveOrderSize) <= 0.000001;
+      && (result.fillCount ?? 0) - this.config.liveOrderSize <= band + 0.000001;
   }
 
   private polymarketFirstFillRangeLabel(): string {
@@ -2158,7 +2169,11 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketHasFill = polymarketFillCount > 0;
     const hasAnyFill = kalshiHasFill || polymarketHasFill;
     const unexpectedFillCount = (kalshiHasFill && !kalshiFilled) || (polymarketHasFill && !polymarketFilled);
-    const fillCountMismatch = kalshiHasFill && polymarketHasFill && Math.abs(kalshiFillCount - polymarketFillCount) > 0.000001;
+    // The Kalshi integer floor-hedge deliberately fills floor(polymarketFill); a Polymarket in-band
+    // overfill therefore leaves a bounded sub-share gap that is NOT a true two-sided mismatch. Tolerate up
+    // to the overfill band (0 when the flag is off -> strict |kalshi - polymarket| > eps as before).
+    const fillCountMismatch = kalshiHasFill && polymarketHasFill
+      && Math.abs(kalshiFillCount - polymarketFillCount) > this.confirmationOverfillBand() + 0.000001;
     const partialFill = kalshiFilled !== polymarketFilled || unexpectedFillCount || fillCountMismatch;
     const realizedGuaranteedProfit = kalshi.fillPrice != null && polymarket.fillPrice != null
       ? roundPrice(1 - (kalshi.fillPrice + polymarket.fillPrice + this.realizedFeePerSpread(kalshi, polymarket)))
@@ -2204,7 +2219,7 @@ export class LiveExecutor implements ArbExecutor {
       && isDefinitiveNoFill(polymarket);
     const initialLiveLockReason = autoUnwindFlattened || provablyNoExposure
       ? null
-      : this.confirmationLockReason(metadata.venueConfirmations)
+      : this.confirmationLockReason(metadata.venueConfirmations, { kalshi, polymarket })
         ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
     const riskQuarantine = autoUnwindFlattened || provablyNoExposure
       ? null
@@ -2441,12 +2456,24 @@ export class LiveExecutor implements ArbExecutor {
     return totalFees / filledSize;
   }
 
-  private confirmationLockReason(confirmations: VenueConfirmations | null | undefined): string | null {
+  private confirmationLockReason(
+    confirmations: VenueConfirmations | null | undefined,
+    restResults?: Partial<Record<Venue, VenueOrderResult>>,
+  ): string | null {
     for (const venue of ["kalshi", "polymarket"] as const) {
       const confirmation = confirmations?.[venue];
       if (!confirmation || typeof confirmation !== "object") continue;
       const status = String((confirmation as Record<string, unknown>).status ?? "");
       const reason = (confirmation as Record<string, unknown>).reason;
+      // P1: a private-stream confirmation TIMEOUT is unconfirmed exposure ONLY if the venue's own order
+      // response did not already evidence the fill. When the REST result is error-free with a positive
+      // fillCount, the fill IS confirmed (the order response is authoritative); the slow stream event
+      // reconciles asynchronously via the coordinator's knownOrder path (which still locks a genuine late
+      // surplus). mismatch/failed are positive problem evidence and always lock. Gated, default off.
+      if (status === "timeout" && this.config.liveConfirmationAcceptRestEvidence) {
+        const rest = restResults?.[venue];
+        if (rest && rest.error == null && (rest.fillCount ?? 0) > 0) continue;
+      }
       if (["timeout", "mismatch", "failed"].includes(status)) {
         return `live safety lock engaged: ${venue} private stream confirmation ${status}${typeof reason === "string" && reason ? `: ${reason}` : ""}`;
       }

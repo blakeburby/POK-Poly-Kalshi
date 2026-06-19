@@ -122,6 +122,9 @@ async function main(): Promise<void> {
     // Floor-hedge band: a Polymarket fractional overfill up to this many shares over the order size is
     // hedged + cap-quarantined by the executor (T1.1), not a circuit-breaker event.
     overfillToleranceShares: Math.max(0, config.livePolymarketFirstMaxFillShares - config.liveOrderSize),
+    // When on, the same band also makes an in-band overfill CONFIRM (not mismatch) so a near-complete
+    // hedged fill is classified as filled instead of quarantined. Off by default (strict-exact).
+    confirmationOverfillTolerant: config.liveConfirmationOverfillTolerant,
     allowUnresolvedRisk: !config.liveAutoHardlocksEnabled,
     liveLocks,
     now: Date.now,
