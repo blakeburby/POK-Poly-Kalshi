@@ -10,6 +10,7 @@
     "dev:dashboard": "next dev",
     "migrate": "tsx src/migrate.ts",
     "fill-quality:calibrate": "tsx scripts/fill-quality-calibrate.ts",
+    "fee-aware-gate:calibrate": "tsx scripts/fee-aware-gate-calibrate.ts",
     "lead-lag:calibrate": "tsx scripts/lead-lag-calibrate.ts",
     "worker": "tsx src/index.ts",
     "test": "node --import tsx --test --test-isolation=none tests/*.test.ts tests/*.test.tsx",
