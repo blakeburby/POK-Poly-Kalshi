@@ -165,6 +165,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveConfirmationFlatMissNonBlocking: true,
     liveConfirmationOverfillTolerant: false,
     liveConfirmationAcceptRestEvidence: false,
+    livePolymarketTimeoutRecoveryResolvesNoFill: false,
     liveExactExposureRequired: false,
     liveExecutionQualityGateEnabled: true,
     liveExecutionQualityLookbackMs: 30 * 60 * 1_000,
@@ -5744,6 +5745,55 @@ test("P1: a confirmation timeout does NOT lock when REST already evidenced both 
   // Flag OFF (default): a confirmation timeout still engages the breaker (today's behavior).
   const off = await run(false);
   assert.equal(off.result.action, "failed");
+  assert.match(off.result.liveLockReason ?? "", /private stream confirmation timeout/);
+  assert.equal(off.engageCalls, 1);
+});
+
+test("P1-gap: a FAK no-fill timeout that recovery verified (not_found) does NOT lock when resolved; flag-off restores the lock (lock-24)", async () => {
+  const now = 1_799_999_900_000;
+  const run = async (resolvesNoFill: boolean) => {
+    const { candidate, lower, higher } = liveCandidate(now);
+    const books = new BookStore();
+    books.setPolymarketContracts([lower]);
+    books.setKalshiContracts([higher]);
+    const locks = new FakeLiveLockStore();
+    const monitor = new FakeConfirmationMonitor();
+    monitor.resultStatus = "timeout"; // private stream never confirms (the lock-24 trigger)
+    const executor = new LiveExecutor(
+      config({
+        liveOrderSize: 5,
+        liveUserStreamsEnabled: true,
+        liveOrderPlacementMode: "polymarket_first_exact",
+        liveConfirmationFlatMissNonBlocking: true,
+        livePolymarketTimeoutRecoveryResolvesNoFill: resolvesNoFill,
+      }),
+      books,
+      new FakeVenueClient("kalshi"), // hedge never submitted (Polymarket gave no in-range fill)
+      // Polymarket FAK timed out ("unknown"); recovery reached the venue and found nothing -> not_found.
+      new FakeVenueClient("polymarket", {
+        status: "unknown",
+        fillCount: 0,
+        fillPrice: null,
+        error: "polymarket FAK postOrder failed: timeout of 2500ms exceeded",
+        metadata: { polymarketOrderType: "FAK", polymarketTimeoutRecoveryAttempted: true, polymarketTimeoutRecoveryStatus: "not_found" },
+      }),
+      () => now,
+      locks,
+      undefined,
+      monitor,
+    );
+    const result = await executor.execute(candidate);
+    return { result, engageCalls: locks.engageCalls };
+  };
+
+  // Flag ON: a FAK cannot rest, and recovery confirmed no order/trade/open-order -> definitively no fill ->
+  // both legs provably flat -> no hard-lock (auto-resolves instead of requiring manual reconciliation).
+  const on = await run(true);
+  assert.equal(on.result.liveLockReason ?? null, null);
+  assert.equal(on.engageCalls, 0);
+
+  // Flag OFF (default): "unknown" stays ambiguous -> hard-lock for reconciliation (today's lock-24 behavior).
+  const off = await run(false);
   assert.match(off.result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(off.engageCalls, 1);
 });

@@ -87,6 +87,20 @@ function isDefinitiveNoFill(result: VenueOrderResult): boolean {
   return ["failed", "rejected", "canceled", "cancelled", "unfilled", "not_submitted", "skipped"].includes(status);
 }
 
+// A Polymarket "unknown" (ambiguous order timeout) that the timeout-recovery poll DEFINITIVELY resolved to
+// no-fill: the venue was reachable (recovery status "not_found", not "query_failed") and found no order, no
+// trade and no open order, AND the order was a FAK (which cannot rest, so "no evidence" == "no fill" with no
+// hidden pending state). Treated as a definitive no-fill so a settled no-fill timeout auto-resolves instead
+// of hard-locking for manual reconciliation (the lock-24 gap). Gated by
+// livePolymarketTimeoutRecoveryResolvesNoFill (default off -> "unknown" stays locked, byte-identical).
+function isVerifiedNoFillAfterRecovery(result: VenueOrderResult, config: AppConfig): boolean {
+  if (!config.livePolymarketTimeoutRecoveryResolvesNoFill) return false;
+  if (result.venue !== "polymarket") return false;
+  if ((result.fillCount ?? 0) > 0) return false;
+  const meta = result.metadata ?? {};
+  return meta.polymarketTimeoutRecoveryStatus === "not_found" && meta.polymarketOrderType === "FAK";
+}
+
 function isUserStreamPreflightReason(reason: string): boolean {
   const normalized = reason.toLowerCase();
   const mentionsUserStream = normalized.includes("user stream") || normalized.includes("user subscription");
@@ -2254,8 +2268,8 @@ export class LiveExecutor implements ArbExecutor {
     // miss. Any fill, size mismatch, or ambiguous (unknown/order-timeout) result is NOT provably flat and
     // still locks for reconciliation. Reversible via LIVE_CONFIRMATION_FLAT_MISS_NONBLOCKING.
     const provablyNoExposure = this.config.liveConfirmationFlatMissNonBlocking
-      && isDefinitiveNoFill(kalshi)
-      && isDefinitiveNoFill(polymarket);
+      && (isDefinitiveNoFill(kalshi) || isVerifiedNoFillAfterRecovery(kalshi, this.config))
+      && (isDefinitiveNoFill(polymarket) || isVerifiedNoFillAfterRecovery(polymarket, this.config));
     const initialLiveLockReason = autoUnwindFlattened || provablyNoExposure
       ? null
       : this.confirmationLockReason(metadata.venueConfirmations, { kalshi, polymarket })

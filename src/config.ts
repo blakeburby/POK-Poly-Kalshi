@@ -107,6 +107,7 @@ export interface AppConfig {
   liveConfirmationFlatMissNonBlocking: boolean;
   liveConfirmationOverfillTolerant: boolean;
   liveConfirmationAcceptRestEvidence: boolean;
+  livePolymarketTimeoutRecoveryResolvesNoFill: boolean;
   liveExactExposureRequired: boolean;
   liveExecutionQualityGateEnabled: boolean;
   liveExecutionQualityLookbackMs: number;
@@ -399,6 +400,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // knownOrder reconciliation. Recovers the ~half of confirmation timeouts that actually filled both legs.
     // Default off = a stream timeout still quarantines (today's behavior).
     liveConfirmationAcceptRestEvidence: envBoolean(env, "LIVE_CONFIRM_ACCEPT_REST_EVIDENCE", false),
+    // When true, a Polymarket FAK order that times out (status "unknown") but whose timeout-recovery poll
+    // reached the venue and found NO order/trade/open-order ("not_found") is treated as a DEFINITIVE no-fill
+    // (a FAK cannot rest, so no evidence == no fill). This auto-resolves settled no-fill timeouts that would
+    // otherwise hard-lock for manual reconciliation (the lock-24 gap). Default off = "unknown" stays locked.
+    livePolymarketTimeoutRecoveryResolvesNoFill: envBoolean(env, "LIVE_POLYMARKET_TIMEOUT_RECOVERY_RESOLVES_NO_FILL", false),
     liveExactExposureRequired: envBoolean(env, "LIVE_EXACT_EXPOSURE_REQUIRED", false),
     liveExecutionQualityGateEnabled: envBoolean(env, "LIVE_EXECUTION_QUALITY_GATE_ENABLED", true),
     liveExecutionQualityLookbackMs: envNumber(env, "LIVE_EXECUTION_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),
