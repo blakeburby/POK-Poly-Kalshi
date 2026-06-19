@@ -90,6 +90,15 @@ export function depthWeightedAsk(levels: BookLevel[], size: number): DepthVwapRe
   };
 }
 
+// Expected Kalshi taker fee PER SHARE at an executed price. Kalshi charges ceil(0.07 * C * P * (1-P)) per
+// fill (C contracts, P price); per share that is ~0.07 * P * (1-P), peaking ~$0.0175 at P=0.5 and ~0 at the
+// tails. This is the pre-trade ESTIMATE the fee-aware gate subtracts; the POST-fill realized accounting uses
+// the venue-reported actual fee (executor.ts realizedFeePerSpread). Polymarket CLOB taker fee is ~0.
+export function expectedKalshiFeePerShare(price: number | null | undefined): number {
+  if (price == null || !finite(price) || price <= 0 || price >= 1) return 0;
+  return 0.07 * price * (1 - price);
+}
+
 // Sum of genuine ask contracts priced within `bandCents` of the best ask. Used by the default-inert
 // anti-dust guard so a single-lot phantom/stale top-of-book quote (real depth only far above the band)
 // cannot qualify even when LIVE_ORDER_SIZE is small. Reuses the same validity filter as depthWeightedAsk.
@@ -258,7 +267,15 @@ export function evaluateLiveQuoteQuality(
     ? roundPrice(kalshi.maxBuyPrice + polymarket.maxBuyPrice)
     : null;
   const projectedEdgeAtLimit = projectedPremiumAtLimit == null ? null : roundPrice(1 - projectedPremiumAtLimit);
-  const projectedEdgeAfterFees = projectedEdgeAtLimit;
+  // Fee-aware gate (flag-gated): subtract the expected Kalshi taker fee, priced at the Kalshi leg VWAP (the
+  // expected fill price, matching the realized per-share fee basis). Polymarket CLOB fee ~0. When the flag
+  // is off the fee term is null and projectedEdgeAfterFees == projectedEdgeAtLimit (byte-identical).
+  const expectedKalshiFee = config.liveFeeAwareGateEnabled
+    ? roundPrice(expectedKalshiFeePerShare(kalshi.snapshot?.vwap ?? null))
+    : null;
+  const projectedEdgeAfterFees = projectedEdgeAtLimit == null
+    ? null
+    : roundPrice(projectedEdgeAtLimit - (expectedKalshiFee ?? 0));
   if (!failureReason && projectedEdgeAfterFees != null && projectedEdgeAfterFees + 1e-9 < config.minProfitDollars) {
     failureReason = `${CUSHIONED_EDGE_REASON_PREFIX} ${projectedEdgeAfterFees.toFixed(4)} below threshold ${config.minProfitDollars.toFixed(4)}`;
   }
@@ -274,6 +291,7 @@ export function evaluateLiveQuoteQuality(
     projectedEdgeAtLimit,
     projectedEdgeAfterFees,
     takerPriceCushionCents: Math.max(0, config.liveTakerPriceCushionCents),
+    expectedKalshiFeePerShare: expectedKalshiFee,
     kalshiMaxBuyPrice: kalshi.maxBuyPrice,
     polymarketMaxBuyPrice: polymarket.maxBuyPrice,
     minProfitDollars: config.minProfitDollars,

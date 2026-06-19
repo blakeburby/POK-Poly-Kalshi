@@ -51,6 +51,7 @@ export interface AppConfig {
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
   liveTakerPriceCushionCents: number;
+  liveFeeAwareGateEnabled: boolean;
   livePolymarketFirstCrossCents: number;
   liveMinExpiryMs: number;
   liveMaxTradesPerWindow: number;
@@ -294,6 +295,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK",
     liveOrderSize,
     liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
+    // When true, the entry gate subtracts an explicit expected Kalshi taker fee (~0.07*p*(1-p) per share,
+    // the same model realizedFeePerSpread measures post-fill) from the cushioned edge, so the taker cushion
+    // only has to cover latency/slippage — which lets LIVE_TAKER_PRICE_CUSHION_CENTS be cut safely. Default
+    // off = the cushion-only edge (projectedEdgeAfterFees == projectedEdgeAtLimit), byte-identical to today.
+    liveFeeAwareGateEnabled: envBoolean(env, "LIVE_FEE_AWARE_GATE_ENABLED", false),
     // P1-5: extra marketable offset (cents) applied ONLY to the Polymarket first-leg FAK limit in
     // polymarket_first_exact, so the order crosses 1-2 ticks of post-quote book movement instead of
     // missing. Default 0 = inert (build-but-disabled until Kalshi is funded; see RUNBOOK). The

@@ -176,6 +176,9 @@ export interface QuoteSnapshot {
   projectedEdgeAtLimit?: number | null;
   projectedEdgeAfterFees: number | null;
   takerPriceCushionCents?: number | null;
+  // Expected Kalshi taker fee per share subtracted from the edge when the fee-aware gate is on
+  // (undefined/null when off). Observability for calibration; not read by the trading path.
+  expectedKalshiFeePerShare?: number | null;
   kalshiMaxBuyPrice?: number | null;
   polymarketMaxBuyPrice?: number | null;
   minProfitDollars: number;

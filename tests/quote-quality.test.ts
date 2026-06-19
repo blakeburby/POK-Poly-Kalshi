@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config";
-import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder } from "../src/execution/quote-quality";
+import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder, expectedKalshiFeePerShare } from "../src/execution/quote-quality";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { AppConfig } from "../src/config";
 import type { BinaryContract } from "../src/types";
@@ -217,6 +217,46 @@ test("live quote quality gates on cushioned executable edge and applies cushion 
   assert.equal(rawNineCentEdge.snapshot.projectedEdgeAfterFees, 0.05);
   assert.equal(rawNineCentEdge.kalshiMaxBuyPrice, 0.53);
   assert.equal(rawNineCentEdge.polymarketMaxBuyPrice, 0.42);
+});
+
+test("W1: expectedKalshiFeePerShare models the venue fee (~0.07*p*(1-p), 0 at the tails)", () => {
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ~= ${b}`);
+  near(expectedKalshiFeePerShare(0.5), 0.0175); // peak
+  near(expectedKalshiFeePerShare(0.51), 0.07 * 0.51 * 0.49);
+  near(expectedKalshiFeePerShare(0.9), 0.0063); // small at the tails
+  assert.equal(expectedKalshiFeePerShare(0), 0);
+  assert.equal(expectedKalshiFeePerShare(1), 0);
+  assert.equal(expectedKalshiFeePerShare(null), 0);
+});
+
+test("W1: fee-aware gate subtracts the expected Kalshi fee from the edge; byte-identical when off", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({
+    venue: "polymarket", contractId: "poly", strike: 1500,
+    yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }], yesTokenId: "yes-token", updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi", contractId: "kalshi", strike: 1502,
+    noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 5 }], updatedAt: now,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+
+  // Flag OFF (default): cushioned edge = 1 - (0.42 + 0.53) = 0.05, no fee term -> passes the 0.05 gate.
+  const off = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveTakerPriceCushionCents: 2 }), now);
+  assert.equal(off.snapshot.projectedEdgeAtLimit, 0.05);
+  assert.equal(off.snapshot.projectedEdgeAfterFees, 0.05); // == edge-at-limit (byte-identical)
+  assert.equal(off.snapshot.expectedKalshiFeePerShare ?? null, null);
+  assert.equal(off.ok, true);
+
+  // Flag ON: subtract expectedKalshiFee(kalshiVwap 0.51)=0.0175 -> after-fee edge 0.0325 < 0.05 -> correctly
+  // rejected (the trade was only "profitable" because the old gate ignored fees).
+  const on = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveTakerPriceCushionCents: 2, liveFeeAwareGateEnabled: true }), now);
+  assert.equal(on.snapshot.projectedEdgeAtLimit, 0.05);
+  assert.equal(on.snapshot.expectedKalshiFeePerShare, 0.0175);
+  assert.equal(on.snapshot.projectedEdgeAfterFees, 0.0325);
+  assert.equal(on.ok, false);
+  assert.match(on.reason ?? "", /cushioned executable edge 0.0325 below threshold 0.0500/);
 });
 
 test("first-leg cross offset (P1-5) deepens only the Polymarket limit and the edge gate still binds", () => {

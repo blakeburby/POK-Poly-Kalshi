@@ -110,6 +110,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
     liveTakerPriceCushionCents: 2,
+    liveFeeAwareGateEnabled: false,
     liveMinExpiryMs: 30_000,
     liveMaxTradesPerWindow: 3,
     liveCollateralBufferDollars: 0.25,
