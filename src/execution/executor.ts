@@ -18,7 +18,7 @@ import {
 import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
 import { fillQualityBlockReason, scoreFillQuality } from "./fill-quality";
-import { evaluateLiveQuoteQuality, captureShadowLadder, CUSHIONED_EDGE_REASON_PREFIX } from "./quote-quality";
+import { evaluateLiveQuoteQuality, captureShadowLadder, CUSHIONED_EDGE_REASON_PREFIX, selectExecutableSize } from "./quote-quality";
 import { leadLagBlockReason, scoreLeadLag, type LeadLagHistory } from "../signals/lead-lag";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
 
@@ -145,6 +145,9 @@ interface PreparedExecution {
   kalshi: PreparedLeg;
   polymarket: PreparedLeg;
   quoteSnapshot: QuoteSnapshot;
+  // W2: the size selected for THIS execution. Equals config.liveOrderSize when dynamic sizing is off, so
+  // every consumer (order sizes, collateral, fill classification, hedge-trigger range) is byte-identical.
+  orderSize: number;
 }
 
 // prepareExecution returns this on a reject instead of a bare string, so the below-threshold-edge skip
@@ -258,6 +261,12 @@ function emptyVenueReadiness(reason: string, now: number): VenueExecutionReadine
 
 export class LiveExecutor implements ArbExecutor {
   private partialFillLocked = false;
+  // W2: the order size selected for the CURRENTLY-executing candidate (null between executions). Set once
+  // per executeOnce after prepareExecution and read by the fill-classification + hedge-trigger helpers, so
+  // a dynamically-sized fill (e.g. 20) is classified against 20, not the static config size. Safe because
+  // ARB_EXECUTION_CONCURRENCY=1 serializes executeOnce (loadConfig refuses dynamic sizing at concurrency>1).
+  // Falls back to config.liveOrderSize, so when dynamic sizing is off every read is byte-identical.
+  private executionOrderSize: number | null = null;
   private lastAttempt: LiveExecutionLastAttempt | null = null;
 
   constructor(
@@ -426,6 +435,9 @@ export class LiveExecutor implements ArbExecutor {
 
   private async executeOnce(candidate: ArbCandidate): Promise<ExecutionResult> {
     const executeStartedAt = this.now();
+    // W2: reset the per-execution size; until prepareExecution sets it the helpers fall back to
+    // config.liveOrderSize. ARB_EXECUTION_CONCURRENCY=1 serializes executeOnce, so this single field is safe.
+    this.executionOrderSize = null;
     const hotGateStartedAt = executeStartedAt;
     const guardFailure = protectedGuardFailure(candidate, this.config.minProfitDollars);
     if (guardFailure) return guardFailure;
@@ -452,6 +464,7 @@ export class LiveExecutor implements ArbExecutor {
         : skipped(preparedOrSkip.skipReason);
     }
     let prepared: PreparedExecution = preparedOrSkip;
+    this.executionOrderSize = prepared.orderSize;
 
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
@@ -481,7 +494,7 @@ export class LiveExecutor implements ArbExecutor {
     let kalshiContext: LiveOrderContext = {
       executionGroupId,
       clientOrderId: kalshiClientOrderId,
-      size: this.config.liveOrderSize,
+      size: prepared.orderSize,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
       requiredCollateral: this.kalshiPreflightCollateral(prepared, placementMode),
       orderGroupId: this.config.liveKalshiOrderGroupEnabled ? this.config.liveKalshiOrderGroupId || undefined : undefined,
@@ -491,9 +504,9 @@ export class LiveExecutor implements ArbExecutor {
     let polymarketContext: LiveOrderContext = {
       executionGroupId,
       clientOrderId: polymarketClientOrderId,
-      size: this.config.liveOrderSize,
+      size: prepared.orderSize,
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
-      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: roundPrice(prepared.orderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
       placementMode,
       limitRestMs,
     };
@@ -551,6 +564,7 @@ export class LiveExecutor implements ArbExecutor {
       );
     }
     prepared = refreshed;
+    this.executionOrderSize = prepared.orderSize;
     // LA5: the lead-lag and fill-quality snapshots are SHADOW telemetry unless their gate is enabled
     // (leadLagBlockReason / fillQualityBlockReason return null when the gate is off). Only RECOMPUTE them
     // on the post-preflight refresh when the gate is ON — it must re-decide on the refreshed quote. When
@@ -595,7 +609,7 @@ export class LiveExecutor implements ArbExecutor {
     polymarketContext = {
       ...polymarketContext,
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
-      requiredCollateral: roundPrice(this.config.liveOrderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: roundPrice(prepared.orderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
     };
     // LA3: re-preflight Polymarket too in the share-limit presign modes so it RE-PRESIGNS at the refreshed
     // capped price. Otherwise the order is presigned once at the initial price, the post-preflight quote
@@ -1268,7 +1282,7 @@ export class LiveExecutor implements ArbExecutor {
   // Reserve for that worst case BEFORE dispatching Polymarket so a qualifying fill can always be hedged
   // and never strands one-sided. Other modes reserve at the standard order-size * maxBuyPrice.
   private kalshiPreflightCollateral(prepared: PreparedExecution, placementMode: LiveOrderPlacementMode): number {
-    const standard = roundPrice(this.config.liveOrderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const standard = roundPrice(prepared.orderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars);
     if (placementMode !== "polymarket_first_exact") return standard;
     const polyTopAsk = prepared.quoteSnapshot.polymarket?.topAsk
       ?? prepared.quoteSnapshot.polymarket?.vwap
@@ -1277,7 +1291,7 @@ export class LiveExecutor implements ArbExecutor {
       prepared.kalshi.maxBuyPrice,
       1 - polyTopAsk - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars,
     ));
-    return roundPrice(this.config.liveOrderSize * worstCaseHedgePrice + this.config.liveCollateralBufferDollars);
+    return roundPrice(prepared.orderSize * worstCaseHedgePrice + this.config.liveCollateralBufferDollars);
   }
 
   private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0): PreparedExecution | PrepareSkip {
@@ -1289,7 +1303,12 @@ export class LiveExecutor implements ArbExecutor {
       return { skipReason: "candidate too close to expiry for live execution", rejectedSnapshot: null };
     }
     const books = this.liveBooksForPreflight(kalshiLeg, polymarketLeg);
-    const evaluation = evaluateLiveQuoteQuality(candidate, books, this.config, now, polymarketFirstCrossCents);
+    // W2: pick the size first (largest in-band size that still clears the gate), then evaluate the gate AT
+    // that size so the prepared legs/snapshot/maxBuyPrices are all consistent with what we will actually
+    // submit. selectExecutableSize returns config.liveOrderSize when dynamic sizing is off (byte-identical).
+    // Cash bound is null here (kept sync); the Kalshi hedge-collateral preflight is the hard bankroll backstop.
+    const orderSize = selectExecutableSize(candidate, books, this.config, null, now, polymarketFirstCrossCents);
+    const evaluation = evaluateLiveQuoteQuality(candidate, books, this.config, now, polymarketFirstCrossCents, orderSize);
     if (!evaluation.ok) {
       const skipReason = evaluation.reason ?? "live quote quality preflight failed";
       // T2.4 read-only diagnostic: only on the dominant below-threshold-edge skip, and only when
@@ -1308,6 +1327,7 @@ export class LiveExecutor implements ArbExecutor {
       kalshi: { leg: evaluation.kalshiLeg, maxBuyPrice: evaluation.kalshiMaxBuyPrice },
       polymarket: { leg: evaluation.polymarketLeg, maxBuyPrice: evaluation.polymarketMaxBuyPrice },
       quoteSnapshot: evaluation.snapshot,
+      orderSize,
     };
   }
 
@@ -1643,10 +1663,26 @@ export class LiveExecutor implements ArbExecutor {
     return failed(`live preflight blocked before order submission: ${reason}`);
   }
 
+  // The order size in force for the current execution (the W2-selected size, or config.liveOrderSize when
+  // dynamic sizing is off / between executions). Used by every fill-classification + hedge-trigger helper.
+  private orderSizeForExecution(): number {
+    return this.executionOrderSize ?? this.config.liveOrderSize;
+  }
+
+  // Hedge-trigger / overfill offsets relative to the order size (default 0 and +1 share). Applied to the
+  // SELECTED size so dynamic sizing keeps the same absolute slack: at size S the in-range band is
+  // [S + lowerOffset, S + upperOffset], which equals [min, max] exactly when S == liveOrderSize.
+  private polymarketFirstFillLowerOffset(): number {
+    return this.config.livePolymarketFirstMinFillShares - this.config.liveOrderSize;
+  }
+  private polymarketFirstFillUpperOffset(): number {
+    return this.config.livePolymarketFirstMaxFillShares - this.config.liveOrderSize;
+  }
+
   // Overfill band applied to fill CLASSIFICATION (whether a leg counts as a clean fill and whether the two
   // legs' fill counts are treated as matched). Off by default (band 0) -> strict-exact behavior; when
-  // LIVE_CONFIRMATION_OVERFILL_TOLERANT is set it reuses the operator's floor-hedge band so a Polymarket
-  // FAK over-hedge within [liveOrderSize, livePolymarketFirstMaxFillShares] is a filled leg, not a partial.
+  // LIVE_CONFIRMATION_OVERFILL_TOLERANT is set it reuses the operator's floor-hedge band (the absolute
+  // overfill slack, size-independent) so an in-band FAK over-hedge is a filled leg, not a partial.
   private confirmationOverfillBand(): number {
     return this.config.liveConfirmationOverfillTolerant
       ? Math.max(0, this.config.livePolymarketFirstMaxFillShares - this.config.liveOrderSize)
@@ -1655,20 +1691,23 @@ export class LiveExecutor implements ArbExecutor {
 
   private isExactVenueFill(result: VenueOrderResult): boolean {
     const band = this.confirmationOverfillBand();
+    const expected = this.orderSizeForExecution();
     return !result.error
-      && (result.fillCount ?? 0) >= this.config.liveOrderSize
-      && (result.fillCount ?? 0) - this.config.liveOrderSize <= band + 0.000001;
+      && (result.fillCount ?? 0) >= expected
+      && (result.fillCount ?? 0) - expected <= band + 0.000001;
   }
 
   private polymarketFirstFillRangeLabel(): string {
-    return `${this.config.livePolymarketFirstMinFillShares}-${this.config.livePolymarketFirstMaxFillShares} shares`;
+    const size = this.orderSizeForExecution();
+    return `${size + this.polymarketFirstFillLowerOffset()}-${size + this.polymarketFirstFillUpperOffset()} shares`;
   }
 
   private isPolymarketFirstFillCountInRange(fillCount: unknown): fillCount is number {
+    const size = this.orderSizeForExecution();
     return typeof fillCount === "number"
       && Number.isFinite(fillCount)
-      && fillCount + 0.000001 >= this.config.livePolymarketFirstMinFillShares
-      && fillCount - 0.000001 <= this.config.livePolymarketFirstMaxFillShares;
+      && fillCount + 0.000001 >= size + this.polymarketFirstFillLowerOffset()
+      && fillCount - 0.000001 <= size + this.polymarketFirstFillUpperOffset();
   }
 
   private isPolymarketFirstHedgeTriggerResult(result: VenueOrderResult): boolean {
@@ -1690,7 +1729,7 @@ export class LiveExecutor implements ArbExecutor {
     source: PolymarketHedgeTriggerEvidence["source"],
     fillCount: number,
   ): Record<string, unknown> {
-    const isExact = Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
+    const isExact = Math.abs(fillCount - this.orderSizeForExecution()) <= 0.000001;
     return {
       polymarketHedgeTriggerSource: source,
       polymarketHedgeTriggerFillCount: fillCount,
@@ -1798,7 +1837,7 @@ export class LiveExecutor implements ArbExecutor {
     if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return null;
     const confirmation = await this.confirmationMonitor.waitForVenueResult(result, {
       executionGroupId,
-      expectedSize: this.config.liveOrderSize,
+      expectedSize: this.orderSizeForExecution(),
       leg,
       submittedAtMs,
       timeoutMs: this.confirmationTimeoutMs(result, options),
@@ -1837,8 +1876,8 @@ export class LiveExecutor implements ArbExecutor {
         restResult = next.result;
         if (this.isPolymarketFirstHedgeTriggerResult(restResult)) {
           const respondedAtMs = Date.parse(restResult.respondedAt);
-          const fillCount = restResult.fillCount ?? this.config.liveOrderSize;
-          const isExact = Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
+          const fillCount = restResult.fillCount ?? this.orderSizeForExecution();
+          const isExact = Math.abs(fillCount - this.orderSizeForExecution()) <= 0.000001;
           return {
             trigger: {
               result: {
@@ -1873,8 +1912,8 @@ export class LiveExecutor implements ArbExecutor {
         const receivedAtMs = typeof confirmation?.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
           ? confirmation.receivedAtMs
           : Number.isFinite(parsedRespondedAt) ? parsedRespondedAt : this.now();
-        const fillCount = confirmed.fillCount ?? this.config.liveOrderSize;
-        const isExact = Math.abs(fillCount - this.config.liveOrderSize) <= 0.000001;
+        const fillCount = confirmed.fillCount ?? this.orderSizeForExecution();
+        const isExact = Math.abs(fillCount - this.orderSizeForExecution()) <= 0.000001;
         return {
           trigger: {
             result: {
@@ -2250,7 +2289,7 @@ export class LiveExecutor implements ArbExecutor {
     const autoResolution = this.autoResolution(recoveryStatus, executionGroupId, recoveryEvidence);
     if (liveLockReason && this.config.liveAutoHardlocksEnabled) this.partialFillLocked = true;
     const venueFailureReason = [kalshi, polymarket]
-      .filter((result) => result.error || (result.fillCount ?? 0) < this.config.liveOrderSize)
+      .filter((result) => result.error || (result.fillCount ?? 0) < this.orderSizeForExecution())
       .map((result) => `${result.venue}: ${result.error ?? result.status}`)
       .join("; ") || null;
     const hedgeFailureReason = completedRiskHedgeBelowThreshold

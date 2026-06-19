@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config";
-import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder, expectedKalshiFeePerShare } from "../src/execution/quote-quality";
+import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder, expectedKalshiFeePerShare, selectExecutableSize } from "../src/execution/quote-quality";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { AppConfig } from "../src/config";
 import type { BinaryContract } from "../src/types";
@@ -31,6 +31,18 @@ test("config defaults the live minimum edge to one cent", () => {
   assert.equal(loadConfig({}).minProfitDollars, 0.01);
   assert.equal(loadConfig({}).liveMaxTradesPerWindow, 3);
   assert.equal(loadConfig({}).arbScanHeartbeatMs, 250);
+});
+
+test("W2: dynamic sizing config defaults to a single-point band (byte-identical) and guards concurrency", () => {
+  const d = loadConfig({ LIVE_ORDER_SIZE: "5" });
+  assert.equal(d.liveDynamicSizingEnabled, false);
+  assert.equal(d.liveMinOrderSize, 5); // defaults to liveOrderSize
+  assert.equal(d.liveMaxOrderSize, 5); // single point -> selector is a no-op
+  assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5", LIVE_MAX_ORDER_SIZE: "20" }).liveMaxOrderSize, 20);
+  assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5", LIVE_MAX_ORDER_SIZE: "3" }).liveMaxOrderSize, 5); // clamped >= min
+  // Guard: dynamic sizing requires serialized execution (the selector uses a per-execution field).
+  assert.throws(() => loadConfig({ LIVE_DYNAMIC_SIZING_ENABLED: "true", ARB_EXECUTION_CONCURRENCY: "2" }), /ARB_EXECUTION_CONCURRENCY=1/);
+  assert.doesNotThrow(() => loadConfig({ LIVE_DYNAMIC_SIZING_ENABLED: "true", ARB_EXECUTION_CONCURRENCY: "1" }));
 });
 
 test("depthWeightedAsk computes order-size VWAP and fails when depth is insufficient", () => {
@@ -257,6 +269,64 @@ test("W1: fee-aware gate subtracts the expected Kalshi fee from the edge; byte-i
   assert.equal(on.snapshot.projectedEdgeAfterFees, 0.0325);
   assert.equal(on.ok, false);
   assert.match(on.reason ?? "", /cushioned executable edge 0.0325 below threshold 0.0500/);
+});
+
+test("W2: selectExecutableSize returns liveOrderSize when dynamic sizing is off or the band is a single point", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+  // off -> static
+  assert.equal(selectExecutableSize(candidate, books, safetyConfig({ liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20 }), null, now), 5);
+  // on but single-point band -> static
+  assert.equal(selectExecutableSize(candidate, books, safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 5 }), null, now), 5);
+});
+
+test("W2: selectExecutableSize scales UP to the largest size that still clears the gate on deep books", () => {
+  const now = 1_800_000_000_000;
+  // Polymarket deep & tight; Kalshi deep enough at a price that keeps the edge >= 0.05 up to size 20.
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+  // cushion 0, edge = 1-(0.5+0.4)=0.10 >= 0.05 at every size up to 50; slippage 0 -> picks the MAX (20).
+  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 10 });
+  assert.equal(selectExecutableSize(candidate, books, config, null, now), 20);
+});
+
+test("W2: selectExecutableSize CAPS at the size where thin Kalshi depth pushes the edge below threshold", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  // Kalshi: 10 shares at 0.51 (edge 0.09), then a cliff to 0.60 (edge 0.00 < 0.05). Sizes >10 fail the gate.
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 10 }, { price: 0.6, size: 50 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 20 });
+  assert.equal(selectExecutableSize(candidate, books, config, null, now), 10);
+});
+
+test("W2: selectExecutableSize CAPS on the Kalshi slippage band even when the edge would still clear", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.3, yesAskLevels: [{ price: 0.3, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  // Kalshi: 10 @ 0.5, then 0.52 (edge still 1-(0.52+0.3)=0.18 >= 0.05, but worstAsk-topAsk = 2c slippage).
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }, { price: 0.52, size: 50 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+  // 1c slippage band -> sizes >10 (which need the 0.52 level, 2c slippage) are rejected -> cap at 10.
+  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 1 });
+  assert.equal(selectExecutableSize(candidate, books, config, null, now), 10);
+});
+
+test("W2: selectExecutableSize respects the bankroll bound (caps when Kalshi collateral exceeds cash)", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 10, liveCollateralBufferDollars: 0.25 });
+  // Kalshi collateral at size S ~= S*0.5 + 0.25. Cash $5.5 -> max S ~= 10 (10*0.5+0.25=5.25 <= 5.5; 11 -> 5.75 > 5.5).
+  assert.equal(selectExecutableSize(candidate, books, config, 5.5, now), 10);
 });
 
 test("first-leg cross offset (P1-5) deepens only the Polymarket limit and the edge gate still binds", () => {

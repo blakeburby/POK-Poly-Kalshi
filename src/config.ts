@@ -50,6 +50,10 @@ export interface AppConfig {
   polymarketGeoblockUrl: string;
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
+  liveDynamicSizingEnabled: boolean;
+  liveMinOrderSize: number;
+  liveMaxOrderSize: number;
+  liveDynamicSizingMaxKalshiSlippageCents: number;
   liveTakerPriceCushionCents: number;
   liveFeeAwareGateEnabled: boolean;
   livePolymarketFirstCrossCents: number;
@@ -219,6 +223,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   // (hedgeShares = floor(fill) <= fill), never open opposite-side risk. MIN stays at liveOrderSize so a
   // genuine underfill is still declined (no new opening-risk surface).
   const livePolymarketFirstMaxFillShares = envNumber(env, "LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES", liveOrderSize + 1);
+  // W2 liquidity-aware dynamic sizing. Default MIN=MAX=liveOrderSize so the size band is a single point and
+  // selectExecutableSize returns liveOrderSize unchanged (byte-identical) even if the flag is flipped on by
+  // mistake. Raising MAX (after shadow-ladder data confirms headroom) lets each entry scale to the largest
+  // size Kalshi depth supports within the slippage band, capped by bankroll. MIN never drops below 1.
+  const liveMinOrderSize = Math.max(1, envNumber(env, "LIVE_MIN_ORDER_SIZE", liveOrderSize));
+  const liveMaxOrderSize = Math.max(liveMinOrderSize, envNumber(env, "LIVE_MAX_ORDER_SIZE", liveOrderSize));
+  const liveDynamicSizingEnabled = envBoolean(env, "LIVE_DYNAMIC_SIZING_ENABLED", false);
+  const executionConcurrency = envNumber(env, "ARB_EXECUTION_CONCURRENCY", 1);
+  if (liveDynamicSizingEnabled && executionConcurrency > 1) {
+    // The dynamic-size selector stores the selected size in a single per-execution field on LiveExecutor,
+    // which is only safe when executeOnce is serialized. Refuse to start otherwise rather than risk a
+    // cross-execution size mix-up that would misclassify fills.
+    throw new Error("LIVE_DYNAMIC_SIZING_ENABLED=true requires ARB_EXECUTION_CONCURRENCY=1");
+  }
   if (livePolymarketFirstMinFillShares <= 0 || livePolymarketFirstMaxFillShares <= 0 || livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares) {
     throw new Error("LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES");
   }
@@ -253,7 +271,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     equityBackfillOnBoot: envBoolean(env, "EQUITY_BACKFILL_ON_BOOT", false),
     // Default 1 (P0-4): serialize live attempts so two concurrent scans cannot both reserve the same
     // Kalshi hedge collateral and double-spend it. Raise only after per-attempt collateral reservation lands.
-    executionConcurrency: envNumber(env, "ARB_EXECUTION_CONCURRENCY", 1),
+    executionConcurrency,
     discoveryBoundaryRefreshEnabled: envBoolean(env, "DISCOVERY_BOUNDARY_REFRESH_ENABLED", true),
     kalshiApiBase: envString(env, "KALSHI_API_BASE", "https://api.elections.kalshi.com/trade-api/v2"),
     kalshiUiApiBase: envString(env, "KALSHI_UI_API_BASE", "https://api.elections.kalshi.com"),
@@ -294,6 +312,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK",
     liveOrderSize,
+    liveDynamicSizingEnabled,
+    liveMinOrderSize,
+    liveMaxOrderSize,
+    liveDynamicSizingMaxKalshiSlippageCents: envNumber(env, "LIVE_DYNAMIC_SIZING_MAX_KALSHI_SLIPPAGE_CENTS", 10),
     liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
     // When true, the entry gate subtracts an explicit expected Kalshi taker fee (~0.07*p*(1-p) per share,
     // the same model realizedFeePerSpread measures post-fill) from the cushioned edge, so the taker cushion

@@ -109,6 +109,10 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketGeoblockUrl: "https://polymarket.com/api/geoblock",
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
+    liveDynamicSizingEnabled: false,
+    liveMinOrderSize: 1,
+    liveMaxOrderSize: 1,
+    liveDynamicSizingMaxKalshiSlippageCents: 10,
     liveTakerPriceCushionCents: 2,
     liveFeeAwareGateEnabled: false,
     liveMinExpiryMs: 30_000,
@@ -3514,6 +3518,50 @@ test("P0: an in-band Polymarket overfill classifies as a clean FILLED pair when 
   assert.equal(result.liveLockReason ?? null, null);
   assert.equal(result.polymarketFillCount, 5.128204);
   assert.equal(result.kalshiFillCount, 5);
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("W2: a dynamically-sized fill at the selected size (10 > liveOrderSize 5) classifies as a clean filled pair", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now); // deep books (999 @ 0.4 poly / 0.5 kalshi)
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 10, fillPrice: 0.5 });
+  const polymarket = new FakeVenueClient("polymarket", {
+    status: "matched", fillCount: 10, fillPrice: 0.4,
+    metadata: { orderPlacementMode: "parallel_fak", polymarketOrderType: OrderType.FAK, polymarketTakingAmount: 10 },
+  });
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveDynamicSizingEnabled: true,
+      liveMinOrderSize: 5,
+      liveMaxOrderSize: 10,
+      liveDynamicSizingMaxKalshiSlippageCents: 10,
+      liveParallelExecutionEnabled: true,
+      liveOrderPlacementMode: "parallel_fak",
+      liveAutoHardlocksEnabled: false,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  // The selector sizes up to 10 (deep books, edge holds, no slippage); both legs fill 10 and — critically —
+  // the classification uses the SELECTED size (10), so a clean 10/10 fill is `filled`, not a "huge overfill
+  // vs 5" partial. Order was actually placed at size 10.
+  assert.equal(kalshi.placed[0]?.context.size, 10);
+  assert.equal(polymarket.placed[0]?.context.size, 10);
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.kalshiFillCount, 10);
+  assert.equal(result.polymarketFillCount, 10);
   assert.equal(locks.engageCalls, 0);
 });
 

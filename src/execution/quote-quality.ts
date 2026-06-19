@@ -132,14 +132,15 @@ function quoteLeg(
   now: number,
   extraCrossCents = 0,
   maxAgeMs = config.liveQuoteMaxAgeMs,
+  orderSize = config.liveOrderSize,
 ): { snapshot: QuoteSnapshotLeg | null; reason: string | null; maxBuyPrice: number | null; adjustedLeg: ArbLeg | null } {
-  const depthRequired = Math.max(config.liveOrderSize, config.liveMinBookDepthShares);
+  const depthRequired = Math.max(orderSize, config.liveMinBookDepthShares);
   if (!leg) return { snapshot: null, reason: "candidate must contain one Kalshi leg and one Polymarket leg", maxBuyPrice: null, adjustedLeg: null };
   if (!contract) return { snapshot: null, reason: `${leg.venue} contract ${leg.contractId} is missing from live book preflight`, maxBuyPrice: null, adjustedLeg: null };
 
   const topAsk = askFor(contract, leg.direction);
   const bookLevels = levelsFor(contract, leg.direction);
-  const executionVwap = depthWeightedAsk(bookLevels, config.liveOrderSize);
+  const executionVwap = depthWeightedAsk(bookLevels, orderSize);
   const requiredDepthVwap = depthWeightedAsk(bookLevels, depthRequired);
   // T2.5 anti-dust guard (default-inert: both knobs default 0 -> these are no-ops and the snapshot
   // fields below serialize as undefined, so behavior is byte-identical to today). When enabled, they
@@ -241,15 +242,16 @@ export function evaluateLiveQuoteQuality(
   config: AppConfig,
   now = Date.now(),
   polymarketFirstCrossCents = 0,
+  orderSize = config.liveOrderSize,
 ): LiveQuoteEvaluation {
   const kalshiLeg = legForVenue(candidate, "kalshi");
   const polymarketLeg = legForVenue(candidate, "polymarket");
   const kalshiContract = kalshiLeg ? findContract(books, kalshiLeg) : null;
   const polymarketContract = polymarketLeg ? findContract(books, polymarketLeg) : null;
-  const kalshi = quoteLeg(kalshiLeg, kalshiContract, config, now);
+  const kalshi = quoteLeg(kalshiLeg, kalshiContract, config, now, 0, config.liveQuoteMaxAgeMs, orderSize);
   // The extra cross offset (P1-5) and the optionally-tighter freshness bound (P2-10) apply ONLY to the
   // staleness-prone Polymarket leg. The Kalshi leg keeps the standard cushion and freshness bar.
-  const polymarket = quoteLeg(polymarketLeg, polymarketContract, config, now, polymarketFirstCrossCents, config.livePolymarketQuoteMaxAgeMs ?? config.liveQuoteMaxAgeMs);
+  const polymarket = quoteLeg(polymarketLeg, polymarketContract, config, now, polymarketFirstCrossCents, config.livePolymarketQuoteMaxAgeMs ?? config.liveQuoteMaxAgeMs, orderSize);
   const quoteSkewMs = kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
     ? Math.abs(kalshi.snapshot.updatedAt - polymarket.snapshot.updatedAt)
     : null;
@@ -307,6 +309,39 @@ export function evaluateLiveQuoteQuality(
     kalshiMaxBuyPrice: kalshi.maxBuyPrice,
     polymarketMaxBuyPrice: polymarket.maxBuyPrice,
   };
+}
+
+// W2 liquidity-aware dynamic sizing: pick the LARGEST integer size in [liveMinOrderSize, liveMaxOrderSize]
+// for which the candidate still passes the (fee-aware) edge gate AT THAT SIZE, the Kalshi VWAP slippage
+// stays within the band (Kalshi is the thin/binding venue; Polymarket is deep), and the Kalshi hedge
+// collateral fits available cash. Re-running evaluateLiveQuoteQuality per size keeps sizing and admission
+// consistent (one source of truth — no duplicated edge math). Returns liveOrderSize unchanged when dynamic
+// sizing is off or the band is a single point, so the path is byte-identical until MAX is raised.
+export function selectExecutableSize(
+  candidate: ArbCandidate,
+  books: LiveQuoteBooks,
+  config: AppConfig,
+  availableKalshiCash: number | null = null,
+  now = Date.now(),
+  polymarketFirstCrossCents = 0,
+): number {
+  const minSize = Math.max(1, Math.floor(config.liveMinOrderSize));
+  const maxSize = Math.max(minSize, Math.floor(config.liveMaxOrderSize));
+  if (!config.liveDynamicSizingEnabled || maxSize <= minSize) return config.liveOrderSize;
+  const slipBandCents = Math.max(0, config.liveDynamicSizingMaxKalshiSlippageCents);
+  const buffer = config.liveCollateralBufferDollars;
+  for (let size = maxSize; size >= minSize; size -= 1) {
+    const evaluation = evaluateLiveQuoteQuality(candidate, books, config, now, polymarketFirstCrossCents, size);
+    if (!evaluation.ok) continue; // edge (fee-aware) no longer clears at this size, or insufficient depth
+    const kalshi = evaluation.snapshot.kalshi;
+    if (!kalshi || kalshi.topAsk == null || kalshi.worstAsk == null) continue;
+    if (100 * (kalshi.worstAsk - kalshi.topAsk) > slipBandCents + 1e-9) continue; // Kalshi slippage too high
+    if (availableKalshiCash != null && Number.isFinite(availableKalshiCash) && evaluation.kalshiMaxBuyPrice != null) {
+      if (size * evaluation.kalshiMaxBuyPrice + buffer > availableKalshiCash + 1e-9) continue; // bankroll bound
+    }
+    return size; // largest size that clears every gate
+  }
+  return config.liveOrderSize; // nothing in the band cleared; fall back to the static size (gate re-checks)
 }
 
 function shadowLadderLeg(leg: ArbLeg | null, contract: BinaryContract | null, probeSizes: number[]): ShadowLadderLeg | null {
