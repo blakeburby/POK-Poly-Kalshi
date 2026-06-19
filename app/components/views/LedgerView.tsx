@@ -17,7 +17,7 @@ import type { DashboardSnapshot } from "@/lib/types";
 import { ViewScroll, GridPanel, StatTile } from "./_layout";
 import { Badge } from "@/components/ui/badge";
 import { Empty } from "@/components/ui/stat";
-import { ledgerRows, orderSize, type LedgerRow } from "@/lib/selectors";
+import { ledgerRows, type LedgerRow } from "@/lib/selectors";
 import { fmtUsd, fmtCents, fmtPct, fmtClock, fmtRelative, fmtDuration, fmtMs, type StatusTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +35,6 @@ type FilterKey = "all" | "hedged" | "partial" | "failed";
 const NUMERIC = new Set(["premium", "edge", "kalshi", "poly", "pnl", "slippage", "duration"]);
 
 export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
-  const size = orderSize(snap);
   const data = React.useMemo(() => ledgerRows(snap), [snap]);
   const [sorting, setSorting] = React.useState<SortingState>([{ id: "time", desc: true }]);
   const [filter, setFilter] = React.useState<FilterKey>("all");
@@ -242,7 +241,7 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
                     {row.getIsExpanded() ? (
                       <tr className="bg-base/60">
                         <td colSpan={columns.length} className="p-0">
-                          <ExpandedTrade row={row.original} size={size} />
+                          <ExpandedTrade row={row.original} />
                         </td>
                       </tr>
                     ) : null}
@@ -280,7 +279,7 @@ function LegCell({ price, status, tone }: { price: number | null; status: string
   );
 }
 
-function ExpandedTrade({ row, size }: { row: LedgerRow; size: number }) {
+function ExpandedTrade({ row }: { row: LedgerRow }) {
   const s = row.signal;
   const fq = s.fillQualitySnapshot;
   const ll = s.leadLagSnapshot;
@@ -302,7 +301,7 @@ function ExpandedTrade({ row, size }: { row: LedgerRow; size: number }) {
         <KV k="Contract" v={s.kalshiContractId} />
         <KV k="Status" v={s.kalshiStatus ?? "–"} />
         <KV k="Fill Price" v={s.kalshiFillPrice != null ? fmtCents(s.kalshiFillPrice) : "–"} />
-        <KV k="Fill Count" v={`${s.kalshiFillCount ?? 0} / ${size}`} />
+        <KV k="Fill Count" v={`${s.kalshiFillCount ?? 0}`} />
         <KV k="RTT" v={fmtMs(tm?.kalshiRttMs)} />
         <KV k="Exact-Fill Prob" v={fq ? fmtPct(fq.kalshiExactFillProbability) : "–"} />
       </DetailBlock>
@@ -311,7 +310,7 @@ function ExpandedTrade({ row, size }: { row: LedgerRow; size: number }) {
         <KV k="Contract" v={s.polymarketContractId} />
         <KV k="Status" v={s.polymarketStatus ?? "–"} />
         <KV k="Fill Price" v={s.polymarketFillPrice != null ? fmtCents(s.polymarketFillPrice) : "–"} />
-        <KV k="Fill Count" v={`${s.polymarketFillCount ?? 0} / ${size}`} />
+        <KV k="Fill Count" v={`${s.polymarketFillCount ?? 0}`} />
         <KV k="RTT" v={fmtMs(tm?.polymarketRttMs)} />
         <KV k="Confirm" v={fmtMs(tm?.polymarketConfirmationMs)} />
         <KV k="Exact-Fill Prob" v={fq ? fmtPct(fq.polymarketExactFillProbability) : "–"} />

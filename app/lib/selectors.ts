@@ -276,6 +276,9 @@ export interface LedgerRow {
   guaranteedProfit: number;
   realizedPerShare: number | null;
   realizedDollars: number | null;
+  /** Actual paired fill size of THIS trade (min of the two legs' fill counts) — the basis for dollar P&L.
+   *  With W2 dynamic sizing this varies per trade (5-30), so it must NOT be the static config order size. */
+  fillSize: number;
   expectedEdge: number | null;
   slippage: number | null;
   durationMs: number | null;
@@ -298,6 +301,12 @@ export function ledgerRow(s: DashboardSignal, size: number): LedgerRow {
   const realizedPremium = s.depthVwap ?? s.premium;
   const slippage = Number.isFinite(realizedPremium) ? realizedPremium - s.premium : null;
   const exact = isExactPair(s);
+  // Dollar P&L uses THIS trade's actual paired fill size (min of the legs), not the static config order
+  // size — W2 dynamic sizing makes per-trade size vary (5-30). realized_guaranteed_profit is per-share over
+  // the paired (min) fill. Fall back to the config size only when no fill counts (non-filled rows, where
+  // realized is usually null anyway, so realizedDollars stays null regardless).
+  const pairedFillSize = Math.min(s.kalshiFillCount ?? 0, s.polymarketFillCount ?? 0);
+  const fillSize = pairedFillSize > 0 ? pairedFillSize : size;
   return {
     id: s.id,
     createdAt: created,
@@ -313,7 +322,8 @@ export function ledgerRow(s: DashboardSignal, size: number): LedgerRow {
     threshold: s.threshold,
     guaranteedProfit: s.guaranteedProfit,
     realizedPerShare: realized,
-    realizedDollars: toDollars(realized, size),
+    realizedDollars: toDollars(realized, fillSize),
+    fillSize,
     expectedEdge: s.expectedExecutableEdge ?? s.fillQualitySnapshot?.expectedExecutableEdge ?? null,
     slippage,
     durationMs: Number.isFinite(updated - created) ? updated - created : null,
