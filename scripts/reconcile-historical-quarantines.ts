@@ -59,6 +59,16 @@ type Queryable = {
   query<T extends pg.QueryResultRow = pg.QueryResultRow>(sql: string, values?: unknown[]): Promise<pg.QueryResult<T>>;
 };
 
+// Statuses whose latest event means an order can no longer be working at the venue. The
+// `remaining_count > 0` check below is the AUTHORITATIVE "still open" signal; this set only suppresses
+// the secondary status-string heuristic. This system places exclusively FAK (Polymarket) / FOK (Kalshi)
+// orders, which fill-or-die instantly and can never rest — so its app-specific outcomes are terminal too:
+//   not_submitted        — the leg was never sent to the venue (nothing exists to be open)
+//   unexpected_fill_count — a FAK order that DID fill, just outside the expected band (done)
+//   unknown               — confirmation was indeterminate; recovery reconciles it, and a FAK/FOK order
+//                           still cannot rest, so remaining_count (0 here) governs, not the label
+// Without these, routine no-fills (~dozens/day) sit inside the 24h window with a non-whitelisted status
+// and structurally false-positive the open-order guard, making reconciliation permanently un-runnable.
 const terminalOrderStatuses = new Set([
   "confirmed",
   "executed",
@@ -70,6 +80,9 @@ const terminalOrderStatuses = new Set([
   "failed",
   "expired",
   "unfilled",
+  "not_submitted",
+  "unexpected_fill_count",
+  "unknown",
 ]);
 
 function usage(): string {
