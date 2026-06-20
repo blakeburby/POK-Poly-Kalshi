@@ -4,6 +4,7 @@ import { AnalyticsStore } from "./analytics/store";
 import { BookStore } from "./books/book-store";
 import { loadConfig } from "./config";
 import { handleDashboardRequest } from "./dashboard/worker-api";
+import { DashboardSignalsNotifier } from "./dashboard/signals-notifier";
 import { createPool } from "./db/pool";
 import { runMigrations } from "./db/migrate";
 import { LiveExecutionLockStore } from "./db/live-execution-locks";
@@ -130,6 +131,9 @@ async function main(): Promise<void> {
     now: Date.now,
   });
   const liveReadinessProbe = new LiveExecutor(config, books, undefined, undefined, Date.now, liveLocks, orderEvents, confirmationMonitor, liveExposure);
+  // One shared notifier: the scanner fires it after each real-attempt persist; open dashboard realtime
+  // streams subscribe and push the new ledger row within ~network RTT (instead of the TTL-bounded poll).
+  const signalsNotifier = new DashboardSignalsNotifier();
   const scanner = new CrossVenueArbScanner(books, signals, liveReadinessProbe, reentry, {
     enabled: config.arbEnabled,
     minProfitDollars: config.minProfitDollars,
@@ -152,6 +156,7 @@ async function main(): Promise<void> {
     deferLivePersistence: config.liveHotPathEnabled,
     latency,
     analytics: liveAnalytics,
+    signalsNotifier,
   });
   const scanScheduler = new CoalescedScanScheduler(scanner, latency);
 
@@ -317,6 +322,7 @@ async function main(): Promise<void> {
         subscribeTradingActivityEvents: (listener) => orderEvents.onEvent((event) => {
           listener(tradingActivityEventFromVenueEvent(event));
         }),
+        signalsNotifier,
         getLogs: getRecentLogs,
       });
       if (handled) return;

@@ -52,6 +52,14 @@ export interface ScannerOptions {
   analytics?: {
     recordSignal(signal: DashboardSignal): void;
   };
+  /**
+   * Wakes open dashboard realtime streams the instant a REAL attempt is persisted, so the ledger updates in
+   * ~network RTT instead of on the stream's TTL-bounded poll. Fired only from the real-attempt write points
+   * (never on skipped scans). Structural type so the scanner stays decoupled from the dashboard module.
+   */
+  signalsNotifier?: {
+    notifyChanged(): void;
+  };
 }
 
 export interface ScannerStatus {
@@ -202,6 +210,17 @@ export class CrossVenueArbScanner {
     this.options.latency?.recordQueueState(this.executionQueue.length, this.activeExecutions);
   }
 
+  /**
+   * Run after a REAL attempt's signal row is persisted (the exec-group write points). Records analytics AND
+   * wakes the dashboard signals-notifier so open realtime streams ship the new ledger row within network RTT
+   * instead of on the next TTL-bounded poll. Centralized so the write sites can't drift — every real-attempt
+   * persist goes through here. Never reached for skipped scans (those don't persist a real signal here).
+   */
+  private onRealSignalWritten(signal: DashboardSignal): void {
+    this.options.analytics?.recordSignal(signal);
+    this.options.signalsNotifier?.notifyChanged();
+  }
+
   private async handleCandidate(candidate: ArbCandidate, now: number): Promise<void> {
     if (this.options.deferLivePersistence) {
       await this.handleDeferredLiveCandidate(candidate, now);
@@ -226,7 +245,7 @@ export class CrossVenueArbScanner {
       const updateStartedAt = Date.now();
       const updatedSignal = await this.signals.updateSignal(signalId, result);
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
-      if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
+      if (updatedSignal) this.onRealSignalWritten(updatedSignal);
       if (result.liveLockReason && this.options.liveAutoHardlocksEnabled !== false) {
         await this.options.liveLocks?.engageLock({
           reason: result.liveLockReason,
@@ -251,7 +270,7 @@ export class CrossVenueArbScanner {
         action: "failed",
         failureReason: error instanceof Error ? error.message : String(error),
       });
-      if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
+      if (updatedSignal) this.onRealSignalWritten(updatedSignal);
       logEvent({
         severity: "ERROR",
         category: "SCANNER",
@@ -282,7 +301,7 @@ export class CrossVenueArbScanner {
       const updatedSignal = await this.signals.updateSignal(signalId, result);
       this.options.latency?.recordDbUpdate(Date.now() - updateStartedAt);
       if (updatedSignal) {
-        this.options.analytics?.recordSignal(updatedSignal);
+        this.onRealSignalWritten(updatedSignal);
         this.options.liveExposure?.observeSignal?.(updatedSignal);
       }
       if (result.liveLockReason && this.options.liveAutoHardlocksEnabled !== false) {
@@ -316,7 +335,7 @@ export class CrossVenueArbScanner {
           action: "failed",
           failureReason,
         });
-        if (updatedSignal) this.options.analytics?.recordSignal(updatedSignal);
+        if (updatedSignal) this.onRealSignalWritten(updatedSignal);
       } catch (persistError) {
         logEvent({
           severity: "ERROR",

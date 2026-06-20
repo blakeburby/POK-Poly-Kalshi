@@ -38,6 +38,11 @@ export interface DashboardRuntime {
   recordEquitySample?: (activity: TradingActivitySnapshot, now: number) => void;
   getTradingPlatformActivity?: (platform: TradingPlatform, now: number, readiness?: LiveExecutionReadiness) => TradingPlatformActivity | Promise<TradingPlatformActivity>;
   subscribeTradingActivityEvents?: (listener: (event: TradingActivityEvent) => void) => () => void;
+  /**
+   * Wakes open realtime streams the instant a real trade is written so the ledger updates in ~network RTT
+   * instead of on the TTL-bounded poll. Each stream subscribes on connect, unsubscribes on close.
+   */
+  signalsNotifier?: { subscribe(listener: () => void): () => void };
   getLogs: (limit?: number) => DashboardLogEntry[];
 }
 
@@ -517,11 +522,38 @@ async function writeLiveStream(response: ServerResponse, runtime: DashboardRunti
       response.write(formatSseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
     }
   };
-  await tick();
+  // Serialize tick invocations: the 250ms timer and the event-driven notify both run tick() and share
+  // lastSig/lastSignalsSig, so a concurrent pair could interleave at an await and double-ship. runTick lets
+  // at most one tick run at a time; a notify arriving mid-tick coalesces into a single trailing re-run.
+  let ticking = false;
+  let rerun = false;
+  const runTick = async (): Promise<void> => {
+    if (ticking) { rerun = true; return; }
+    ticking = true;
+    try {
+      await tick();
+    } finally {
+      ticking = false;
+      if (rerun) { rerun = false; void runTick(); }
+    }
+  };
+  await runTick();
   // 250ms matches the scanner heartbeat (scanHeartbeatMs); the live slice can't
-  // change faster than the source data refreshes, so pushing more often gains nothing.
-  const timer = setInterval(() => void tick(), 250);
-  response.on("close", () => clearInterval(timer));
+  // change faster than the source data refreshes, so pushing more often gains nothing. The notify path below
+  // collapses the freshness floor for the ledger from this poll interval down to ~network RTT.
+  const timer = setInterval(() => void runTick(), 250);
+  // Event-driven freshness: when a real trade is written, push the new ledger row immediately. The shared
+  // recentSignals cache may still be within its TTL and would otherwise return the pre-trade list, so force a
+  // refetch (refreshedAt=0) before ticking. tick()'s recentSignalsSignature guard still prevents any
+  // double-ship vs the timer. Sparse (~79 real trades/day), so this adds no meaningful DB or socket load.
+  const unsubscribe = runtime.signalsNotifier?.subscribe(() => {
+    if (sharedSnapshotCache.recentSignals) sharedSnapshotCache.recentSignals.refreshedAt = 0;
+    void runTick();
+  });
+  response.on("close", () => {
+    clearInterval(timer);
+    unsubscribe?.();
+  });
 }
 
 export async function handleDashboardRequest(
