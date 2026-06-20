@@ -12,5 +12,6 @@ tmp/
 captures/
 *.har
 *.har.json
-.claude/
+.claude/*
+!.claude/skills/
 *.tsbuildinfo
