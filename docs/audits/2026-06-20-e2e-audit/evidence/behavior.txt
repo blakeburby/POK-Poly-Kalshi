@@ -1,0 +1,172 @@
+=== ACTION BREAKDOWN (real attempts, 7d) ===
+  failed: 211
+  filled: 17
+
+=== FAILURE TAXONOMY (7d, top 25) ===
+  [76] risk quarantined: live safety lock engaged: polymarket private stream confirmation mismatc
+  [69] kalshi: not submitted because Polymarket fill count was not available inside configured he
+  [29] risk quarantined: live safety lock engaged: polymarket private stream confirmation timeout
+  [22] live safety lock engaged: polymarket private stream confirmation timeout: polymarket user 
+  [3] risk quarantined: live safety lock engaged: venue fill mismatch kalshi=5 polymarket=0; unr
+  [3] risk quarantined: live safety lock engaged: kalshi private stream confirmation mismatch: k
+  [2] kalshi: unfilled; polymarket: polymarket FAK postOrder failed: no orders found to match wi
+  [1] risk quarantined: live safety lock engaged: venue fill mismatch kalshi=0 polymarket=5.0522
+  [1] risk quarantined: live safety lock engaged: venue fill mismatch kalshi=0 polymarket=5.1204
+  [1] risk quarantined: live safety lock engaged: venue fill mismatch kalshi=5 polymarket=5.0892
+  [1] live safety lock engaged: venue fill mismatch kalshi=5 polymarket=0
+  [1] risk quarantined: live safety lock engaged: venue fill mismatch kalshi=5 polymarket=5.1428
+  [1] risk hedge completed below normal profit threshold: realized edge -0.0257 below threshold 
+  [1] live safety lock engaged: risk hedge realized edge -0.0350 below loss cap -0.0300
+
+=== PROFITABILITY (action=filled, 14d) ===
+  filled rows: 17  with edge: 17  | positive: 16  negative: 1  zero: 0
+  realized edge/share: avg=0.1001 min=-0.0350 p50=0.0427 max=0.5675
+
+=== LOCK / BREAKER HISTORY (14d) ===
+  [3] live safety lock engaged: polymarket private stream confirmation timeout: polymarket user strea  (last 2026-06-20T02:19:07.598Z)
+  [2] live safety lock engaged: polymarket user stream reported failed  (last 2026-06-16T09:33:23.441Z)
+  [1] live safety lock engaged: venue fill mismatch kalshi=5 polymarket=0  (last 2026-06-15T03:37:38.887Z)
+  [1] live safety lock engaged: kalshi user stream fill mismatch 1/5  (last 2026-06-17T03:34:26.995Z)
+  [1] live safety lock engaged: polymarket user stream fill mismatch 5.054944/5  (last 2026-06-16T18:41:03.027Z)
+  [1] live safety lock engaged: polymarket user stream fill mismatch 5.42857/5  (last 2026-06-17T07:37:23.023Z)
+  [1] live safety lock engaged: polymarket user stream fill mismatch 5.1/5  (last 2026-06-17T04:46:03.069Z)
+  [1] live safety lock engaged: polymarket user stream fill mismatch 5.172412/5  (last 2026-06-17T08:02:52.336Z)
+  [1] live safety lock engaged: polymarket user stream fill mismatch 5.17857/5  (last 2026-06-16T04:02:17.204Z)
+  [1] live safety lock engaged: polymarket user stream fill mismatch 5.116278/5  (last 2026-06-16T20:27:45.990Z)
+
+=== UNRESOLVED EXPOSURE NOW: rows=0 total $0 max $0
+
+=== EXECUTION TIMINGS (14d, n=228) ===
+  metric                      n     p50     p90     p99     max
+  polymarketRttMs             228   417     6078    10151   12462
+  polymarketPostOrderMs       171   404     719     2235    2890
+  polymarketSignMs            171   4       10      62      74
+  polymarketConfirmationMs    96    402     554     2456    2481
+  hotGateMs                   228   119     400     1751    1942
+  candidateToSubmitMs         228   119     400     1751    1942
+  totalMs                     228   2548    6827    10380   12796
+  kalshiRttMs                 228   40      227     3230    5196
+  preSubmitDbMs               228   0       0       0       0
+  venueSubmitSkewMs           228   2500    6078    10152   12462
+  polyHedgeTriggerToKalshiSubmitMs126   1       643     938     990
+===== RECENT WORKER ERRORS/WARNINGS (journal, last 120) =====
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.479Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.479Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.479Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.480Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.547Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.548Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.549Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.549Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.550Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.551Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.552Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.553Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.553Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.554Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.554Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.555Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.555Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.556Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.556Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.557Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.557Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.557Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.558Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.559Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.559Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.560Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.560Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.560Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.561Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.561Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.561Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.627Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.628Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.629Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.630Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.630Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.631Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.631Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.632Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.632Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.633Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.633Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.634Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.635Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.635Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.636Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.636Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.638Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.638Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.638Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.639Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.639Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.704Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.705Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.707Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.707Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.708Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.708Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.709Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.709Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.709Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.710Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.710Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.711Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.711Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.712Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.712Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.712Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.713Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.714Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.714Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.715Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.715Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.715Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.716Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.716Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.716Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.717Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.717Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.718Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.718Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.719Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.719Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.720Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.720Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.720Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.720Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.721Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.721Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.721Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.721Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.785Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.785Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.786Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.787Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.787Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.787Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.788Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.788Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.788Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.789Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.789Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.790Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.790Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.791Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.791Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.791Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.792Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.792Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.792Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.793Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.793Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.794Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.794Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.795Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.795Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.795Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:04 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:04.795Z","severity":"ERROR","category":"SCANNER","message":"live scan blocked by persistent circuit breaker","context":{"reason":"live hot-path lock cache is stale
+Jun 20 06:25:27 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:25:27.185Z","severity":"WARN","category":"SCANNER","message":"candidate blocked by live exposure guard","context":{"pairKey":"1781937000000:kalshi:KXBTC15M-26JUN20023
+Jun 20 06:26:27 ip-172-26-15-127 npm[130214]: {"timestamp":"2026-06-20T06:26:27.427Z","severity":"WARN","category":"SCANNER","message":"candidate blocked by live exposure guard","context":{"pairKey":"1781937000000:kalshi:KXBTC15M-26JUN20023

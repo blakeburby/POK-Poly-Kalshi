@@ -1,0 +1,8 @@
+=== LEAD 1: private-stream-mismatch quarantines (7d, n=79) ===
+  BOTH legs filled (hedged): 76  naked-poly: 3  naked-kalshi: 0  neither: 0
+  of both-filled: in-band overfill(pf 5..6): 76  out-of-band: 0
+  unhedged poly-minus-kalshi tail: p50=0.14492499999999975 max=0.526
+
+=== LEAD 2: hedge timing on two-sided (kalshi-filled) trades (14d, n=128) ===
+  venueSubmitSkewMs: p50=399 p90=4497 min=0
+  skew<1200ms (fired early at trigger): 104  skew 2300-2700 (fired at the 2500ms timeout): 0  / total 128
