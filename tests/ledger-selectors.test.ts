@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ledgerRow } from "../app/lib/selectors";
 import { trimSnapshot } from "../app/lib/trim-snapshot";
+import { recentSignalsSignature } from "../src/dashboard/signal-transport";
 import type { DashboardSignal, DashboardSnapshot } from "../src/types";
 
 function sig(over: Partial<DashboardSignal>): DashboardSignal {
@@ -75,4 +76,18 @@ test("latency: trim-snapshot keeps only UI-read scalars (executionTimings/featur
   assert.equal((t.fillQualitySnapshot as Record<string, unknown>).pairedFillConfidence, undefined);
   assert.equal(t.leadLagSnapshot!.leaderVenue, "kalshi");
   assert.equal(t.leadLagSnapshot!.windows.length, 0);
+});
+
+test("freshness: recentSignalsSignature changes on insert + on update, stable otherwise", () => {
+  const a = sig({ id: 1, updatedAt: new Date(1000).toISOString() });
+  const b = sig({ id: 2, updatedAt: new Date(2000).toISOString() });
+  const base = recentSignalsSignature([b, a]);
+  // insert a newer row -> count + newest change
+  const c = sig({ id: 3, updatedAt: new Date(3000).toISOString() });
+  assert.notEqual(recentSignalsSignature([c, b, a]), base);
+  // an existing row updated (updated_at bumped) -> newest changes
+  const aUpdated = sig({ id: 1, updatedAt: new Date(4000).toISOString() });
+  assert.notEqual(recentSignalsSignature([b, aUpdated]), base);
+  // unchanged list -> identical signature (no spurious push)
+  assert.equal(recentSignalsSignature([b, a]), base);
 });

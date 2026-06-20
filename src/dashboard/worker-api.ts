@@ -8,6 +8,7 @@ import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
 import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 import { emptyTradingActivity } from "../trading/activity";
+import { trimSignalForTransport, recentSignalsSignature } from "./signal-transport";
 import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity, VenuePnlSnapshot, EquityCurveSnapshot } from "../../types/trading";
 
 interface SignalReader {
@@ -373,7 +374,9 @@ export async function createDashboardSnapshot(runtime: DashboardRuntime, now = D
     },
     liveCandidates,
     syntheticStructures,
-    recentSignals,
+    // Transport-trim at the source so BOTH the snapshot endpoint and the SSE stream (which bypasses the
+    // Vercel proxy) emit the same lightweight signals; the proxy trim is then idempotent.
+    recentSignals: recentSignals.map(trimSignalForTransport),
     analytics,
     tradingActivity,
     venuePnl,
@@ -487,12 +490,25 @@ async function writeLiveStream(response: ServerResponse, runtime: DashboardRunti
     Vary: "Origin",
   });
   let lastSig = "";
+  let lastSignalsSig = "";
   const tick = async (): Promise<void> => {
     try {
-      const slice = await createLiveSnapshot(runtime, Date.now(), sharedSnapshotCache);
+      const now = Date.now();
+      const slice = await createLiveSnapshot(runtime, now, sharedSnapshotCache);
       const sig = liveSignature(slice);
-      if (sig !== lastSig) {
+      // Freshness: push recentSignals over the realtime stream the moment the ledger changes (a new/updated
+      // trade), instead of waiting for the ~6s heavy poll. Detected via a cheap fingerprint of the cached
+      // signals (cache TTL = dashboardSignalRefreshMs, shared across streams), so it only ships the
+      // (transport-trimmed) list on actual change — never every 250ms frame.
+      const recentSignals = await cachedRecentSignals(runtime, now, sharedSnapshotCache);
+      const signalsSig = recentSignalsSignature(recentSignals);
+      const signalsChanged = signalsSig !== lastSignalsSig;
+      if (sig !== lastSig || signalsChanged) {
         lastSig = sig;
+        if (signalsChanged) {
+          lastSignalsSig = signalsSig;
+          (slice as Partial<DashboardSnapshot>).recentSignals = recentSignals.map(trimSignalForTransport);
+        }
         response.write(formatSseEvent("live", slice));
       } else {
         response.write(": hb\n\n");
