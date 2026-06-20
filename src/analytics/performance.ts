@@ -64,7 +64,11 @@ function hasRealVenueFillId(value: string | null | undefined): boolean {
 function matchingPositiveFillCounts(signal: DashboardSignal): boolean {
   const kalshiCount = signal.kalshiFillCount ?? 0;
   const polymarketCount = signal.polymarketFillCount ?? 0;
-  return kalshiCount > 0 && polymarketCount > 0 && Math.abs(kalshiCount - polymarketCount) <= EPSILON;
+  // C2: a completed two-sided arb = both legs filled with Polymarket (FAK) AT OR ABOVE the integer Kalshi
+  // floor-hedge. The old strict |k-p| <= eps excluded every benign FAK over-hedge (e.g. 5 / 5.16), so even
+  // after C1 reclassifies those to "filled" they were dropped from analytics — under-counting hedged arbs and
+  // their P&L. An UNDERFILL (poly below the kalshi hedge) is NOT a clean hedge and is still excluded.
+  return kalshiCount > 0 && polymarketCount >= kalshiCount - EPSILON;
 }
 
 export function isExactLiveFilledSignal(signal: DashboardSignal): boolean {
@@ -276,7 +280,17 @@ export function buildAnalyticsWindow(
   const tradesLost = pnls.filter((pnl) => pnl < -EPSILON).length;
   const filledTrades = pnls.length;
   const netPnl = roundMetric(pnls.reduce((sum, pnl) => sum + pnl, 0));
-  const opportunityCount = trades.length;
+  // C2: the fill-rate denominator must be REAL ATTEMPTS in the window (executor-dispatched signals carry an
+  // executionGroupId), NOT the filled-trade count. trades[] holds only filled signals, so the old
+  // `trades.length` made fillRate structurally ~100% (filled/filled) while the true rate is ~7.5%. (Failed
+  // attempts live in the in-memory store but aren't reloaded from the DB on restart, so guard with max() to
+  // never report >100% during the brief post-restart window before failures re-accumulate.)
+  const attemptCount = signals.filter((candidate) => {
+    if (typeof candidate.executionGroupId !== "string" || candidate.executionGroupId.length === 0) return false;
+    const ts = new Date(candidate.updatedAt).getTime();
+    return Number.isFinite(ts) && ts >= sinceMs && ts < endMs;
+  }).length;
+  const opportunityCount = Math.max(attemptCount, filledTrades);
   const heatmap: DashboardAnalyticsHeatmapCell[] = buckets.map((bucket) => ({
     label: bucket.label,
     startMs: bucket.startMs,

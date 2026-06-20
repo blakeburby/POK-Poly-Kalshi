@@ -46,6 +46,35 @@ test("analytics estimates guaranteed PnL from fill prices and falls back to prem
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillCount: 5, polymarketFillCount: 0 })), null);
 });
 
+test("C2: an in-band Polymarket FAK over-hedge (5 / 5.16) counts as a completed hedged trade; an underfill does not", () => {
+  // Pre-C2 the strict |k-p|<=eps dropped every benign over-hedge from analytics even though it is a fully
+  // hedged arb (Kalshi floor-hedges 5; the ~0.16 Polymarket residual is the bounded FAK overfill).
+  assert.notEqual(estimatedGuaranteedPnl(signal({ kalshiFillCount: 5, polymarketFillCount: 5.16 })), null);
+  assert.notEqual(estimatedGuaranteedPnl(signal({ kalshiFillCount: 5, polymarketFillCount: 5 })), null);
+  // A genuine underfill (Polymarket below the Kalshi hedge) is NOT a clean hedge -> still excluded.
+  assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillCount: 5, polymarketFillCount: 4 })), null);
+  const now = Date.UTC(2026, 3, 29, 20, 30);
+  const w = buildAnalyticsWindow([
+    signal({ id: 1, updatedAt: at(now - 5 * 60 * 1000), kalshiFillCount: 5, polymarketFillCount: 5.16, kalshiFillPrice: 0.5, polymarketFillPrice: 0.4 }),
+  ], "hourly", now);
+  assert.equal(w.filledTrades, 1);
+});
+
+test("C2: fill rate uses REAL ATTEMPTS as the denominator, not filled-only (was structurally ~100%)", () => {
+  const now = Date.UTC(2026, 3, 29, 20, 30);
+  const failed = (id: number, mins: number) => signal({
+    id, updatedAt: at(now - mins * 60 * 1000), action: "failed",
+    kalshiFillId: null, polymarketFillId: null, kalshiFillCount: 0, polymarketFillCount: 0,
+  });
+  const w = buildAnalyticsWindow([
+    signal({ id: 1, updatedAt: at(now - 5 * 60 * 1000), kalshiFillPrice: 0.5, polymarketFillPrice: 0.4 }), // 1 filled
+    failed(2, 6), failed(3, 7), failed(4, 8), // 3 real no-fill/failed attempts (executionGroupId set)
+  ], "hourly", now);
+  assert.equal(w.filledTrades, 1);
+  assert.equal(w.opportunityCount, 4); // 1 filled + 3 attempts, NOT filled/filled
+  assert.equal(w.fillRate, 0.25);
+});
+
 test("analytics computes win loss rates, profit factor, and cumulative buckets", () => {
   const now = Date.UTC(2026, 3, 29, 20, 30);
   const analytics = buildAnalyticsWindow([
@@ -117,8 +146,10 @@ test("analytics store serves hot snapshots and matches full calculator", () => {
   const hot = store.snapshot(now, { staleAfterMs: 5_000 });
   const full = buildDashboardAnalytics(signals, now);
   assert.equal(hot.hourly.netPnl, full.hourly.netPnl);
-  assert.equal(hot.hourly.opportunityCount, 1);
-  assert.equal(hot.hourly.fillRate, 1);
+  // C2: the failed attempt (signals[1], executionGroupId set) now correctly counts in the fill-rate
+  // denominator -> 1 filled of 2 attempts = 0.5 (previously filled/filled reported a bogus 1.0).
+  assert.equal(hot.hourly.opportunityCount, 2);
+  assert.equal(hot.hourly.fillRate, 0.5);
   assert.equal(hot.realtime?.mode, "hot_cache");
   assert.equal(hot.realtime?.lastDbReconciledAt, now - 250);
   assert.equal(hot.realtime?.sourceSignalCount, 2);
