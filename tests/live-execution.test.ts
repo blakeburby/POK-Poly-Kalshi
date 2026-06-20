@@ -4016,6 +4016,81 @@ test("polymarket_first_exact sends Kalshi from exact stream evidence while REST 
   assert.equal(typeof result.executionTimings?.polyHedgeTriggerToKalshiSubmitMs, "number");
 });
 
+test("P1: liveAcceptStreamAckAsOrderResult finalizes from the stream ack WITHOUT blocking on the slow REST", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const kalshi = new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 });
+
+  // REST stays pending until we explicitly release it (simulates the measured p90 ~6s slow-REST tail). The
+  // stream confirmation arrives immediately. The point of P1: execute() must finalize off the stream ack
+  // while the REST is still unresolved.
+  let restResolved = false;
+  let releaseRest: (() => void) | null = null;
+  const restGate = new Promise<void>((resolve) => { releaseRest = resolve; });
+  class GatedSlowRestClient extends FakeVenueClient {
+    async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+      this.placed.push({ leg, context });
+      await restGate;
+      restResolved = true;
+      const requestedAt = context.requestedAt ?? now;
+      return {
+        venue: "polymarket",
+        clientOrderId: context.clientOrderId,
+        orderId: "polymarket-rest-order",
+        status: "filled",
+        fillPrice: 0.4,
+        fillCount: 8,
+        requestedAt: new Date(requestedAt).toISOString(),
+        respondedAt: new Date(requestedAt + 6_000).toISOString(),
+        error: null,
+        metadata: { polymarketPostOrderMs: 6_000 },
+      };
+    }
+  }
+  class ImmediateStreamConfirmation extends FakeConfirmationMonitor {
+    async waitForVenueResult(result: VenueOrderResult): Promise<VenueConfirmationResult> {
+      this.waitCalls.push(result.venue);
+      if (result.venue !== "polymarket") return super.waitForVenueResult(result);
+      return {
+        venue: "polymarket", status: "confirmed", reason: null,
+        clientOrderId: result.clientOrderId, venueOrderId: "polymarket-stream-order",
+        fillCount: 8, fillPrice: 0.4, fee: null, exchangeTimestampMs: null,
+        receivedAtMs: now + 1, eventType: "stream_test",
+      };
+    }
+  }
+  const polymarket = new GatedSlowRestClient("polymarket");
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveUserStreamsEnabled: true,
+      liveAcceptStreamAckAsOrderResult: true,
+      liveOrderTimeoutMs: 5_000,
+    }),
+    books, kalshi, polymarket, () => now, undefined, undefined, new ImmediateStreamConfirmation(),
+  );
+
+  const result = await executor.execute(candidate);
+
+  // The decisive assertion: we finalized while REST was still pending (no blocking on the slow tail).
+  assert.equal(restResolved, false, "execute() must NOT have waited for the slow REST");
+  assert.equal(result.action, "filled");
+  assert.equal(result.partialFill, false);
+  assert.equal(result.polymarketFillId, "polymarket-stream-order"); // from the stream, not the REST order id
+  assert.equal(result.polymarketFillCount, 8);
+  assert.equal(result.executionTimings?.polymarketExactEvidenceSource, "private_stream");
+  assert.equal(result.executionTimings?.polymarketHedgeTriggerSource, "private_stream");
+  assert.equal(kalshi.placed.length, 1);
+
+  // Release the gate so the background REST drain settles and clears its timeout (no lingering handles).
+  releaseRest?.();
+  await sleep(0);
+});
+
 test("polymarket_first_exact sends Kalshi from in-range stream mismatch evidence while REST is still pending", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);

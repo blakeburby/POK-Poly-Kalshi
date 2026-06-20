@@ -1097,10 +1097,24 @@ export class LiveExecutor implements ArbExecutor {
       hedge,
       hedgeContext,
     );
-    const finalPolymarketRest = polymarketEvidence.restResult ?? await polymarketRestPromise;
+    // P1: when the user-stream already delivered the authoritative fill (trigger source = private_stream)
+    // and the REST response has not arrived yet, finalize from that evidence instead of blocking on the slow
+    // REST response/recovery (p90 ~6s). The private-stream branch of mergePolymarketHedgeTriggerEvidence
+    // already takes every fill field from evidence.result — REST only contributed forensic metadata — so this
+    // is a latency change, not a fill-data change. The late REST is drained in the background. Flag default off.
+    const acceptStreamAck = this.config.liveAcceptStreamAckAsOrderResult
+      && evidence.source === "private_stream"
+      && polymarketEvidence.restResult === undefined;
+    if (acceptStreamAck) this.drainPolymarketRestInBackground(polymarketRestPromise);
+    const finalPolymarketRest = acceptStreamAck
+      ? evidence.restResult
+      : (polymarketEvidence.restResult ?? await polymarketRestPromise);
     const finalPolymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
+    const mergedPolymarket = this.mergePolymarketHedgeTriggerEvidence(evidence, finalPolymarketRest);
     const finalPolymarket = this.applyVenueConfirmation(
-      this.mergePolymarketHedgeTriggerEvidence(evidence, finalPolymarketRest),
+      acceptStreamAck
+        ? { ...mergedPolymarket, metadata: { ...(mergedPolymarket.metadata ?? {}), polymarketRestShortCircuited: true } }
+        : mergedPolymarket,
       finalPolymarketConfirmation,
       prepared.polymarket.leg,
     );
@@ -1957,6 +1971,13 @@ export class LiveExecutor implements ArbExecutor {
     }
 
     return { trigger: null, restResult, confirmation: confirmation ?? null };
+  }
+
+  // P1: the private-stream ack already finalized the order, so the slow REST response/recovery no longer
+  // gates the result. Drain it without awaiting (so it can't surface as an unhandled rejection) — the
+  // executor's normal async venue reconciliation still covers the venue truth.
+  private drainPolymarketRestInBackground(restPromise: Promise<VenueOrderResult>): void {
+    void restPromise.then(() => undefined, () => undefined);
   }
 
   private mergePolymarketHedgeTriggerEvidence(evidence: PolymarketHedgeTriggerEvidence, restResult: VenueOrderResult): VenueOrderResult {

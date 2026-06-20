@@ -107,6 +107,7 @@ export interface AppConfig {
   liveConfirmationFlatMissNonBlocking: boolean;
   liveConfirmationOverfillTolerant: boolean;
   liveConfirmationAcceptRestEvidence: boolean;
+  liveAcceptStreamAckAsOrderResult: boolean;
   livePolymarketTimeoutRecoveryResolvesNoFill: boolean;
   liveExactExposureRequired: boolean;
   liveExecutionQualityGateEnabled: boolean;
@@ -400,6 +401,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // knownOrder reconciliation. Recovers the ~half of confirmation timeouts that actually filled both legs.
     // Default off = a stream timeout still quarantines (today's behavior).
     liveConfirmationAcceptRestEvidence: envBoolean(env, "LIVE_CONFIRM_ACCEPT_REST_EVIDENCE", false),
+    // P1: in polymarket_first_exact, when the user-stream delivers the authoritative fill (hedge-trigger
+    // source = private_stream) BEFORE the REST order response returns, finalize the Polymarket result from
+    // that stream evidence instead of blocking on the slow REST response/recovery (measured p90 ~6s, p95 ~8s;
+    // ~22% of orders hit the >2.5s timeout->recovery tail). The merge already takes every fill field from the
+    // stream evidence — REST only supplied forensic metadata — so this is a latency change, not a fill-data
+    // change; the late REST is drained in the background. Default off = block on REST as today.
+    liveAcceptStreamAckAsOrderResult: envBoolean(env, "LIVE_ACCEPT_STREAM_ACK_AS_ORDER_RESULT", false),
     // When true, a Polymarket FAK order that times out (status "unknown") but whose timeout-recovery poll
     // reached the venue and found NO order/trade/open-order ("not_found") is treated as a DEFINITIVE no-fill
     // (a FAK cannot rest, so no evidence == no fill). This auto-resolves settled no-fill timeouts that would
