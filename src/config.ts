@@ -126,6 +126,7 @@ export interface AppConfig {
   liveFillQualityLookbackMs: number;
   liveFillQualitySampleLimit: number;
   liveFillQualityMinSamples: number;
+  liveFillQualityInputCacheMaxAgeMs: number;
   liveFillQualityModelVersion: string;
   liveLeadLagScoringEnabled: boolean;
   liveLeadLagGateEnabled: boolean;
@@ -427,6 +428,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveFillQualityLookbackMs: envNumber(env, "LIVE_FILL_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),
     liveFillQualitySampleLimit: envNumber(env, "LIVE_FILL_QUALITY_SAMPLE_LIMIT", 200),
     liveFillQualityMinSamples: envNumber(env, "LIVE_FILL_QUALITY_MIN_SAMPLES", 30),
+    // P2: the fill-quality snapshot does two DB reads (recent signals + venue events) on the
+    // candidate->submit hot path. The gate is off by default, so the snapshot is shadow telemetry — under
+    // pg-pool contention those reads are the hotGateMs p90 tail. When >0, cache the two read RESULTS for this
+    // many ms (per-candidate scoreFillQuality CPU still runs fresh), so clustered executions reuse one query.
+    // Default 0 = no cache = byte-identical (fresh reads every execution).
+    liveFillQualityInputCacheMaxAgeMs: envNumber(env, "LIVE_FILL_QUALITY_INPUT_CACHE_MAX_AGE_MS", 0),
     liveFillQualityModelVersion: envString(env, "LIVE_FILL_QUALITY_MODEL_VERSION", "heuristic-v1"),
     liveLeadLagScoringEnabled: envBoolean(env, "LIVE_LEAD_LAG_SCORING_ENABLED", true),
     liveLeadLagGateEnabled: envBoolean(env, "LIVE_LEAD_LAG_GATE_ENABLED", false),

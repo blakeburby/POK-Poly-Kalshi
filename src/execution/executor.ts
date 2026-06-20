@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config";
 import { loadConfig } from "../config";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
-import type { VenueOrderEventReader, VenueOrderEventWriter } from "../db/venue-order-events";
+import type { VenueOrderEventInput, VenueOrderEventReader, VenueOrderEventWriter } from "../db/venue-order-events";
 import { protectedCandidateBlockReason } from "../scanner/safety";
 import type { ArbCandidate, ArbLeg, BinaryContract, DashboardSignal, ExecutionResult, ExecutionStrategy, ExecutionTimings, FillQualitySnapshot, LeadLagSnapshot, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveOrderPlacementMode, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
 import {
@@ -282,6 +282,10 @@ export class LiveExecutor implements ArbExecutor {
   // Falls back to config.liveOrderSize, so when dynamic sizing is off every read is byte-identical.
   private executionOrderSize: number | null = null;
   private lastAttempt: LiveExecutionLastAttempt | null = null;
+  // P2: TTL cache of the fill-quality snapshot's two DB read results (off by default via
+  // liveFillQualityInputCacheMaxAgeMs=0). Keyed only by time — the reads are a time-window sample, not
+  // candidate-specific — so clustered executions reuse one query instead of contending the shared pg pool.
+  private fillQualityInputsCache: { at: number; recentSignals: DashboardSignal[]; recentVenueEvents: VenueOrderEventInput[] } | null = null;
 
   constructor(
     private readonly config: AppConfig = loadConfig(),
@@ -1162,6 +1166,31 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
+  // P2: fetch the two fill-quality DB read inputs, optionally serving a TTL-cached result so clustered
+  // executions don't each pay the pg-pool round-trips on the candidate->submit hot path. With the cache
+  // disabled (liveFillQualityInputCacheMaxAgeMs=0, default) this is a fresh read every call — byte-identical.
+  private async fillQualityInputs(now: number): Promise<{ recentSignals: DashboardSignal[]; recentVenueEvents: VenueOrderEventInput[] }> {
+    const ttl = Math.max(0, this.config.liveFillQualityInputCacheMaxAgeMs);
+    const cached = this.fillQualityInputsCache;
+    if (ttl > 0 && cached && now - cached.at >= 0 && now - cached.at < ttl) {
+      return { recentSignals: cached.recentSignals, recentVenueEvents: cached.recentVenueEvents };
+    }
+    const eventReader = this.orderEvents as (VenueOrderEventWriter & Partial<VenueOrderEventReader>) | undefined;
+    const [recentSignals, recentVenueEvents] = await Promise.all([
+      this.quarantineExposureReader?.listLiveExecutionQualitySignals?.(
+        now,
+        this.config.liveFillQualityLookbackMs,
+        this.config.liveFillQualitySampleLimit,
+      ) ?? Promise.resolve([]),
+      eventReader?.listRecentEvents?.(
+        now - Math.max(0, this.config.liveFillQualityLookbackMs),
+        this.config.liveFillQualitySampleLimit,
+      ) ?? Promise.resolve([]),
+    ]);
+    this.fillQualityInputsCache = { at: now, recentSignals, recentVenueEvents };
+    return { recentSignals, recentVenueEvents };
+  }
+
   private async fillQualitySnapshot(
     candidate: ArbCandidate,
     quoteSnapshot: QuoteSnapshot,
@@ -1169,16 +1198,7 @@ export class LiveExecutor implements ArbExecutor {
   ): Promise<FillQualitySnapshot | null> {
     if (!this.config.liveFillQualityScoringEnabled) return null;
     const now = this.now();
-    const recentSignals = await (this.quarantineExposureReader?.listLiveExecutionQualitySignals?.(
-      now,
-      this.config.liveFillQualityLookbackMs,
-      this.config.liveFillQualitySampleLimit,
-    ) ?? Promise.resolve([]));
-    const eventReader = this.orderEvents as (VenueOrderEventWriter & Partial<VenueOrderEventReader>) | undefined;
-    const recentVenueEvents = await (eventReader?.listRecentEvents?.(
-      now - Math.max(0, this.config.liveFillQualityLookbackMs),
-      this.config.liveFillQualitySampleLimit,
-    ) ?? Promise.resolve([]));
+    const { recentSignals, recentVenueEvents } = await this.fillQualityInputs(now);
     return scoreFillQuality({
       candidate,
       quoteSnapshot,

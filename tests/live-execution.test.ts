@@ -3888,6 +3888,48 @@ test("LA5: fill-quality is scored ONCE when the gate is off and TWICE when on, w
   assert.equal(onResult.fillQualitySnapshot?.gatePassed, true);
 });
 
+test("P2: liveFillQualityInputCacheMaxAgeMs reuses the shadow fill-quality DB read across clustered executions", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  let readCalls = 0;
+  const reader = {
+    unresolvedRiskQuarantineExposureDollars: async () => 0,
+    listLiveExecutionQualitySignals: async () => { readCalls += 1; return exactQualitySignals(now); },
+    liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
+    liveExactExposureBlockReason: async () => null,
+  };
+  const make = (ttl: number) => new LiveExecutor(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      liveFillQualityScoringEnabled: true,
+      liveFillQualityGateEnabled: false,
+      liveFillQualityInputCacheMaxAgeMs: ttl,
+    }),
+    books,
+    new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 }),
+    new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 }),
+    () => now, undefined, undefined, undefined, reader,
+  );
+
+  // Cache ON: two executions within the TTL share a single DB read (off the contended pg pool).
+  readCalls = 0;
+  const cached = make(5_000);
+  assert.equal((await cached.execute(candidate)).action, "filled");
+  assert.equal((await cached.execute(candidate)).action, "filled");
+  assert.equal(readCalls, 1, "second clustered execution should reuse the cached fill-quality inputs");
+
+  // Cache OFF (default 0): each execution reads fresh — byte-identical to today.
+  readCalls = 0;
+  const uncached = make(0);
+  await uncached.execute(candidate);
+  await uncached.execute(candidate);
+  assert.equal(readCalls, 2, "with the cache disabled each execution reads fresh");
+});
+
 test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stream confirmation", async () => {
   const now = 1_799_999_900_000;
   const { candidate, lower, higher } = liveCandidate(now);
