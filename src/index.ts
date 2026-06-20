@@ -126,6 +126,9 @@ async function main(): Promise<void> {
     // When on, the same band also makes an in-band overfill CONFIRM (not mismatch) so a near-complete
     // hedged fill is classified as filled instead of quarantined. Off by default (strict-exact).
     confirmationOverfillTolerant: config.liveConfirmationOverfillTolerant,
+    // C1: confirm an in-band positive fill even when the resolving stream event carries a non-whitelisted
+    // Polymarket lifecycle status (e.g. "mined") instead of quarantining it as a confirmation mismatch.
+    confirmationStatusTolerant: config.liveConfirmationStatusTolerant,
     allowUnresolvedRisk: !config.liveAutoHardlocksEnabled,
     liveLocks,
     now: Date.now,

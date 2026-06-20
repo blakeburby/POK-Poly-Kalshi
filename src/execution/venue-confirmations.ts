@@ -148,6 +148,7 @@ function confirmationFromEvent(
   result: VenueOrderResult,
   expectedSize: number,
   overfillBand = 0,
+  statusTolerant = false,
 ): VenueConfirmationResult {
   const fillCount = event.fillCount ?? null;
   const status = event.status;
@@ -159,7 +160,14 @@ function confirmationFromEvent(
   const mismatch = fillCount != null
     && (fillCount < expectedSize - 0.000001 || fillCount > expectedSize + band + 0.000001);
   const failed = isFailureStatus(status);
-  const confirmed = isConfirmingStatus(status) && !mismatch && !failed;
+  // C1: Polymarket emits a matched->mined->confirmed lifecycle; "mined" is not in the strict
+  // confirming-status whitelist, so when it resolves the pending confirmation the order falls through to a
+  // bogus "mismatch" even though the fill is in-band (and the executor then quarantines a completed hedged
+  // arb). When statusTolerant is on, a non-failed event carrying a positive in-band fill IS a confirmation
+  // regardless of its lifecycle status string. The count check (underfill / overfill-beyond-band) still
+  // governs, so a genuine mismatch is unaffected. statusTolerant defaults off -> byte-identical strict path.
+  const confirmingStatus = isConfirmingStatus(status) || (statusTolerant && (fillCount ?? 0) > 0);
+  const confirmed = confirmingStatus && !mismatch && !failed;
   return {
     venue: result.venue,
     status: failed ? "failed" : mismatch ? "mismatch" : confirmed ? "confirmed" : "mismatch",
@@ -216,6 +224,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       flatMissNonBlocking?: boolean;
       overfillToleranceShares?: number;
       confirmationOverfillTolerant?: boolean;
+      confirmationStatusTolerant?: boolean;
       allowUnresolvedRisk?: boolean;
       liveLocks?: LiveExecutionLockWriter;
       now?: () => number;
@@ -281,7 +290,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     // fill), so any later stream event for the order is judged against what the executor actually reconciled.
     this.rememberKnownOrder(result, options.executionGroupId, options.expectedSize);
     const existing = this.recentEvents.find((event) => eventMatchesExpected(event, { result, leg: options.leg, submittedAtMs: options.submittedAtMs }));
-    if (existing) return confirmationFromEvent(existing, result, options.expectedSize, this.confirmationBand());
+    if (existing) return confirmationFromEvent(existing, result, options.expectedSize, this.confirmationBand(), this.options.confirmationStatusTolerant);
 
     return await new Promise<VenueConfirmationResult>((resolve) => {
       const pending: PendingConfirmation = {
@@ -322,7 +331,7 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       matchedPending = true;
       clearTimeout(pending.timeout);
       this.pending.delete(pending);
-      const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize, this.confirmationBand());
+      const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize, this.confirmationBand(), this.options.confirmationStatusTolerant);
       // Record the executor's REST-confirmed fill (pending.result.fillCount) as the order's reconciled fill,
       // so LATER stream events for the same order (partials or duplicates AT OR BELOW it) are recognized as
       // already-accounted and do not re-lock; a later event revealing MORE still locks.

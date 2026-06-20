@@ -378,6 +378,66 @@ test("confirmation coordinator does NOT lock on a PARTIAL stream fill at/below t
   assert.equal(locks.lock, null);
 });
 
+function statusToleranceCoordinator(opts: { statusTolerant?: boolean; expectedSize?: number }) {
+  const hub = new VenueOrderEventHub(new MemoryEventStore());
+  const coordinator = new LiveVenueConfirmationCoordinator({
+    enabled: true,
+    confirmTimeoutMs: 500,
+    reconcileBeforeTrade: false,
+    eventSource: hub,
+    streamReadiness: (now) => buildUserStreamReadiness(true, 500, readyState, readyState, now),
+    liveLocks: new MemoryLocks(),
+    overfillToleranceShares: 1,
+    confirmationOverfillTolerant: true,
+    confirmationStatusTolerant: opts.statusTolerant,
+    now: () => 1_800_000_000_200,
+  });
+  const pending = coordinator.waitForVenueResult(result("polymarket"), {
+    executionGroupId: "group",
+    expectedSize: opts.expectedSize ?? 5,
+    leg,
+    submittedAtMs: 1_800_000_000_000,
+    timeoutMs: 500,
+  });
+  return { hub, pending };
+}
+
+test("C1: a Polymarket 'mined' lifecycle event with an EXACT fill CONFIRMS when statusTolerant is on (was a bogus mismatch -> quarantine)", async () => {
+  const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 5 });
+  assert.equal((await pending).status, "confirmed");
+});
+
+test("C1: a Polymarket 'mined' event with an IN-BAND overfill CONFIRMS when statusTolerant is on", async () => {
+  const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 5.16 });
+  assert.equal((await pending).status, "confirmed");
+});
+
+test("C1: the SAME 'mined' exact fill stays a 'mismatch' when statusTolerant is OFF (byte-identical default)", async () => {
+  const { hub, pending } = statusToleranceCoordinator({ statusTolerant: false });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 5 });
+  assert.equal((await pending).status, "mismatch");
+});
+
+test("C1: statusTolerant does NOT confirm a genuine UNDERFILL (3/5) — the count check still governs", async () => {
+  const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 3 });
+  assert.equal((await pending).status, "mismatch");
+});
+
+test("C1: statusTolerant does NOT confirm an overfill BEYOND the band (6.5/5)", async () => {
+  const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 6.5 });
+  assert.equal((await pending).status, "mismatch");
+});
+
+test("C1: statusTolerant still reports a FAILED stream status as failed (never confirms a failure)", async () => {
+  const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
+  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 5 });
+  assert.equal((await pending).status, "failed");
+});
+
 test("confirmation coordinator does NOT lock on a Kalshi intermediate partial-fill stream event (lock-19: stream 1, REST-confirmed 5)", async () => {
   const store = new MemoryEventStore();
   const hub = new VenueOrderEventHub(store);

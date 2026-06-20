@@ -106,6 +106,7 @@ export interface AppConfig {
   liveAutoHardlocksEnabled: boolean;
   liveConfirmationFlatMissNonBlocking: boolean;
   liveConfirmationOverfillTolerant: boolean;
+  liveConfirmationStatusTolerant: boolean;
   liveConfirmationAcceptRestEvidence: boolean;
   liveAcceptStreamAckAsOrderResult: boolean;
   livePolymarketTimeoutRecoveryResolvesNoFill: boolean;
@@ -396,6 +397,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // covers the whole-share portion; the sub-share residual is the intended, bounded FAK over-hedge.
     // Default off = byte-identical strict-exact classification (the 1e-6 mismatch behavior).
     liveConfirmationOverfillTolerant: envBoolean(env, "LIVE_CONFIRMATION_OVERFILL_TOLERANT", false),
+    // C1: Polymarket's user-stream emits a 3-stage trade lifecycle (matched -> mined -> confirmed). The
+    // strict confirming-status whitelist excludes "mined", so when the `mined` event resolves the pending
+    // confirmation, confirmationFromEvent falls through to "mismatch" REGARDLESS of fill count — quarantining
+    // completed, hedged, in-band fills (even exact 5/5). When true, a non-failed event carrying a positive
+    // in-band fill confirms regardless of its lifecycle status string. Default off = strict whitelist (today).
+    liveConfirmationStatusTolerant: envBoolean(env, "LIVE_CONFIRMATION_STATUS_TOLERANT", false),
     // When true, a private-stream confirmation TIMEOUT on a venue whose REST order response already
     // evidenced the fill (error-free, fillCount > 0) is NOT treated as unconfirmed exposure: the order
     // response itself confirms the fill, and a genuine late surplus still locks via the coordinator's
