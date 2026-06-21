@@ -116,7 +116,9 @@ export class CrossVenueArbScanner {
         const activeLock = await this.options.liveLocks?.getActiveLock();
         if (activeLock) {
           this.lastCandidateCount = 0;
-          logEvent({
+          // H1: throttle so a persistent breaker (esp. a synthetic stale-cache lock) can't flood ERROR logs
+          // dozens-per-second on every coalesced scan; keyed by reason so distinct causes still surface.
+          logThrottle(`scanner:circuit-breaker:${activeLock.reason}`, SCANNER_BLOCK_LOG_THROTTLE_MS, {
             severity: "ERROR",
             category: "SCANNER",
             message: "live scan blocked by persistent circuit breaker",

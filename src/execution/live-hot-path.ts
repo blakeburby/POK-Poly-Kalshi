@@ -106,6 +106,9 @@ export class CachedLiveExecutionLockStore implements LiveExecutionLockWriter {
     private readonly delegate: LiveExecutionLockWriter,
     private readonly maxAgeMs: number,
     private readonly now: () => number = Date.now,
+    // H1: grace beyond maxAgeMs during which a stale cache serves last-good (+ background refresh) instead of
+    // synthesizing a breaker that halts trading. Default 0 = strict synthesize-on-stale (byte-identical).
+    private readonly graceMs: number = 0,
   ) {}
 
   async refresh(): Promise<void> {
@@ -124,23 +127,36 @@ export class CachedLiveExecutionLockStore implements LiveExecutionLockWriter {
     return { cached: this.refreshedAt != null, refreshedAt: this.refreshedAt, stale: age > this.maxAgeMs };
   }
 
+  private staleLock(reason: string): LiveExecutionLock {
+    return {
+      id: -2,
+      createdAt: new Date(this.now()).toISOString(),
+      reason,
+      severity: "critical",
+      sourceSignalId: null,
+      executionGroupId: null,
+      details: { hotPathCache: "live_execution_locks" },
+      clearedAt: null,
+      clearReason: null,
+    };
+  }
+
   async getActiveLock(): Promise<LiveExecutionLock | null> {
-    if (this.refreshedAt == null || this.status.stale) {
-      return {
-        id: -2,
-        createdAt: new Date(this.now()).toISOString(),
-        reason: this.refreshedAt == null
-          ? "live hot-path lock cache has not been hydrated"
-          : `live hot-path lock cache is stale: age ${this.now() - this.refreshedAt}ms exceeds ${this.maxAgeMs}ms`,
-        severity: "critical",
-        sourceSignalId: null,
-        executionGroupId: null,
-        details: { hotPathCache: "live_execution_locks" },
-        clearedAt: null,
-        clearReason: null,
-      };
+    // Never hydrated -> fail-safe block (no last-good to serve).
+    if (this.refreshedAt == null) {
+      return this.staleLock("live hot-path lock cache has not been hydrated");
     }
-    return this.cached;
+    const age = this.now() - this.refreshedAt;
+    if (age <= this.maxAgeMs) return this.cached;
+    // H1: within the grace ceiling, serve the LAST-GOOD lock state + kick a background refresh instead of
+    // synthesizing a breaker that halts ALL scanning. Self-engaged locks update the cache synchronously
+    // (single-worker-per-DB), so last-good is safe: a prior lock keeps blocking, "no lock" keeps trading.
+    if (age <= this.maxAgeMs + this.graceMs) {
+      void this.refresh().catch(() => undefined);
+      return this.cached;
+    }
+    // Beyond max-age + grace the cache is presumed broken -> fail-safe block.
+    return this.staleLock(`live hot-path lock cache is stale: age ${age}ms exceeds ${this.maxAgeMs + this.graceMs}ms`);
   }
 
   async engageLock(input: LiveExecutionLockInput): Promise<LiveExecutionLock> {

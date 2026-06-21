@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   const books = new BookStore(config.liveOrderSize);
   const signals = new SignalStore(pool);
   const baseLiveLocks = new LiveExecutionLockStore(pool);
-  const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs) : null;
+  const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs, Date.now, config.liveHotPathLockCacheGraceMs) : null;
   const liveLocks = cachedLiveLocks ?? baseLiveLocks;
   const liveExposureCache = config.liveHotPathEnabled
     ? new LiveExposureCache(signals, config.liveHotPathCacheMaxAgeMs, config.liveMaxUnresolvedExposureDollars)

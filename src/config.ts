@@ -83,6 +83,7 @@ export interface AppConfig {
   liveParallelExecutionEnabled: boolean;
   liveHotPathEnabled: boolean;
   liveHotPathCacheMaxAgeMs: number;
+  liveHotPathLockCacheGraceMs: number;
   liveHotPathWarmIntervalMs: number;
   livePolymarketPresignEnabled: boolean;
   livePolymarketSignedOrderTtlMs: number;
@@ -369,6 +370,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", true),
     liveHotPathEnabled: envBoolean(env, "LIVE_HOT_PATH_ENABLED", true),
     liveHotPathCacheMaxAgeMs: envNumber(env, "LIVE_HOT_PATH_CACHE_MAX_AGE_MS", 5_000),
+    // H1: grace beyond the lock-cache max age during which getActiveLock serves the LAST-GOOD lock state (and
+    // kicks a background refresh) instead of synthesizing a critical breaker that halts ALL scanning on a
+    // transient DB-read lag. Safe because locks are self-engaged by this single worker (engageLock updates the
+    // cache synchronously, single-worker-per-DB), so last-good never hides a self-engaged lock. Beyond
+    // max-age + grace the cache is presumed broken -> fail-safe block. Default 0 = byte-identical (block the
+    // instant the cache exceeds max age).
+    liveHotPathLockCacheGraceMs: envNumber(env, "LIVE_HOT_PATH_LOCK_CACHE_GRACE_MS", 0),
     liveHotPathWarmIntervalMs: envNumber(env, "LIVE_HOT_PATH_WARM_INTERVAL_MS", 1_000),
     livePolymarketPresignEnabled: envBoolean(env, "LIVE_POLYMARKET_PRESIGN_ENABLED", false),
     livePolymarketSignedOrderTtlMs: envNumber(env, "LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS", 5_000),
