@@ -54,6 +54,7 @@ export interface AppConfig {
   liveMinOrderSize: number;
   liveMaxOrderSize: number;
   liveDynamicSizingMaxKalshiSlippageCents: number;
+  liveDynamicSizingCashAware: boolean;
   liveTakerPriceCushionCents: number;
   liveFeeAwareGateEnabled: boolean;
   livePolymarketFirstCrossCents: number;
@@ -324,6 +325,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveMinOrderSize,
     liveMaxOrderSize,
     liveDynamicSizingMaxKalshiSlippageCents: envNumber(env, "LIVE_DYNAMIC_SIZING_MAX_KALSHI_SLIPPAGE_CENTS", 10),
+    // M2: when true, dynamic sizing is given the cached Kalshi balance so a deep window whose largest size
+    // would over-reserve dipping cash sizes DOWN to the largest affordable size instead of skipping the trade
+    // entirely. Default false = selector gets null cash (cash-unaware; byte-identical).
+    liveDynamicSizingCashAware: envBoolean(env, "LIVE_DYNAMIC_SIZING_CASH_AWARE", false),
     liveTakerPriceCushionCents: envNumber(env, "LIVE_TAKER_PRICE_CUSHION_CENTS", 2),
     // When true, the entry gate subtracts an explicit expected Kalshi taker fee (~0.07*p*(1-p) per share,
     // the same model realizedFeePerSpread measures post-fill) from the cushioned edge, so the taker cushion

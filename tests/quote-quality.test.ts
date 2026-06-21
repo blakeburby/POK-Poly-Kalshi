@@ -318,6 +318,21 @@ test("W2: selectExecutableSize CAPS on the Kalshi slippage band even when the ed
   assert.equal(selectExecutableSize(candidate, books, config, null, now), 10);
 });
 
+test("M2: selectExecutableSize sizes DOWN to fit available Kalshi cash instead of skipping the window", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 10 });
+  // Cash-unaware (null): deep book -> picks the MAX.
+  assert.equal(selectExecutableSize(candidate, books, config, null, now), 20);
+  // Cash-aware with ~$6: the size-20 Kalshi reserve (~$10) doesn't fit, so it sizes DOWN to the largest
+  // affordable size instead of skipping the trade. (M2 = "capture every trade".)
+  const sized = selectExecutableSize(candidate, books, config, 6, now);
+  assert.ok(sized < 20 && sized >= 5, `expected a sized-down 5..19, got ${sized}`);
+});
+
 test("W2: selectExecutableSize respects the bankroll bound (caps when Kalshi collateral exceeds cash)", () => {
   const now = 1_800_000_000_000;
   const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });

@@ -475,7 +475,13 @@ export class LiveExecutor implements ArbExecutor {
     const polymarketFirstCrossCents = this.config.liveOrderPlacementMode === "polymarket_first_exact"
       ? this.config.livePolymarketFirstCrossCents
       : 0;
-    const preparedOrSkip = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
+    // M2: with cash-aware sizing on, feed selectExecutableSize the cached Kalshi balance so a deep window
+    // sizes DOWN to the largest affordable size instead of skipping when its size-N reserve exceeds dipping
+    // cash. Cached readiness (hot path) is fast; default off -> null -> cash-unaware (byte-identical).
+    const availableKalshiCash = this.config.liveDynamicSizingCashAware
+      ? (await this.kalshiClient.readiness(this.now())).balance ?? null
+      : null;
+    const preparedOrSkip = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents, availableKalshiCash);
     if (isPrepareSkip(preparedOrSkip)) {
       return preparedOrSkip.rejectedSnapshot
         ? this.skippedWithShadowLadder(preparedOrSkip.skipReason, preparedOrSkip.rejectedSnapshot)
@@ -572,7 +578,7 @@ export class LiveExecutor implements ArbExecutor {
         fillQualitySnapshot,
       );
     }
-    const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents);
+    const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents, availableKalshiCash);
     if (isPrepareSkip(refreshed)) {
       return this.skippedWithQuoteQuality(
         `live quote revalidation after preflight failed: ${refreshed.skipReason}`,
@@ -1342,7 +1348,7 @@ export class LiveExecutor implements ArbExecutor {
     return roundPrice(prepared.orderSize * worstCaseHedgePrice + this.config.liveCollateralBufferDollars);
   }
 
-  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0): PreparedExecution | PrepareSkip {
+  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0, availableKalshiCash: number | null = null): PreparedExecution | PrepareSkip {
     const now = this.now();
     if (!Number.isFinite(this.config.liveOrderSize) || this.config.liveOrderSize <= 0) {
       return { skipReason: "LIVE_ORDER_SIZE must be greater than 0", rejectedSnapshot: null };
@@ -1355,7 +1361,7 @@ export class LiveExecutor implements ArbExecutor {
     // that size so the prepared legs/snapshot/maxBuyPrices are all consistent with what we will actually
     // submit. selectExecutableSize returns config.liveOrderSize when dynamic sizing is off (byte-identical).
     // Cash bound is null here (kept sync); the Kalshi hedge-collateral preflight is the hard bankroll backstop.
-    const orderSize = selectExecutableSize(candidate, books, this.config, null, now, polymarketFirstCrossCents);
+    const orderSize = selectExecutableSize(candidate, books, this.config, availableKalshiCash, now, polymarketFirstCrossCents);
     const evaluation = evaluateLiveQuoteQuality(candidate, books, this.config, now, polymarketFirstCrossCents, orderSize);
     if (!evaluation.ok) {
       const skipReason = evaluation.reason ?? "live quote quality preflight failed";
@@ -2629,7 +2635,14 @@ export class LiveExecutor implements ArbExecutor {
     const hotGateMs = metadata.hotGateStartedAt != null && metadata.hotGateCompletedAt != null
       ? Math.max(0, metadata.hotGateCompletedAt - metadata.hotGateStartedAt)
       : null;
-    const venueSubmitSkewMs = kalshiRequestedAt != null && polymarketRequestedAt != null
+    // M9: the one-sided-window skew is meaningful only when BOTH legs were genuinely submitted. A no-fill
+    // leg is a notSubmittedResult whose requestedAt is stamped at decision time, which otherwise inflated this
+    // metric to ~the order timeout (p50 2500ms) across all the no-fill attempts, masking the true ~400ms
+    // two-sided window. Null it out unless both legs actually submitted.
+    const bothLegsSubmitted = kalshi != null && polymarket != null
+      && String(kalshi.status ?? "").toLowerCase() !== "not_submitted"
+      && String(polymarket.status ?? "").toLowerCase() !== "not_submitted";
+    const venueSubmitSkewMs = bothLegsSubmitted && kalshiRequestedAt != null && polymarketRequestedAt != null
       ? Math.abs(kalshiRequestedAt - polymarketRequestedAt)
       : null;
     const kalshiOrderRttMs = timing(kalshi);
