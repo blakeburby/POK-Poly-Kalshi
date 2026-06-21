@@ -85,6 +85,9 @@ export interface AppConfig {
   liveHotPathCacheMaxAgeMs: number;
   liveHotPathLockCacheGraceMs: number;
   liveHotPathWarmIntervalMs: number;
+  liveQuoteFreshnessFromWsOnly: boolean;
+  liveReentrySkipZeroExposure: boolean;
+  liveQuarantineCapSettleGraceMs: number;
   livePolymarketPresignEnabled: boolean;
   livePolymarketSignedOrderTtlMs: number;
   livePolymarketFirstMinFillShares: number;
@@ -378,6 +381,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // instant the cache exceeds max age).
     liveHotPathLockCacheGraceMs: envNumber(env, "LIVE_HOT_PATH_LOCK_CACHE_GRACE_MS", 0),
     liveHotPathWarmIntervalMs: envNumber(env, "LIVE_HOT_PATH_WARM_INTERVAL_MS", 1_000),
+    // H2: when true, only a real WS book snapshot advances a contract's updatedAt; periodic discovery refreshes
+    // no longer reset the freshness clock (which let a silently-dead WS feed pass the 750ms quote gate).
+    // Default false = byte-identical (discovery bumps freshness via Math.max).
+    liveQuoteFreshnessFromWsOnly: envBoolean(env, "LIVE_QUOTE_FRESHNESS_FROM_WS_ONLY", false),
+    // H4: when true, a zero-exposure no-fill (Polymarket FAK found no match, Kalshi never submitted, both legs
+    // 0) does NOT trip the re-entry throttle, so a still-profitable window can be re-attempted immediately
+    // instead of being benched for the 5s reentry interval. Default false = throttle every failed attempt.
+    liveReentrySkipZeroExposure: envBoolean(env, "LIVE_REENTRY_SKIP_ZERO_EXPOSURE", false),
+    // H3: exclude quarantines whose market settled more than this many ms ago from the unresolved-exposure
+    // cap, so settled-but-unreconciled tails (realized P&L, not live risk) cannot silently accumulate to the
+    // cap and halt trading. Default 0 = count all unresolved quarantines (byte-identical).
+    liveQuarantineCapSettleGraceMs: envNumber(env, "LIVE_QUARANTINE_CAP_SETTLE_GRACE_MS", 0),
     livePolymarketPresignEnabled: envBoolean(env, "LIVE_POLYMARKET_PRESIGN_ENABLED", false),
     livePolymarketSignedOrderTtlMs: envNumber(env, "LIVE_POLYMARKET_SIGNED_ORDER_TTL_MS", 5_000),
     livePolymarketFirstMinFillShares,

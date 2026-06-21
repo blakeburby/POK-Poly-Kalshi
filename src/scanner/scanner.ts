@@ -25,6 +25,7 @@ export interface ScannerOptions {
   maxLiveTradesPerWindow?: number;
   maxUnresolvedExposureDollars?: number;
   liveAutoHardlocksEnabled?: boolean;
+  liveReentrySkipZeroExposure?: boolean;
   liveExactExposureRequired?: boolean;
   liveExecutionQualityGateEnabled?: boolean;
   liveExecutionQualityOptions?: LiveExecutionQualityOptions;
@@ -223,6 +224,14 @@ export class CrossVenueArbScanner {
     this.options.signalsNotifier?.notifyChanged();
   }
 
+  // H4: whether a FAILED attempt should trip the re-entry throttle. A zero-exposure no-fill (no shares on
+  // either leg) took no position, so when liveReentrySkipZeroExposure is on it must NOT bench a still-
+  // profitable window for the reentry interval. Default (flag off) throttles every failed attempt.
+  private shouldThrottleFailedAttempt(result: { kalshiFillCount?: number | null; polymarketFillCount?: number | null }): boolean {
+    if (!this.options.liveReentrySkipZeroExposure) return true;
+    return (result.kalshiFillCount ?? 0) > 0 || (result.polymarketFillCount ?? 0) > 0;
+  }
+
   private async handleCandidate(candidate: ArbCandidate, now: number): Promise<void> {
     if (this.options.deferLivePersistence) {
       await this.handleDeferredLiveCandidate(candidate, now);
@@ -265,7 +274,7 @@ export class CrossVenueArbScanner {
         });
       }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
-      else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
+      else if (result.action === "failed" && result.executionGroupId && this.shouldThrottleFailedAttempt(result)) this.reentry.recordAttempt(candidate.pairKey, now);
       this.logCandidateProcessed(candidate, result);
     } catch (error) {
       const updatedSignal = await this.signals.updateSignal(signalId, {
@@ -323,7 +332,7 @@ export class CrossVenueArbScanner {
         });
       }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
-      else if (result.action === "failed" && result.executionGroupId) this.reentry.recordAttempt(candidate.pairKey, now);
+      else if (result.action === "failed" && result.executionGroupId && this.shouldThrottleFailedAttempt(result)) this.reentry.recordAttempt(candidate.pairKey, now);
       this.logCandidateProcessed(candidate, result);
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : String(error);

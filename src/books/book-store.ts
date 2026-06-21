@@ -9,7 +9,7 @@ export class BookStore {
   private readonly polyTokenToContract = new Map<string, { contractId: string; side: "yes" | "no" }>();
   private readonly history: RollingBookHistory;
 
-  constructor(requiredHistoryDepth = 5) {
+  constructor(requiredHistoryDepth = 5, private readonly freshnessFromWsOnly = false) {
     this.history = new RollingBookHistory(requiredHistoryDepth);
   }
 
@@ -140,7 +140,12 @@ export class BookStore {
       bookHash: incoming.bookHash ?? existing.bookHash,
       tickSize: incoming.tickSize ?? existing.tickSize,
       tickSizeChangedAt: incoming.tickSizeChangedAt ?? existing.tickSizeChangedAt,
-      updatedAt: Math.max(incoming.updatedAt, existing.updatedAt),
+      // H2: keepQuotes is the DISCOVERY merge path (WS snapshots set updatedAt directly, bypassing this). When
+      // freshnessFromWsOnly is on, a periodic discovery refresh must NOT advance updatedAt — otherwise it
+      // resets the freshness clock on a contract whose WS feed has gone silent, letting a dead/stale book pass
+      // the 750ms quote-freshness gate for up to that window. Only a real WS snapshot then advances freshness.
+      // Default off = Math.max (byte-identical).
+      updatedAt: this.freshnessFromWsOnly ? existing.updatedAt : Math.max(incoming.updatedAt, existing.updatedAt),
     };
   }
 }

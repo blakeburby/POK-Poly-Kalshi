@@ -345,7 +345,10 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
 }
 
 export class SignalStore {
-  constructor(private readonly db: Queryable) {}
+  // H3: when > 0, the unresolved-exposure cap query excludes quarantines whose market settled more than this
+  // many ms ago (realized P&L, not live risk), so settled-but-unreconciled tails cannot silently accumulate
+  // to the cap and halt trading. 0 = count all unresolved quarantines (byte-identical).
+  constructor(private readonly db: Queryable, private readonly quarantineCapSettleGraceMs = 0) {}
 
   async insertSignal(input: SignalInsert): Promise<number> {
     const { candidate } = input;
@@ -506,13 +509,16 @@ export class SignalStore {
   }
 
   async liveRiskQuarantineStatus(): Promise<{ total: number; count: number }> {
+    const grace = Math.max(0, this.quarantineCapSettleGraceMs);
     const result = await this.db.query<QuarantineExposureRow>(`
       SELECT COALESCE(SUM(risk_quarantine_exposure_dollars), 0) AS total,
              COUNT(*) AS count
       FROM cross_venue_arb_signals
       WHERE reconciliation_resolved_at IS NULL
         AND risk_quarantined_at IS NOT NULL
-    `);
+        AND ($1::BIGINT = 0 OR expiry_ms IS NULL
+             OR expiry_ms::BIGINT > (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT - $1::BIGINT)
+    `, [grace]);
     return {
       total: numberFrom(result.rows[0]?.total ?? null) ?? 0,
       count: numberFrom(result.rows[0]?.count ?? null) ?? 0,

@@ -47,8 +47,8 @@ async function main(): Promise<void> {
   const pool = createPool(config);
   await runMigrations(pool);
 
-  const books = new BookStore(config.liveOrderSize);
-  const signals = new SignalStore(pool);
+  const books = new BookStore(config.liveOrderSize, config.liveQuoteFreshnessFromWsOnly);
+  const signals = new SignalStore(pool, config.liveQuarantineCapSettleGraceMs);
   const baseLiveLocks = new LiveExecutionLockStore(pool);
   const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs, Date.now, config.liveHotPathLockCacheGraceMs) : null;
   const liveLocks = cachedLiveLocks ?? baseLiveLocks;
@@ -145,6 +145,7 @@ async function main(): Promise<void> {
     maxLiveTradesPerWindow: config.liveMaxTradesPerWindow,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+    liveReentrySkipZeroExposure: config.liveReentrySkipZeroExposure,
     liveExactExposureRequired: config.liveExactExposureRequired,
     liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,
     liveExecutionQualityOptions: {
