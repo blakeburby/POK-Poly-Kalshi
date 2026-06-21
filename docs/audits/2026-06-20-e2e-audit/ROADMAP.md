@@ -9,7 +9,21 @@
 - **H4 — DONE** (`c0fc075`, `LIVE_REENTRY_SKIP_ZERO_EXPOSURE`). Zero-exposure no-fills don't trip the 5s throttle.
 - **H5 — REFUTED on inspection.** `isHedgeRetryable` intentionally does NOT retry a timeout/unknown FOK (it may have filled — double-hedge risk); naked-leg handled by recovery + auto-unwind. Current design correct.
 - **H6 — REFUTED on inspection.** `axios.defaults.timeout` = `liveOrderTimeoutMs` (2500ms) already aborts the POST; clob-client uses the default axios. No separate abort needed.
-- **Tier-2 (M1–M10) + Tier-3 — PENDING.** Each needs the same verify-then-fix pass (which, as H5/H6 show, often reveals the finding is already-handled). To be done in continued batches.
+- **Tier-2 — verified; 2 shipped, 8 refuted/by-design/deferred:**
+  - **M2 — DONE** (`81af339`, `LIVE_DYNAMIC_SIZING_CASH_AWARE`). Cash-aware sizing: deep windows size down to affordable instead of skipping.
+  - **M9 — DONE** (`81af339`, display-only). One-sided-window metric (`venueSubmitSkewMs`) excludes no-fill legs (was pinned to the 2500ms timeout).
+  - **M1 — config hygiene.** `LIVE_MAX_SLIPPAGE_CENTS` is a dead env (never read); the binding cap is `LIVE_DYNAMIC_SIZING_MAX_KALSHI_SLIPPAGE_CENTS=10`. Remove the dead env or set the real knob. No code change.
+  - **M3 — REFUTED.** `liveCandidateBlockReason` allows up to `maxTrades` (10) per expiry + only blocks the same leg; it does NOT block the whole expiry.
+  - **M4 — by-design.** Concurrency=1 is correct (distinct opportunities co-occur 0×/7d).
+  - **M5 — deferred (not a current bug).** Exact `expiryMs` equality pairs fine today and is arguably more correct than a fuzzy tolerance; add a bounded tolerance only if Polymarket's expiry representation ever drifts.
+  - **M6 — by-design/tuning.** `depthWeightedAsk` requiring full depth is conservative-correct; anti-dust guards off is a tuning choice; per-share `minProfitDollars` is the model's lens.
+  - **M7 — marginal.** Fee priced at VWAP vs realized fill is a convex precision diff (VWAP≈fill at these sizes).
+  - **M8 — likely non-issue.** No prearm-auth code surfaced; 14d lock history shows zero auth-reject locks; Kalshi REST auth tolerates seconds of skew.
+  - **M10 — REFUTED.** Preflight failure SKIPS (no un-gated fallback-to-static); the selector's fallback size still passes the gate in `prepareExecution`.
+- **Tier-3 (~30 LOW) — triaged.** All LOW severity; on inspection these are observability/by-design/library items, not profit/risk movers. Representative dispositions: the circular-JSON `TLSSocket` error is **internal to clob-client-v2** (its own message is the stringify TypeError; the order is still classified failed) — upstream, not cleanly fixable on our side; the reservation TOCTOU and heartbeat-mask items are moot under concurrency=1 + H1; lead-lag/fill-quality "computed but gated off" is now cheap post-P2 (fill-quality reads are cached, lead-lag is in-memory). The remainder are small observability/precision niceties available on request; none change profitability, fill rate, or risk materially.
+
+### Net result
+The audit's 101 raw findings distill, under adversarial code+venue verification, to **8 genuinely-actionable fixes — all shipped** (C1, C2, H1, H2, H3, H4, M2, M9; flag-gated, 337 tests, lockstep). The remaining ~30+ are already-handled, by-design, tuning-only, marginal, library-internal, or low-value future-proofing. This is the expected shape of a deep audit: the value is the handful of real bugs (chiefly **C1**, ~5× fill-rate/profit undercount), not 100 speculative edits to a live-money path.
 
 ---
 
