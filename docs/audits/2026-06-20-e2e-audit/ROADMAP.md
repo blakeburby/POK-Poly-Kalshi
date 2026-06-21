@@ -1,5 +1,19 @@
 # POK-Poly-Kalshi — End-to-End Audit & Optimization Roadmap (2026-06-20)
 
+## IMPLEMENTATION STATUS (updated as fixes land; all flag-gated, default off = byte-identical)
+- **C1 — DONE + DEPLOYED + ENABLED** on prod (`50ce743`, `LIVE_CONFIRMATION_STATUS_TOLERANT=true`). The "mined"-status mis-quarantine fix.
+- **C2 — DONE + DEPLOYED** (`ee8067c`, display-only). True attempt-based fill rate + counts hedged in-band overfills. Deferred: dollar/net-fee P&L rebucket + venueAccountValue equity double-count (Ledger already shows correct realized-$).
+- **H1 — DONE** (`26fe868`, `LIVE_HOT_PATH_LOCK_CACHE_GRACE_MS`). Lock-cache last-good grace + throttled block log. Not yet deployed.
+- **H2 — DONE** (`c0fc075`, `LIVE_QUOTE_FRESHNESS_FROM_WS_ONLY`). Discovery no longer masks a dead WS feed.
+- **H3 — DONE** (`c0fc075`, `LIVE_QUARANTINE_CAP_SETTLE_GRACE_MS`). Settled tails excluded from the cap.
+- **H4 — DONE** (`c0fc075`, `LIVE_REENTRY_SKIP_ZERO_EXPOSURE`). Zero-exposure no-fills don't trip the 5s throttle.
+- **H5 — REFUTED on inspection.** `isHedgeRetryable` intentionally does NOT retry a timeout/unknown FOK (it may have filled — double-hedge risk); naked-leg handled by recovery + auto-unwind. Current design correct.
+- **H6 — REFUTED on inspection.** `axios.defaults.timeout` = `liveOrderTimeoutMs` (2500ms) already aborts the POST; clob-client uses the default axios. No separate abort needed.
+- **Tier-2 (M1–M10) + Tier-3 — PENDING.** Each needs the same verify-then-fix pass (which, as H5/H6 show, often reveals the finding is already-handled). To be done in continued batches.
+
+---
+
+
 Method: 12-agent code audit (101 raw findings, each adversarially verified) **grounded in live production evidence** pulled read-only from the Montreal worker (commit `c8aec36`), plus independent operator investigation against venue truth. ~100 raw findings deduped into the distinct issues below, ranked by risk-adjusted impact. Verification caveat: ~half the verifier agents hit a session usage limit, so several genuine HIGH/CRITICAL items are "unverified" (not refuted) — flagged `[UNVER]`; the top ones are independently confirmed against live data.
 
 Live baseline: 7d real attempts 211 failed / 17 filled (**but ~76 of the "failed" are actually completed hedged arbs — see C1**); realized edge on true fills avg +$0.10/sh, p50 +$0.043; unresolved exposure $0; all P0/P1/P2/W1/W2/W3 flags ON.
