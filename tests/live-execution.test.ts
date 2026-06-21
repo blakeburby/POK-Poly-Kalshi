@@ -2353,6 +2353,79 @@ test("Polymarket timeout recovery leaves ambiguous recent trade evidence unknown
   assert.equal(result?.metadata?.polymarketTimeoutRecoveryMatchedTradeGroups, 2);
 });
 
+test("Polymarket timeout recovery stamps the order type on a not_found result (lock-24/25/26 fix)", async () => {
+  const submittedAt = 1_800_000_000_000;
+  class RecoveryFakeClob implements PolymarketClobLike {
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5", makingAmount: "2" };
+    }
+
+    async getTrades(): Promise<unknown[]> {
+      return [];
+    }
+
+    async getOpenOrders(): Promise<unknown[]> {
+      return [];
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "10", allowance: "10" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const client = new PolymarketOrderClient(config({ liveFinalRecoveryTimeoutMs: 0 }), async () => new RecoveryFakeClob(), allowedGeoblock);
+  // An executor-level REST-response timeout synthesizes the timed-out result WITHOUT polymarketOrderType
+  // (only the client-level postOrder result carries it). This is the exact input that caused the recurring
+  // false no-fill-timeout lock: recovery resolves not_found, but isVerifiedNoFillAfterRecovery cannot recognize
+  // it because the order type was dropped.
+  const timedOut: VenueOrderResult = {
+    venue: "polymarket",
+    clientOrderId: "client",
+    orderId: null,
+    status: "unknown",
+    fillPrice: null,
+    fillCount: null,
+    requestedAt: new Date(submittedAt).toISOString(),
+    respondedAt: new Date(submittedAt + 2_500).toISOString(),
+    error: "order response timeout after 2500ms",
+    metadata: {
+      orderResponseTimeoutMs: 2_500,
+      pendingReconciliation: true,
+    },
+  };
+
+  const result = await client.recoverTimedOutOrder!({
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.39,
+    tokenId: "yes-token",
+  }, {
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 5,
+    maxBuyPrice: 0.42,
+    placementMode: "polymarket_first_exact",
+  }, timedOut);
+
+  assert.equal(result?.status, "unknown");
+  assert.equal(result?.fillCount ?? null, null);
+  assert.equal(result?.metadata?.polymarketTimeoutRecoveryStatus, "not_found");
+  // The fix: the resolved order type is restored even though the timed-out result dropped it, so a downstream
+  // isVerifiedNoFillAfterRecovery check can recognize this leg as the zero-exposure FAK no-fill it is.
+  assert.equal(result?.metadata?.polymarketOrderType, "FAK");
+});
+
 test("Polymarket order client cancels open orders and does not treat live status as a fill", async () => {
   class FakeClob implements PolymarketClobLike {
     cancelCalls = 0;
@@ -4809,6 +4882,159 @@ test("live executor keeps the lock when a timed-out venue is unresolved by strea
   assert.equal(result.partialFill, true);
   assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(result.recoveryStatus, "operator_required");
+  assert.equal(locks.engageCalls, 1);
+});
+
+// The recurring lock-24/25/26 false positive: a Polymarket FAK that gets NO fill but whose REST response timed
+// out leaves the user-stream confirmation waiting for a fill event that never arrives -> it resolves to
+// "timeout". When BOTH legs are provably flat (zero exposure) and recovery DEFINITIVELY found no order/trade
+// (not_found), that timeout is a benign no-fill miss, not unconfirmed exposure, and must NOT trip the breaker.
+test("live executor does NOT lock a verified zero-exposure Polymarket no-fill stream-timeout (lock-24/25/26 fix)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    polymarket: { status: "timeout", reason: "polymarket user stream did not confirm 5 shares within 2500ms", fillCount: null, fillPrice: null },
+    kalshi: { status: "not_required", fillCount: 0, fillPrice: null },
+  };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      // The operator's recovery switch alone must be sufficient — even with the general flat-miss switch off.
+      liveConfirmationFlatMissNonBlocking: false,
+      livePolymarketTimeoutRecoveryResolvesNoFill: true,
+    }),
+    books,
+    // Kalshi: a clean definitive no-fill (zero exposure on the hedge leg).
+    new FakeVenueClient("kalshi", { orderId: null, status: "rejected", fillPrice: null, fillCount: 0, error: "kalshi rejected" }),
+    // Polymarket: a REST-response timeout that recovery DEFINITIVELY resolved to no-fill (not_found), FAK.
+    new FakeVenueClient("polymarket", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        polymarketTimeoutRecoveryAttempted: true,
+        polymarketTimeoutRecoveryStatus: "not_found",
+        polymarketOrderType: "FAK",
+      },
+    }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed"); // a no-fill is not a completed arb...
+  assert.equal(result.partialFill, false); // ...but it is NOT one-sided exposure...
+  assert.equal(result.liveLockReason, null); // ...so it must NOT engage the breaker.
+  assert.notEqual(result.recoveryStatus, "operator_required");
+  assert.equal(locks.engageCalls, 0);
+});
+
+test("live executor STILL locks a Polymarket no-fill timeout that leaves a one-sided Kalshi fill", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    polymarket: { status: "timeout", reason: "polymarket user stream did not confirm 5 shares within 2500ms", fillCount: null, fillPrice: null },
+    kalshi: { status: "confirmed", fillCount: 5, fillPrice: 0.55 },
+  };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      liveConfirmationFlatMissNonBlocking: false,
+      livePolymarketTimeoutRecoveryResolvesNoFill: true,
+    }),
+    books,
+    // Kalshi FILLED — genuine one-sided exposure; the suppression must NOT apply.
+    new FakeVenueClient("kalshi", { status: "filled", fillCount: 5, fillPrice: 0.55 }),
+    new FakeVenueClient("polymarket", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        polymarketTimeoutRecoveryAttempted: true,
+        polymarketTimeoutRecoveryStatus: "not_found",
+        polymarketOrderType: "FAK",
+      },
+    }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.notEqual(result.liveLockReason, null);
+  assert.equal(locks.engageCalls, 1);
+});
+
+test("live executor STILL locks a Polymarket no-fill timeout that recovery could not verify (query_failed)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate, lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  monitor.confirmations = {
+    polymarket: { status: "timeout", reason: "polymarket user stream did not confirm 5 shares within 2500ms", fillCount: null, fillPrice: null },
+    kalshi: { status: "not_required", fillCount: 0, fillPrice: null },
+  };
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      liveConfirmationFlatMissNonBlocking: false,
+      livePolymarketTimeoutRecoveryResolvesNoFill: true,
+    }),
+    books,
+    new FakeVenueClient("kalshi", { orderId: null, status: "rejected", fillPrice: null, fillCount: 0, error: "kalshi rejected" }),
+    // Recovery could NOT reach Polymarket to verify (query_failed) — the leg's exposure is unverified, so a
+    // confirmation timeout still locks for reconciliation. Only a DEFINITIVE not_found resolves to no-fill.
+    new FakeVenueClient("polymarket", {
+      orderId: null,
+      status: "unknown",
+      fillPrice: null,
+      fillCount: null,
+      error: "order response timeout after 2500ms",
+      metadata: {
+        polymarketTimeoutRecoveryAttempted: true,
+        polymarketTimeoutRecoveryStatus: "query_failed",
+        polymarketOrderType: "FAK",
+      },
+    }),
+    () => now,
+    locks,
+    undefined,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.action, "failed");
+  assert.match(result.liveLockReason ?? "", /private stream confirmation timeout/);
   assert.equal(locks.engageCalls, 1);
 });
 

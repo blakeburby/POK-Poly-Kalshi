@@ -2314,9 +2314,16 @@ export class LiveExecutor implements ArbExecutor {
     // Polymarket WS drop must NOT engage a critical circuit breaker — downgrade it to a clean zero-exposure
     // miss. Any fill, size mismatch, or ambiguous (unknown/order-timeout) result is NOT provably flat and
     // still locks for reconciliation. Reversible via LIVE_CONFIRMATION_FLAT_MISS_NONBLOCKING.
-    const provablyNoExposure = this.config.liveConfirmationFlatMissNonBlocking
-      && (isDefinitiveNoFill(kalshi) || isVerifiedNoFillAfterRecovery(kalshi, this.config))
+    const bothLegsProvablyFlat = (isDefinitiveNoFill(kalshi) || isVerifiedNoFillAfterRecovery(kalshi, this.config))
       && (isDefinitiveNoFill(polymarket) || isVerifiedNoFillAfterRecovery(polymarket, this.config));
+    // Either operator switch suppresses a stream-confirmation timeout on a BOTH-legs-flat (zero-exposure)
+    // result: liveConfirmationFlatMissNonBlocking (the general flat-miss switch) OR
+    // livePolymarketTimeoutRecoveryResolvesNoFill (the recovery switch, which the operator turns on expecting
+    // recovery-verified no-fill timeouts to resolve rather than lock — making it SUFFICIENT here honors that
+    // expectation regardless of the flat-miss flag's state). Both-legs-flat is still required for ANY
+    // suppression, so a genuine one-sided fill / mismatch / unverified-exposure result still locks below.
+    const provablyNoExposure = bothLegsProvablyFlat
+      && (this.config.liveConfirmationFlatMissNonBlocking || this.config.livePolymarketTimeoutRecoveryResolvesNoFill);
     const initialLiveLockReason = autoUnwindFlattened || provablyNoExposure
       ? null
       : this.confirmationLockReason(metadata.venueConfirmations, { kalshi, polymarket })

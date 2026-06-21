@@ -2592,6 +2592,15 @@ export class PolymarketOrderClient implements VenueOrderClient {
       respondedAt: isoFromMs(Date.now()),
       metadata: {
         ...timedOutResult.metadata,
+        // An executor-level REST-response timeout (placeVenueOrder's Promise.race) synthesizes the timed-out
+        // result WITHOUT polymarketOrderType — only the client-level postOrder result carries it. Restore the
+        // resolved order type here so the no-fill timeout-recovery resolution (isVerifiedNoFillAfterRecovery,
+        // gated by livePolymarketTimeoutRecoveryResolvesNoFill) can recognize a recovery-confirmed not_found
+        // FAK as the zero-exposure no-fill it is, instead of leaving a benign no-fill stream-confirmation
+        // timeout to falsely trip the breaker (the recurring lock-24/25/26 false positive). Inert unless that
+        // flag is on (its only consumer); additive to persisted metadata otherwise.
+        polymarketOrderType: timedOutResult.metadata?.polymarketOrderType
+          ?? polymarketImmediateOrderType(this.config.polymarketOrderType, context),
         polymarketTimeoutRecoveryAttempted: true,
         polymarketTimeoutRecoveryStatus: lastStatus,
         polymarketTimeoutRecoveryAttempts: attempts,
