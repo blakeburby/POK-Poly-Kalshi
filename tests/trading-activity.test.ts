@@ -451,3 +451,29 @@ test("trading activity store stops carrying a stale value forward past the max-a
   assert.equal(stale.portfolio.portfolioValue, null);
   assert.equal(stale.portfolio.stale ?? false, false);
 });
+
+test("trading activity store caches the account fetch so dashboard polls do not storm upstream", async () => {
+  await withKalshiEnv(async () => {
+    const config = loadConfig({ KALSHI_API_BASE: "https://api.elections.kalshi.com/trade-api/v2" });
+    const db = { query: async <T = Record<string, unknown>>() => ({ rows: [] as T[] }) };
+    let balanceCalls = 0;
+    const fetchFn: typeof fetch = (async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/portfolio/balance")) {
+        balanceCalls += 1;
+        return new Response(JSON.stringify({ balance: 1234, portfolio_value: 0 }));
+      }
+      return new Response(JSON.stringify({}));
+    }) as typeof fetch;
+    const store = new TradingActivityStore(db, config, fetchFn);
+
+    const r1 = await store.getPlatformActivity("kalshi", { now });
+    const r2 = await store.getPlatformActivity("kalshi", { now: now + 5_000 }); // within the 20s cache window
+    assert.equal(balanceCalls, 1, "a poll within the cache window is served from cache — no second upstream fetch");
+    assert.equal(r1.portfolio.cashValue, r2.portfolio.cashValue);
+
+    const r3 = await store.getPlatformActivity("kalshi", { now: now + 25_000 }); // past the window
+    assert.equal(balanceCalls, 2, "after the cache window the account fetch runs again");
+    assert.ok(r3.portfolio.cashValue != null);
+  });
+});

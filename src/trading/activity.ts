@@ -51,6 +51,12 @@ const ACCOUNT_HISTORY_WINDOW_MS = 24 * 60 * 60_000;
 // carrying it (return null -> the venue surfaces as genuinely "unavailable") so a multi-hour venue outage
 // can never bake a frozen, healthy-looking value into the equity curve.
 const CARRY_FORWARD_MAX_AGE_MS = 10 * 60_000;
+// Per-venue account-activity result cache. The account fetch is several upstream calls (data-api + CLOB);
+// the dashboard polls per-platform activity (~10s) AND the snapshot, so an UNCACHED getPlatformActivity
+// turns every poll into a fresh multi-call fetch — which, when those calls are slow, floods the worker and
+// starves the event loop. Serving a recent (≤ this) cached result keeps the dashboard read path cheap and
+// bounds upstream account calls to ~1 per venue per window regardless of poll/client count.
+const ACCOUNT_ACTIVITY_CACHE_MS = 20_000;
 
 function toNumber(value: string | number | null | undefined): number | null {
   if (value == null) return null;
@@ -301,6 +307,11 @@ export class TradingActivityStore {
     kalshi: null,
     polymarket: null,
   };
+  // Recent computed activity per venue, to keep the dashboard read path off the multi-call account fetch.
+  private readonly activityCache: Record<TradingPlatform, { at: number; value: TradingPlatformActivity } | null> = {
+    kalshi: null,
+    polymarket: null,
+  };
 
   constructor(
     private readonly db: Queryable,
@@ -310,6 +321,11 @@ export class TradingActivityStore {
 
   async getPlatformActivity(platform: TradingPlatform, options: TradingActivityOptions = {}): Promise<TradingPlatformActivity> {
     const now = options.now ?? Date.now();
+    // Cache only the account-backed (config) path — that is the one doing the expensive multi-call upstream
+    // fetch that needs to stay off the dashboard poll hot path. The db-only/readiness path is cheap and
+    // deterministic (and unit tests depend on it recomputing per call).
+    const cached = this.activityCache[platform];
+    if (this.config && cached && now - cached.at < ACCOUNT_ACTIVITY_CACHE_MS) return cached.value;
     const limit = options.limit ?? 250;
     const result = await this.db.query<VenueOrderEventRow>(`
       SELECT
@@ -349,7 +365,9 @@ export class TradingActivityStore {
         })
       : fallback;
     const carried = this.applyLastKnownAccountValue(activity, now);
-    return this.withAccountValueHistory(carried, now);
+    const finalActivity = this.withAccountValueHistory(carried, now);
+    if (this.config) this.activityCache[platform] = { at: now, value: finalActivity };
+    return finalActivity;
   }
 
   /**

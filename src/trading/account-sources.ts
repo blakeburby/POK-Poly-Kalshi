@@ -47,7 +47,19 @@ const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const KALSHI_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
 const POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
 
+// Rate-limit account-source WARNs: a persistent venue-fetch problem must not flood the log (which itself
+// burns CPU/IO on the worker). At most one line per key per window; the underlying degradation still happens.
+const ACCOUNT_WARN_THROTTLE_MS = 60_000;
+const lastAccountWarnAt: Record<string, number> = {};
+function shouldLogAccountWarn(key: string): boolean {
+  const now = Date.now();
+  if (now - (lastAccountWarnAt[key] ?? 0) < ACCOUNT_WARN_THROTTLE_MS) return false;
+  lastAccountWarnAt[key] = now;
+  return true;
+}
+
 function logPolymarketAccountWarn(source: string, error: unknown): void {
+  if (!shouldLogAccountWarn(`polymarket:${source}`)) return;
   logEvent({
     severity: "WARN",
     category: "POLYMARKET",
@@ -537,12 +549,14 @@ export async function accountBackedPlatformActivity(
       sparkline: account.sparkline ?? accountSparkline(account.portfolio.portfolioValue, options.now, account.portfolio.dayChangeDollars),
     };
   } catch (error) {
-    logEvent({
-      severity: "WARN",
-      category: platform === "kalshi" ? "KALSHI" : "POLYMARKET",
-      message: "account source unavailable; falling back to readiness balance",
-      context: { platform, error: error instanceof Error ? error.message : String(error) },
-    });
+    if (shouldLogAccountWarn(`${platform}:source`)) {
+      logEvent({
+        severity: "WARN",
+        category: platform === "kalshi" ? "KALSHI" : "POLYMARKET",
+        message: "account source unavailable; falling back to readiness balance",
+        context: { platform, error: error instanceof Error ? error.message : String(error) },
+      });
+    }
     const cashValue = platform === "polymarket"
       ? options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null
       : options.readiness?.kalshi.balance ?? null;
