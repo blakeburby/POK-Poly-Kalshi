@@ -55,11 +55,19 @@ export function KpiStrip() {
   const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? 0;
   const pnlValue = (v: number | null) => (v == null ? "–" : fmtUsd(v, { sign: true }));
   const pnlTone = (v: number | null): Kpi["tone"] => (v == null ? "neutral" : v >= 0 ? "up" : "down");
+  // Combined = Kalshi total + Polymarket total. Flag clearly when a venue is unavailable (combined is then
+  // partial) or carried-forward (stale), so a one-venue figure is never silently shown as the full combined.
+  const vShort = (v: "kalshi" | "polymarket") => (v === "kalshi" ? "Kalshi" : "Polymarket");
+  const equityNote = eq.missingVenues.length
+    ? `${eq.missingVenues.map(vShort).join("+")} N/A`
+    : eq.staleVenues.length
+      ? `${eq.staleVenues.map(vShort).join("+")} stale`
+      : null;
 
   // Key metrics first so the most important are visible before any horizontal scroll on mobile.
   const kpis: Kpi[] = [
     { label: "Net PnL · Today", value: pnlValue(day), tone: pnlTone(day), emphasis: true, spark: pnlSpark },
-    { label: "Account Equity", value: fmtUsd(eq.total), tone: "neutral", emphasis: true, spark: equitySpark },
+    { label: equityNote ? `Account Equity · ${equityNote}` : "Account Equity", value: fmtUsd(eq.total), tone: eq.missingVenues.length ? "stale" : "neutral", emphasis: true, spark: equitySpark },
     { label: "Open Positions", value: fmtNum(openPositionCount(snap)), tone: "neutral" },
     { label: "Unhedged Exposure", value: fmtUsd(unhedged), tone: unhedged > 0 ? "down" : "up" },
     { label: "Fill Success", value: fmtPct(a?.daily.fillRate), tone: (a?.daily.fillRate ?? 0) >= 0.6 ? "up" : "stale" },

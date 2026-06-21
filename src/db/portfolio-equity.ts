@@ -43,6 +43,31 @@ export function downsampleEquity(points: PortfolioEquityPoint[], maxPoints: numb
   return [...lastByBucket.values()].sort((a, b) => a.t - b.t);
 }
 
+/**
+ * Read-time combined series with per-venue last-observation carry-forward (LOCF) — the pure TS twin of
+ * the SQL in listSince, exported for unit testing without a DB. Input must be ascending by t. Rows before
+ * EITHER venue has ever reported are skipped; once one venue has reported, the other carries forward its
+ * last non-null value so the combined sum never collapses to a single account on a momentary gap.
+ */
+export function combineWithCarryForward(
+  rows: { t: number; kalshi: number | null; polymarket: number | null }[],
+): PortfolioEquityPoint[] {
+  let lastK: number | null = null;
+  let lastP: number | null = null;
+  const out: PortfolioEquityPoint[] = [];
+  for (const row of rows) {
+    if (row.kalshi != null) lastK = row.kalshi;
+    if (row.polymarket != null) lastP = row.polymarket;
+    if (lastK == null && lastP == null) continue;
+    out.push({ t: row.t, v: roundCombined((lastK ?? 0) + (lastP ?? 0)) });
+  }
+  return out;
+}
+
+function roundCombined(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
 export class PortfolioEquityStore {
   constructor(private readonly db: Queryable) {}
 
@@ -88,21 +113,52 @@ export class PortfolioEquityStore {
    * Return the combined-equity series since `sinceMs` (0 = all), downsampled SERVER-SIDE to
    * at most `maxPoints` points via time-span buckets, latest-per-bucket, ascending — so the
    * polled payload stays bounded no matter how much history has accrued.
+   *
+   * The combined value is recomputed at READ time as the per-venue SUM with last-observation
+   * carry-forward (LOCF): each venue's last non-null value is carried forward across samples where
+   * only the other venue reported, so a momentary single-venue gap does NOT make the curve drop to one
+   * account (the cause of the wild $50<->$300 oscillation). This is non-destructive — stored
+   * combined_value rows are not rewritten. Rows before EITHER venue has ever reported are skipped.
    */
   async listSince(sinceMs: number, maxPoints: number): Promise<PortfolioEquityPoint[]> {
     const cap = Math.max(1, Math.floor(maxPoints));
     const result = await this.db.query<{ sampled_at_ms: string | number; combined_value: string | number }>(`
-      WITH bounds AS (
-        SELECT MIN(sampled_at_ms) AS lo, MAX(sampled_at_ms) AS hi
+      WITH ranged AS (
+        SELECT sampled_at_ms, id, kalshi_value, polymarket_value, combined_value
         FROM portfolio_equity_snapshots
         WHERE sampled_at_ms >= $1
       ),
+      grp AS (
+        SELECT sampled_at_ms, id, kalshi_value, polymarket_value, combined_value,
+               count(kalshi_value) OVER w AS k_grp,
+               count(polymarket_value) OVER w AS p_grp
+        FROM ranged
+        WINDOW w AS (ORDER BY sampled_at_ms, id)
+      ),
+      locf AS (
+        SELECT sampled_at_ms, combined_value,
+               max(kalshi_value) OVER (PARTITION BY k_grp) AS k,
+               max(polymarket_value) OVER (PARTITION BY p_grp) AS p
+        FROM grp
+      ),
+      combined AS (
+        -- Per-venue LOCF sum, but keep the stored combined_value for reconstructed/backfill rows that
+        -- carry only an aggregate (no per-venue split), so enabling the backfill never blanks the curve.
+        SELECT sampled_at_ms,
+               CASE WHEN k IS NULL AND p IS NULL THEN combined_value
+                    ELSE (COALESCE(k, 0) + COALESCE(p, 0)) END AS combined_value
+        FROM locf
+        WHERE k IS NOT NULL OR p IS NOT NULL OR combined_value IS NOT NULL
+      ),
+      bounds AS (
+        SELECT MIN(sampled_at_ms) AS lo, MAX(sampled_at_ms) AS hi FROM combined
+      ),
       tagged AS (
-        SELECT s.sampled_at_ms, s.combined_value,
-               width_bucket(s.sampled_at_ms::numeric, b.lo::numeric, (b.hi + 1)::numeric, $2) AS bucket
-        FROM portfolio_equity_snapshots s
+        SELECT c.sampled_at_ms, c.combined_value,
+               width_bucket(c.sampled_at_ms::numeric, b.lo::numeric, (b.hi + 1)::numeric, $2) AS bucket
+        FROM combined c
         CROSS JOIN bounds b
-        WHERE s.sampled_at_ms >= $1 AND b.hi IS NOT NULL
+        WHERE b.hi IS NOT NULL
       ),
       ranked AS (
         SELECT sampled_at_ms, combined_value,

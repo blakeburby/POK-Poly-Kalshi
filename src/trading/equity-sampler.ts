@@ -7,10 +7,10 @@ const DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60_000;
 const PRUNE_EVERY_N = 60; // at ~60s cadence, prune about once per hour
 
 /**
- * Total account value for one venue = cash + market value of open positions. Mirrors the
- * frontend `venueAccountValue()` selector: Kalshi reports its position MTM in portfolioValue,
- * but Polymarket's portfolioValue is just cash (no separate figure), so fall back to summing the
- * positions array for it to avoid undercounting Polymarket's open exposure.
+ * Total account value for one venue = cash + market value of open positions. Per-venue to avoid
+ * double-counting cash (mirrors the dashboard `venueAccountValue()` in app/lib/selectors.ts — keep in
+ * sync): Polymarket's portfolioValue is already the full account total (cash + positions) so it is used
+ * directly; Kalshi's portfolioValue is its reported position MTM, distinct from cash, so cash is added.
  */
 function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
   if (!activity) return null;
@@ -20,6 +20,9 @@ function venueAccountValue(activity: TradingPlatformActivity | null | undefined)
   if (cash == null && reported == null && positions.length === 0) return null;
   const cashNum = cash ?? 0;
   const summedPositions = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
+  if (activity.platform === "polymarket") {
+    return reported != null ? reported : cashNum + summedPositions;
+  }
   const positionsValue = reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
   return cashNum + positionsValue;
 }

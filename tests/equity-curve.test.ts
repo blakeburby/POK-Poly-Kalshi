@@ -1,7 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { downsampleEquity } from "../src/db/portfolio-equity";
-import { equityPnlOverMs, equityRangeChange, equitySeriesForRange } from "../app/lib/selectors";
+import { downsampleEquity, combineWithCarryForward } from "../src/db/portfolio-equity";
+import { accountEquity, equityPnlOverMs, equityRangeChange, equitySeriesForRange } from "../app/lib/selectors";
+
+const venueActivity = (portfolioValue: number | null, cashValue: number | null, stale = false) => ({
+  platform: "polymarket",
+  connectionStatus: "live",
+  lastUpdatedAt: 0,
+  portfolio: { platform: "polymarket", portfolioValue, cashValue, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: 0, stale },
+  positions: [],
+  openOrders: [],
+  history: [],
+  sparkline: [],
+});
 
 test("downsampleEquity caps point count, stays ascending, and preserves the newest point exactly", () => {
   const pts = Array.from({ length: 5000 }, (_, i) => ({ t: 1_000 + i * 1_000, v: i }));
@@ -71,4 +82,68 @@ test("equityPnlOverMs returns combined-equity delta over the window, null withou
   assert.equal(equityPnlOverMs(snap, day, now), 25); // live 115 − first-in-24h 90
   assert.equal(equityPnlOverMs(snap, 7 * day, now), 15); // live 115 − first-in-7d 100
   assert.equal(equityPnlOverMs({ equityCurve: { points: [] }, tradingActivity: null } as never, day, now), null);
+});
+
+test("accountEquity sums both venues and flags a missing venue as partial (never silently Kalshi-only)", () => {
+  const snap = { tradingActivity: { kalshi: venueActivity(43.6, 43.6), polymarket: venueActivity(null, null) } } as never;
+  const eq = accountEquity(snap);
+  assert.equal(eq.kalshi, 43.6);
+  assert.equal(eq.polymarket, null);
+  assert.equal(eq.total, 43.6); // still sums the available venue...
+  assert.deepEqual(eq.missingVenues, ["polymarket"]); // ...but flags the gap so the UI never presents it as complete
+  assert.equal(eq.partial, true);
+});
+
+test("accountEquity reports a carried-forward venue as stale (not missing) and includes it in the sum", () => {
+  const snap = { tradingActivity: { kalshi: venueActivity(43.6, 43.6), polymarket: venueActivity(12, 12, true) } } as never;
+  const eq = accountEquity(snap);
+  assert.equal(eq.total, 55.6); // Kalshi 43.6 + Polymarket 12 (last-known)
+  assert.deepEqual(eq.missingVenues, []);
+  assert.deepEqual(eq.staleVenues, ["polymarket"]);
+  assert.equal(eq.partial, true);
+});
+
+test("accountEquity is a clean both-venue sum when both venues are live", () => {
+  const snap = { tradingActivity: { kalshi: venueActivity(43.6, 43.6), polymarket: venueActivity(20, 20) } } as never;
+  const eq = accountEquity(snap);
+  assert.equal(eq.total, 63.6);
+  assert.equal(eq.partial, false);
+  assert.deepEqual(eq.missingVenues, []);
+});
+
+test("accountEquity does NOT double-count Polymarket cash when Polymarket holds open positions", () => {
+  // Polymarket account source emits portfolioValue = cash (100) + position MTM (50) = 150 (the full total).
+  const polyWithPositions = {
+    platform: "polymarket",
+    connectionStatus: "live",
+    lastUpdatedAt: 0,
+    portfolio: { platform: "polymarket", portfolioValue: 150, cashValue: 100, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: 0 },
+    positions: [{ id: "x", market: "m", outcome: "YES", shares: 100, value: 50, averagePrice: 0.5, updatedAt: 0 }],
+    openOrders: [],
+    history: [],
+    sparkline: [],
+  };
+  const snap = { tradingActivity: { kalshi: venueActivity(43.6, 43.6), polymarket: polyWithPositions } } as never;
+  const eq = accountEquity(snap);
+  assert.equal(eq.polymarket, 150); // cash counted ONCE: 100 + 50 = 150, not 250
+  assert.equal(eq.total, 193.6);
+});
+
+test("combineWithCarryForward carries each venue's last value so the combined never collapses to one account", () => {
+  const out = combineWithCarryForward([
+    { t: 1, kalshi: 40, polymarket: 5 },      // 45
+    { t: 2, kalshi: null, polymarket: 7 },    // 40 (carried) + 7 = 47
+    { t: 3, kalshi: 42, polymarket: null },   // 42 + 7 (carried) = 49
+    { t: 4, kalshi: null, polymarket: null }, // 42 + 7 = 49
+  ]);
+  assert.deepEqual(out, [{ t: 1, v: 45 }, { t: 2, v: 47 }, { t: 3, v: 49 }, { t: 4, v: 49 }]);
+});
+
+test("combineWithCarryForward skips leading rows before either venue has reported", () => {
+  const out = combineWithCarryForward([
+    { t: 1, kalshi: null, polymarket: null }, // skipped (no data yet)
+    { t: 2, kalshi: 10, polymarket: null },   // 10 (Polymarket not yet seen -> 0)
+    { t: 3, kalshi: 10, polymarket: 3 },      // 13
+  ]);
+  assert.deepEqual(out, [{ t: 2, v: 10 }, { t: 3, v: 13 }]);
 });

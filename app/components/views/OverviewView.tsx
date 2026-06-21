@@ -8,6 +8,7 @@ import { equityAreaOption } from "@/components/charts/options";
 import { StatusDot, Empty, MiniBar } from "@/components/ui/stat";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  accountEquity,
   currentCombinedEquity,
   edgeCapture,
   equityPnlOverMs,
@@ -17,6 +18,7 @@ import {
   tradeableNow,
   type EquityRange,
 } from "@/lib/selectors";
+import type { Venue } from "@/lib/types";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone, fmtPctRaw } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +30,13 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
 
   const now = snap.generatedAt;
   const current = currentCombinedEquity(snap);
+  const eq = accountEquity(snap);
+  const venueLabel = (v: Venue) => (v === "kalshi" ? "Kalshi" : "Polymarket");
+  const combinedSub = eq.missingVenues.length
+    ? `${eq.missingVenues.map(venueLabel).join(" + ")} unavailable — partial total`
+    : eq.staleVenues.length
+      ? `cash + positions · ${eq.staleVenues.map(venueLabel).join(" + ")} last-known`
+      : "cash + open positions · both venues";
   const hasHistory = (snap.equityCurve?.points?.length ?? 0) > 1;
   const series = equitySeriesForRange(snap, range, now);
   const change = hasHistory ? equityRangeChange(series) : { absolute: null, percent: null };
@@ -62,7 +71,7 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
 
       {/* Unified combined-portfolio equity */}
       <div className="grid grid-cols-3 gap-3">
-        <StatTile label="Combined Value" value={fmtUsd(current)} tone="cyan" sub="cash + open positions · both venues" />
+        <StatTile label="Combined Value" value={fmtUsd(current)} tone={eq.missingVenues.length ? "amber" : "cyan"} sub={combinedSub} />
         <StatTile label="Change ($)" value={change.absolute != null ? fmtUsd(change.absolute, { sign: true }) : "–"} tone={changeTone} sub={range.toUpperCase()} />
         <StatTile label="Change (%)" value={change.percent != null ? fmtPctRaw(change.percent * 100, 2, true) : "–"} tone={changeTone} sub={range.toUpperCase()} />
       </div>

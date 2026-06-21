@@ -103,8 +103,8 @@ export function HealthRailBody() {
       {/* venue capital */}
       <div className="px-3 py-2.5">
         <Label className="mb-2 block">Venue Capital</Label>
-        <VenueLine name="Kalshi" tone="kalshi" balance={acct.kalshi} ready={exec?.kalshi.ready} />
-        <VenueLine name="Polymarket" tone="poly" balance={acct.polymarket} ready={exec?.polymarket.ready} />
+        <VenueLine name="Kalshi" tone="kalshi" balance={acct.kalshi} stale={acct.staleVenues.includes("kalshi")} ageMs={staleAgeMs(snap.tradingActivity?.kalshi.portfolio.valueAsOfMs, now)} ready={exec?.kalshi.ready} />
+        <VenueLine name="Polymarket" tone="poly" balance={acct.polymarket} stale={acct.staleVenues.includes("polymarket")} ageMs={staleAgeMs(snap.tradingActivity?.polymarket.portfolio.valueAsOfMs, now)} ready={exec?.polymarket.ready} />
         <div className="mt-2 flex items-center justify-between border-t border-line/60 pt-2">
           <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">Clip Size</span>
           <span className="font-mono text-[11px] tabular-nums text-fg-secondary">{size} sh</span>
@@ -139,26 +139,46 @@ function RailStat({
   );
 }
 
+function staleAgeMs(asOfMs: number | null | undefined, now: number): number | null {
+  return asOfMs == null ? null : Math.max(0, now - asOfMs);
+}
+
+function fmtAge(ms: number | null): string {
+  if (ms == null) return "last-known";
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `last-known ${s}s` : `last-known ${Math.round(s / 60)}m`;
+}
+
 function VenueLine({
   name,
   tone,
   balance,
+  stale,
+  ageMs,
   ready,
 }: {
   name: string;
   tone: "kalshi" | "poly";
   balance: number | null | undefined;
+  stale?: boolean;
+  ageMs?: number | null;
   ready: boolean | undefined;
 }) {
+  const unavailable = balance == null;
   return (
     <div className="flex items-center justify-between py-0.5">
       <div className="flex items-center gap-1.5">
         <span className={cn("size-1.5 rounded-full", tone === "kalshi" ? "bg-kalshi" : "bg-poly")} />
         <span className="text-[11px] text-fg-secondary">{name}</span>
+        {stale && !unavailable ? (
+          <span className="font-mono text-[8.5px] uppercase tracking-wide text-amber">{fmtAge(ageMs ?? null)}</span>
+        ) : null}
       </div>
       <div className="flex items-center gap-1.5">
-        <span className="font-mono text-[12px] tabular-nums text-fg">{fmtUsd(balance)}</span>
-        <StatusDot tone={ready ? "live" : "halt"} className="size-1.5" />
+        <span className={cn("font-mono text-[12px] tabular-nums", unavailable ? "text-amber" : "text-fg")}>
+          {unavailable ? "unavailable" : fmtUsd(balance)}
+        </span>
+        <StatusDot tone={unavailable ? "halt" : ready ? "live" : "halt"} className="size-1.5" />
       </div>
     </div>
   );

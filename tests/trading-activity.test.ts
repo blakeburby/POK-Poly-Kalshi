@@ -356,3 +356,98 @@ test("polymarket trading activity uses account positions instead of inferred eve
   assert.equal(result.sparkline[0].value, 6.57);
   assert.equal(result.sparkline.at(-1)?.value, 8.07);
 });
+
+test("polymarket trading activity degrades to CLOB cash when the data-api is down (never drops the venue)", async () => {
+  const wallet = "0x2222222222222222222222222222222222222222";
+  const config = loadConfig({ POLYMARKET_FUNDER_ADDRESS: wallet, POLYMARKET_PRIVATE_KEY: "" });
+  const fallback: TradingPlatformActivity = {
+    platform: "polymarket",
+    connectionStatus: "live",
+    lastUpdatedAt: now,
+    portfolio: { platform: "polymarket", portfolioValue: null, cashValue: null, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: now },
+    positions: [],
+    openOrders: [],
+    history: [],
+    sparkline: [{ timestamp: now - 1_000, value: 0 }, { timestamp: now, value: 0 }],
+  };
+  // Every data-api endpoint (/positions, /value, /activity) fails transiently — this must NOT collapse the
+  // whole venue to null, because the authoritative CLOB collateral balance still succeeds.
+  const fetchFn: typeof fetch = (async () => new Response("upstream error", { status: 503 })) as typeof fetch;
+  const result = await accountBackedPlatformActivity("polymarket", fallback, {
+    config,
+    now,
+    fetchFn,
+    history: [],
+    getPolymarketClient: async () => ({
+      getBalanceAllowance: async () => ({ balance: "12340000", allowance: "10000000" }),
+      getOpenOrders: async () => [],
+    } as never),
+  });
+  assert.equal(result.portfolio.cashValue, 12.34); // CLOB collateral balance survived the data-api outage
+  assert.equal(result.portfolio.portfolioValue, 12.34); // venue total = cash (no positions) — NOT null
+});
+
+test("polymarket trading activity reports unavailable (null) only when every source fails — never $0", async () => {
+  const wallet = "0x3333333333333333333333333333333333333333";
+  const config = loadConfig({ POLYMARKET_FUNDER_ADDRESS: wallet, POLYMARKET_PRIVATE_KEY: "" });
+  const fallback: TradingPlatformActivity = {
+    platform: "polymarket",
+    connectionStatus: "live",
+    lastUpdatedAt: now,
+    portfolio: { platform: "polymarket", portfolioValue: null, cashValue: null, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: now },
+    positions: [],
+    openOrders: [],
+    history: [],
+    sparkline: [{ timestamp: now - 1_000, value: 0 }, { timestamp: now, value: 0 }],
+  };
+  const fetchFn: typeof fetch = (async () => new Response("err", { status: 503 })) as typeof fetch;
+  const result = await accountBackedPlatformActivity("polymarket", fallback, {
+    config,
+    now,
+    fetchFn,
+    history: [],
+    readiness: null,
+    getPolymarketClient: async () => ({
+      getBalanceAllowance: async () => { throw new Error("clob down"); },
+      getOpenOrders: async () => [],
+    } as never),
+  });
+  // A total wipeout reports null (so the UI shows "unavailable" / carry-forward engages), never a fake $0
+  // that would corrupt the combined total and the equity curve.
+  assert.equal(result.portfolio.portfolioValue, null);
+  assert.equal(result.portfolio.cashValue, null);
+});
+
+test("trading activity store carries forward the last-known account value when a venue fetch goes unavailable", async () => {
+  const db = { query: async <T = Record<string, unknown>>() => ({ rows: [] as T[] }) };
+  const store = new TradingActivityStore(db);
+  const up = readiness();
+  up.kalshi.balance = 48.4;
+  const first = await store.getPlatformActivity("kalshi", { now, readiness: up });
+  assert.equal(first.portfolio.portfolioValue, 48.4);
+  assert.equal(first.portfolio.stale ?? false, false);
+
+  // Venue fetch goes unavailable (no balance) — serve the last-known value, marked stale, instead of
+  // dropping to null (which would collapse the combined total to the other venue and jolt the equity curve).
+  const down = readiness();
+  down.kalshi.balance = null;
+  const second = await store.getPlatformActivity("kalshi", { now: now + 1_000, readiness: down });
+  assert.equal(second.portfolio.portfolioValue, 48.4); // carried forward = "latest available"
+  assert.equal(second.portfolio.stale, true);
+  assert.equal(second.portfolio.valueAsOfMs, now);
+});
+
+test("trading activity store stops carrying a stale value forward past the max-age bound (surfaces as missing)", async () => {
+  const db = { query: async <T = Record<string, unknown>>() => ({ rows: [] as T[] }) };
+  const store = new TradingActivityStore(db);
+  const up = readiness();
+  up.kalshi.balance = 48.4;
+  await store.getPlatformActivity("kalshi", { now, readiness: up });
+  const down = readiness();
+  down.kalshi.balance = null;
+  // 11 minutes later (past the 10-minute carry-forward bound): do NOT bake a frozen value into the curve —
+  // surface the venue as genuinely unavailable instead.
+  const stale = await store.getPlatformActivity("kalshi", { now: now + 11 * 60_000, readiness: down });
+  assert.equal(stale.portfolio.portfolioValue, null);
+  assert.equal(stale.portfolio.stale ?? false, false);
+});

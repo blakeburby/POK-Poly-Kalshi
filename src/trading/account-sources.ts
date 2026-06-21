@@ -1,6 +1,7 @@
 import { AssetType } from "@polymarket/clob-client-v2";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
+import { logEvent } from "../logger";
 import { getKalshiHeaders } from "../kalshi/auth";
 import {
   defaultPolymarketClientFactory,
@@ -45,6 +46,15 @@ interface PlatformAccountData {
 const POLYMARKET_DATA_API_BASE = "https://data-api.polymarket.com";
 const KALSHI_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
 const POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS = 3_500;
+
+function logPolymarketAccountWarn(source: string, error: unknown): void {
+  logEvent({
+    severity: "WARN",
+    category: "POLYMARKET",
+    message: "polymarket account sub-fetch failed; degrading instead of dropping the venue",
+    context: { source, error: error instanceof Error ? error.message : String(error) },
+  });
+}
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
@@ -455,11 +465,16 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
   if (!address) throw new Error("Polymarket account address is not configured");
   const fetchFn = options.fetchFn ?? fetch;
   const now = options.now;
+  // Each sub-fetch is INDEPENDENTLY fault-tolerant. A transient data-api failure (positions/value) must not
+  // collapse the whole venue — the CLOB collateral balance is the critical figure — and a CLOB balance
+  // failure falls back to readiness. Only when EVERY source yields nothing do we report the venue as
+  // unavailable (portfolioValue null) so the carry-forward / "missing venue" path engages, rather than
+  // silently fabricating $0 or dropping Polymarket from the combined total.
   const [positionsPayload, valuePayload, activityPayload, accountState] = await Promise.all([
-    polymarketDataApi("/positions", address, fetchFn, { limit: "500", sizeThreshold: "0" }),
-    polymarketDataApi("/value", address, fetchFn),
+    polymarketDataApi("/positions", address, fetchFn, { limit: "500", sizeThreshold: "0" }).catch((error) => { logPolymarketAccountWarn("positions", error); return null; }),
+    polymarketDataApi("/value", address, fetchFn).catch((error) => { logPolymarketAccountWarn("value", error); return null; }),
     polymarketDataApi("/activity", address, fetchFn, { limit: "100" }).catch(() => null),
-    polymarketCashAndOpenOrders(options),
+    polymarketCashAndOpenOrders(options).catch((error) => { logPolymarketAccountWarn("balance", error); return { cashValue: null, openOrders: [] as TradingOpenOrder[] }; }),
   ]);
   const positionRows = rowsFromPayload(positionsPayload, ["positions"]);
   const positions = positionRows
@@ -473,7 +488,10 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
   // resolved positions, which would zero out genuine open MTM — fall back to the summed marks.
   const positionsValue = reportedValue != null && reportedValue > 0 ? reportedValue : summedPositions;
   const cashValue = accountState.cashValue ?? options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null;
-  const portfolioValue = rounded((cashValue ?? 0) + positionsValue);
+  // Null (unavailable) when no source produced a usable signal — never fabricate $0, which would corrupt the
+  // combined total and the equity curve. A real $0 only arises when the CLOB balance genuinely returns 0.
+  const hasSignal = cashValue != null || positions.length > 0 || (reportedValue != null && reportedValue > 0);
+  const portfolioValue = hasSignal ? rounded((cashValue ?? 0) + positionsValue) : null;
   const accountPnl = positionRows.reduce((total, row) => {
     return total
       + (firstNumber(row, ["cashPnl", "cash_pnl"]) ?? 0)
@@ -518,7 +536,13 @@ export async function accountBackedPlatformActivity(
       history: account.history ?? fallback.history,
       sparkline: account.sparkline ?? accountSparkline(account.portfolio.portfolioValue, options.now, account.portfolio.dayChangeDollars),
     };
-  } catch {
+  } catch (error) {
+    logEvent({
+      severity: "WARN",
+      category: platform === "kalshi" ? "KALSHI" : "POLYMARKET",
+      message: "account source unavailable; falling back to readiness balance",
+      context: { platform, error: error instanceof Error ? error.message : String(error) },
+    });
     const cashValue = platform === "polymarket"
       ? options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null
       : options.readiness?.kalshi.balance ?? null;

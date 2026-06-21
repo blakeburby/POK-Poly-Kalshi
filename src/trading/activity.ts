@@ -47,6 +47,10 @@ export interface TradingActivityOptions {
 const OPEN_STATUSES = new Set(["accepted", "delayed", "live", "open", "placed", "resting", "unfilled", "working"]);
 const FILLED_STATUSES = new Set(["fill", "filled", "matched", "trade"]);
 const ACCOUNT_HISTORY_WINDOW_MS = 24 * 60 * 60_000;
+// Carry a venue's last-known account value forward across a SHORT outage only. Past this bound, stop
+// carrying it (return null -> the venue surfaces as genuinely "unavailable") so a multi-hour venue outage
+// can never bake a frozen, healthy-looking value into the equity curve.
+const CARRY_FORWARD_MAX_AGE_MS = 10 * 60_000;
 
 function toNumber(value: string | number | null | undefined): number | null {
   if (value == null) return null;
@@ -291,6 +295,12 @@ export class TradingActivityStore {
     kalshi: [],
     polymarket: [],
   };
+  // "Latest available" per-venue account value, carried forward when a live fetch is unavailable so the
+  // combined total stays Kalshi + Polymarket (and the equity curve does not collapse to one venue).
+  private readonly lastKnownAccountValue: Record<TradingPlatform, { portfolioValue: number; cashValue: number | null; positions: TradingPosition[]; at: number } | null> = {
+    kalshi: null,
+    polymarket: null,
+  };
 
   constructor(
     private readonly db: Queryable,
@@ -338,7 +348,42 @@ export class TradingActivityStore {
           getPolymarketClient: () => this.getPolymarketClient(),
         })
       : fallback;
-    return this.withAccountValueHistory(activity, now);
+    const carried = this.applyLastKnownAccountValue(activity, now);
+    return this.withAccountValueHistory(carried, now);
+  }
+
+  /**
+   * "Latest available" carry-forward. When a venue's live account fetch is unavailable (portfolioValue
+   * null), serve the last-known good value marked stale instead of dropping the venue to null — so the
+   * combined total stays Kalshi + Polymarket and the equity curve does not collapse to one account. A
+   * venue that has NEVER reported stays null (genuinely missing), which the UI surfaces explicitly.
+   */
+  private applyLastKnownAccountValue(activity: TradingPlatformActivity, now: number): TradingPlatformActivity {
+    if (isFiniteNumber(activity.portfolio.portfolioValue)) {
+      this.lastKnownAccountValue[activity.platform] = {
+        portfolioValue: activity.portfolio.portfolioValue,
+        cashValue: activity.portfolio.cashValue,
+        positions: activity.positions,
+        at: now,
+      };
+      return activity;
+    }
+    const last = this.lastKnownAccountValue[activity.platform];
+    if (!last || now - last.at > CARRY_FORWARD_MAX_AGE_MS) return activity;
+    return {
+      ...activity,
+      connectionStatus: "reconnecting",
+      positions: activity.positions.length > 0 ? activity.positions : last.positions,
+      portfolio: {
+        ...activity.portfolio,
+        portfolioValue: last.portfolioValue,
+        cashValue: last.cashValue,
+        dayChangeDollars: null,
+        dayChangePercent: null,
+        stale: true,
+        valueAsOfMs: last.at,
+      },
+    };
   }
 
   async getSnapshot(options: TradingActivityOptions = {}): Promise<TradingActivitySnapshot> {

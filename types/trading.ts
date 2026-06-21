@@ -11,6 +11,12 @@ export interface TradingPortfolioSummary {
   dayChangeDollars: number | null;
   dayChangePercent: number | null;
   lastUpdatedAt: number | null;
+  /** True when portfolioValue/cashValue are a carried-forward last-known value because the live
+   *  account fetch for this venue is currently unavailable (so the UI can flag it as stale rather
+   *  than presenting it as a fresh figure or silently dropping the venue from the combined total). */
+  stale?: boolean;
+  /** Epoch ms the carried-forward value was last fetched live (set only when stale). */
+  valueAsOfMs?: number | null;
 }
 
 export interface TradingPosition {

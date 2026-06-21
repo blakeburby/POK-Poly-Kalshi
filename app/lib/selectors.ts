@@ -35,13 +35,13 @@ export function toDollars(perShare: number | null | undefined, size: number): nu
 /**
  * Total account value for one venue = cash + market value of open positions.
  *
- * `portfolio.portfolioValue` is venue-inconsistent at the source: Kalshi reports
- * its own position market value there (e.g. $6.11, matching the Kalshi app), while
- * Polymarket has no separate figure and falls back to cash (portfolioValue ==
- * cashValue). So we use the venue's reported portfolioValue as the position value
- * when it's a distinct number (Kalshi → matches Kalshi's own valuation), and fall
- * back to summing the positions array when it's just a cash duplicate (Polymarket),
- * which avoids double-counting Polymarket's cash.
+ * `portfolio.portfolioValue` carries venue-specific semantics at the source, so the combination is done
+ * per venue to avoid double-counting cash:
+ *  - Polymarket: the worker account source sets portfolioValue = cash + position MTM (the FULL account
+ *    total), so we return it directly (falling back to cash + summed marks when it is unavailable).
+ *  - Kalshi: portfolioValue is Kalshi's reported POSITION market value (e.g. $4.79, matching the Kalshi
+ *    app), distinct from cash, so we add cash on top (falling back to summed marks when it duplicates cash).
+ * Mirrors the worker-side venueAccountValue in src/trading/equity-sampler.ts — keep the two in sync.
  */
 export function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
   if (!activity) return null;
@@ -51,6 +51,10 @@ export function venueAccountValue(activity: TradingPlatformActivity | null | und
   if (cash == null && reported == null && positions.length === 0) return null;
   const cashNum = cash ?? 0;
   const summedPositions = positions.reduce((acc, pos) => acc + (pos.value ?? 0), 0);
+  if (activity.platform === "polymarket") {
+    // portfolioValue is already the full account total (cash + positions) — never add cash again.
+    return reported != null ? reported : cashNum + summedPositions;
+  }
   const positionsValue =
     reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
   return cashNum + positionsValue;
@@ -61,6 +65,12 @@ export function accountEquity(snap: DashboardSnapshot): {
   cash: number | null;
   kalshi: number | null;
   polymarket: number | null;
+  /** Venues whose balance is genuinely unavailable (null) — the combined total excludes them. */
+  missingVenues: Venue[];
+  /** Venues showing a carried-forward last-known value because their live fetch is currently down. */
+  staleVenues: Venue[];
+  /** True when the combined total is NOT a fresh both-venue sum (a venue is missing or stale). */
+  partial: boolean;
 } {
   const k = snap.tradingActivity?.kalshi;
   const p = snap.tradingActivity?.polymarket;
@@ -68,11 +78,20 @@ export function accountEquity(snap: DashboardSnapshot): {
     a == null && b == null ? null : (a ?? 0) + (b ?? 0);
   const kalshi = venueAccountValue(k);
   const polymarket = venueAccountValue(p);
+  const missingVenues: Venue[] = [];
+  if (kalshi == null) missingVenues.push("kalshi");
+  if (polymarket == null) missingVenues.push("polymarket");
+  const staleVenues: Venue[] = [];
+  if (k?.portfolio.stale && kalshi != null) staleVenues.push("kalshi");
+  if (p?.portfolio.stale && polymarket != null) staleVenues.push("polymarket");
   return {
     total: sum(kalshi, polymarket),
     cash: sum(k?.portfolio.cashValue, p?.portfolio.cashValue),
     kalshi,
     polymarket,
+    missingVenues,
+    staleVenues,
+    partial: missingVenues.length > 0 || staleVenues.length > 0,
   };
 }
 
