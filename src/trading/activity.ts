@@ -3,7 +3,7 @@ import type { VenueOrderEventInput } from "../db/venue-order-events";
 import type { LiveExecutionReadiness, Venue } from "../types";
 import type { AppConfig } from "../config";
 import { accountBackedPlatformActivity } from "./account-sources";
-import { defaultPolymarketClientFactory, type PolymarketClobLike } from "../execution/live-clients";
+import { defaultPolymarketClientFactory, resetPolymarketApiCredsMemo, type PolymarketClobLike } from "../execution/live-clients";
 import type {
   TradingActivityEvent,
   TradingActivitySide,
@@ -362,6 +362,9 @@ export class TradingActivityStore {
           now,
           fetchFn: this.fetchFn,
           getPolymarketClient: () => this.getPolymarketClient(),
+          // On a Polymarket 401 (stale L2 creds), drop the dashboard client + the shared creds memo so the
+          // next account refresh re-derives — the dashboard counterpart of the trading client's self-heal.
+          onAuthError: () => { this.polymarketClientPromise = null; resetPolymarketApiCredsMemo(); },
         })
       : fallback;
     const carried = this.applyLastKnownAccountValue(activity, now);

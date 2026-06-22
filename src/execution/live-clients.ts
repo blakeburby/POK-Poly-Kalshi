@@ -1936,9 +1936,25 @@ function polymarketTradeFill(trades: Array<Record<string, unknown>>, orderId: st
 // RTT). Only SUCCESS is memoized — a failure is never cached, so the next attempt retries fresh.
 let memoizedPolymarketApiCreds: { creds: ApiKeyCreds; source: PolymarketCredentialsSource } | null = null;
 
-/** Test-only: reset the process-level Polymarket creds memo. */
+/** Clear the process-level Polymarket creds memo so the next resolve re-derives fresh L2 creds. Used both
+ *  by tests and in production on an auth-error (401) invalidation. */
 export function resetPolymarketApiCredsMemo(): void {
   memoizedPolymarketApiCreds = null;
+}
+
+/**
+ * True when an error from an authenticated Polymarket CLOB call indicates the L2 api key is invalid/expired
+ * (HTTP 401). The clob-client (throwOnError) surfaces this as an ApiError carrying `.status === 401`; some
+ * paths sanitize the error to a string first, so we also match the message. Detect on the RAW caught error
+ * (before sanitize) for the status field. A 401 means the memoized creds are stale and must be re-derived.
+ */
+export function isPolymarketAuthError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (status === 401) return true;
+  const responseStatus = (error as { response?: { status?: unknown } } | null)?.response?.status;
+  if (responseStatus === 401) return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /\b401\b|unauthorized|invalid api ?key|api ?key.*(expired|invalid)/i.test(message);
 }
 
 // The L2 derive/create round-trip is a one-time setup call, NOT a hot-path order, but the ClobClient inherits
@@ -2171,6 +2187,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       if (useCache) this.cachedReadiness = readiness;
       return readiness;
     } catch (error) {
+      // A 401 from the balance fetch means the L2 creds are stale — invalidate the cached client + creds memo
+      // so the next readiness probe re-derives and self-heals (this probe still reports not-ready, visibly).
+      if (isPolymarketAuthError(error)) this.invalidatePolymarketCreds();
       const readiness = {
         configured: true,
         ready: false,
@@ -2274,6 +2293,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       const respondedAt = Date.now();
       const message = sanitizeError(error);
       const timeoutLike = isTimeoutLikeError(message);
+      // A 401 here means the L2 creds are stale — invalidate so the next order re-derives (no exposure risk:
+      // a rejected order did not fill). invalidatePolymarketCreds also nulls cachedReadiness.
+      if (isPolymarketAuthError(error)) this.invalidatePolymarketCreds();
       this.cachedReadiness = null;
       return {
         venue: this.venue,
@@ -2962,6 +2984,15 @@ export class PolymarketOrderClient implements VenueOrderClient {
       this.clientPromise = null;
       throw error;
     }
+  }
+
+  // On a Polymarket auth error (401: invalid/expired L2 api key) from an authenticated call, drop the cached
+  // client + the process-level creds memo + the readiness cache so the NEXT call re-derives fresh creds and
+  // self-heals — instead of reusing stale creds forever and silently re-blocking trading until a restart.
+  private invalidatePolymarketCreds(): void {
+    this.clientPromise = null;
+    this.cachedReadiness = null;
+    resetPolymarketApiCredsMemo();
   }
 
   private async getOrderBook(tokenId: string, now = Date.now()): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">> {

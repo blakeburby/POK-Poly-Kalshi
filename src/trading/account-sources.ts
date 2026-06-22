@@ -5,6 +5,7 @@ import { logEvent } from "../logger";
 import { getKalshiHeaders } from "../kalshi/auth";
 import {
   defaultPolymarketClientFactory,
+  isPolymarketAuthError,
   type PolymarketClobClientBundle,
   type PolymarketClobLike,
 } from "../execution/live-clients";
@@ -32,6 +33,9 @@ export interface AccountSourceOptions {
   fetchFn?: FetchFn;
   polymarketClientFactory?: PolymarketClientFactory;
   getPolymarketClient?: () => Promise<PolymarketClobLike>;
+  /** Invoked when an authenticated Polymarket call returns a 401 (stale L2 creds) so the owner can drop its
+   *  cached client + the creds memo and re-derive on the next refresh. */
+  onAuthError?: () => void;
 }
 
 interface PlatformAccountData {
@@ -445,6 +449,17 @@ async function resolvePolymarketClient(options: AccountSourceOptions): Promise<P
 }
 
 async function polymarketCashAndOpenOrders(options: AccountSourceOptions): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
+  try {
+    return await polymarketCashAndOpenOrdersInner(options);
+  } catch (error) {
+    // A 401 means the dashboard client's L2 creds are stale — signal the owner to drop its cached client +
+    // creds memo so the next account refresh re-derives. Re-throw so existing degradation still applies.
+    if (isPolymarketAuthError(error)) options.onAuthError?.();
+    throw error;
+  }
+}
+
+async function polymarketCashAndOpenOrdersInner(options: AccountSourceOptions): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
   const client = await withTimeout(
     resolvePolymarketClient(options),
     POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS,

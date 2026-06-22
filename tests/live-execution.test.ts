@@ -22,6 +22,7 @@ import {
   polymarketApiCredsFromConfig,
   resolvePolymarketApiCreds,
   resetPolymarketApiCredsMemo,
+  isPolymarketAuthError,
   PolymarketOrderClient,
   type LiveOrderContext,
   type PolymarketGeoblockChecker,
@@ -2563,6 +2564,44 @@ test("Polymarket client retries after a transient factory failure instead of poi
   const second = await client.readiness();
   assert.ok(calls >= 2, `factory should be retried after a failure, but was called ${calls} time(s)`);
   assert.equal(second.ready, true); // retry obtains the client and reads a healthy balance
+});
+
+test("isPolymarketAuthError detects 401 / unauthorized and ignores unrelated errors", () => {
+  assert.equal(isPolymarketAuthError(Object.assign(new Error("nope"), { status: 401 })), true);
+  assert.equal(isPolymarketAuthError({ response: { status: 401 } }), true);
+  assert.equal(isPolymarketAuthError(new Error("401 Unauthorized")), true);
+  assert.equal(isPolymarketAuthError(new Error("invalid api key")), true);
+  assert.equal(isPolymarketAuthError(new Error("timeout of 2500ms exceeded")), false);
+  assert.equal(isPolymarketAuthError(new Error("no orders found to match")), false);
+  assert.equal(isPolymarketAuthError(null), false);
+});
+
+test("Polymarket client re-derives creds after a 401 (stale L2 key self-heals, not a permanent block)", async () => {
+  resetPolymarketApiCredsMemo();
+  // First-built client's balance call 401s (stale/expired creds); after invalidation the factory is
+  // re-invoked and the freshly-built client reads a healthy balance.
+  let factoryCalls = 0;
+  const factory = async () => {
+    factoryCalls += 1;
+    if (factoryCalls === 1) {
+      return {
+        getBalanceAllowance: async () => { throw Object.assign(new Error("unauthorized"), { status: 401 }); },
+        updateBalanceAllowance: async () => {},
+      } as unknown as PolymarketClobLike;
+    }
+    return {
+      getBalanceAllowance: async () => ({ balance: "10000000", allowance: "10000000" }),
+      updateBalanceAllowance: async () => {},
+    } as unknown as PolymarketClobLike;
+  };
+  const client = new PolymarketOrderClient(config(), factory, allowedGeoblock);
+
+  const first = await client.readiness();
+  assert.equal(first.ready, false); // 401 → not ready, and the cached client must be invalidated
+
+  const second = await client.readiness();
+  assert.ok(factoryCalls >= 2, `client should re-derive after a 401, but factory was called ${factoryCalls} time(s)`);
+  assert.equal(second.ready, true); // fresh creds → healthy balance → ready
 });
 
 test("Polymarket geoblock check parses allowed, blocked, and unknown responses", async () => {
