@@ -20,6 +20,8 @@ import {
   type KalshiFixOrderSessionLike,
   KalshiUiQuickOrderClient,
   polymarketApiCredsFromConfig,
+  resolvePolymarketApiCreds,
+  resetPolymarketApiCredsMemo,
   PolymarketOrderClient,
   type LiveOrderContext,
   type PolymarketGeoblockChecker,
@@ -2527,6 +2529,40 @@ test("Polymarket API credentials derive before creating new keys", async () => {
 
   assert.equal(created.source, "created");
   assert.equal(created.creds.key, "created-key");
+});
+
+test("resolvePolymarketApiCreds uses configured env creds without deriving (bypass)", async () => {
+  resetPolymarketApiCredsMemo();
+  const resolved = await resolvePolymarketApiCreds(config({
+    polymarketApiKey: "env-key",
+    polymarketApiSecret: "env-secret",
+    polymarketApiPassphrase: "env-passphrase",
+  }));
+  assert.equal(resolved.source, "configured");
+  assert.deepEqual(resolved.creds, { key: "env-key", secret: "env-secret", passphrase: "env-passphrase" });
+});
+
+test("Polymarket client retries after a transient factory failure instead of poisoning the cache", async () => {
+  // A single api-key derive timeout previously cached the rejected client promise for the whole process,
+  // blocking every subsequent order. The factory must be re-invoked after a failure.
+  let calls = 0;
+  const fake = {
+    getBalanceAllowance: async () => ({ balance: "10000000", allowance: "10000000" }),
+    updateBalanceAllowance: async () => {},
+  } as unknown as PolymarketClobLike;
+  const flakyFactory = async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("Could not derive or create api key: timeout of 2500ms exceeded");
+    return fake;
+  };
+  const client = new PolymarketOrderClient(config(), flakyFactory, allowedGeoblock);
+
+  const first = await client.readiness();
+  assert.equal(first.ready, false); // first attempt fails (derive timeout) — but must NOT poison
+
+  const second = await client.readiness();
+  assert.ok(calls >= 2, `factory should be retried after a failure, but was called ${calls} time(s)`);
+  assert.equal(second.ready, true); // retry obtains the client and reads a healthy balance
 });
 
 test("Polymarket geoblock check parses allowed, blocked, and unknown responses", async () => {

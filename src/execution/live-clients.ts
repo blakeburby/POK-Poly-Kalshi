@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import axios from "axios";
 import {
   AssetType,
   type ApiKeyCreds,
@@ -1929,8 +1930,37 @@ function polymarketTradeFill(trades: Array<Record<string, unknown>>, orderId: st
   };
 }
 
+// Process-level memo of resolved Polymarket L2 creds: a successful derive/create by ANY client (e.g. the
+// dashboard account-source) is reused by the trading client, so derivation happens at most once per process
+// and a working set of creds is shared instead of each client re-deriving (and re-risking the flaky derive
+// RTT). Only SUCCESS is memoized — a failure is never cached, so the next attempt retries fresh.
+let memoizedPolymarketApiCreds: { creds: ApiKeyCreds; source: PolymarketCredentialsSource } | null = null;
+
+/** Test-only: reset the process-level Polymarket creds memo. */
+export function resetPolymarketApiCredsMemo(): void {
+  memoizedPolymarketApiCreds = null;
+}
+
+// The L2 derive/create round-trip is a one-time setup call, NOT a hot-path order, but the ClobClient inherits
+// the global axios.defaults.timeout (the 2500ms order budget set in http-transport), which was cutting
+// derivation short and blocking all trading. Temporarily widen the axios timeout for just the derivation, then
+// restore it. Execution concurrency is 1 and derivation runs before the order POST in the same flow, so no
+// order POST is in flight during this window.
+async function withExtendedAxiosTimeout<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T> {
+  const previous = axios.defaults.timeout;
+  axios.defaults.timeout = Math.max(typeof previous === "number" ? previous : 0, timeoutMs);
+  try {
+    return await fn();
+  } finally {
+    axios.defaults.timeout = previous;
+  }
+}
+
 export async function resolvePolymarketApiCreds(config: AppConfig): Promise<{ creds: ApiKeyCreds; source: PolymarketCredentialsSource }> {
   if (!config.polymarketPrivateKey) throw new Error("POLYMARKET_PRIVATE_KEY is required for live trading");
+  const configuredCreds = polymarketApiCredsFromConfig(config);
+  if (configuredCreds) return { creds: configuredCreds, source: "configured" as const };
+  if (memoizedPolymarketApiCreds) return memoizedPolymarketApiCreds;
   const account = privateKeyToAccount(normalizePrivateKey(config.polymarketPrivateKey));
   const walletClient = createWalletClient({
     account,
@@ -1943,20 +1973,19 @@ export async function resolvePolymarketApiCreds(config: AppConfig): Promise<{ cr
   if (signatureType !== SignatureTypeV2.EOA && !funderAddress) {
     throw new Error("POLYMARKET_FUNDER_ADDRESS is required for proxy/safe signatures");
   }
-  const configuredCreds = polymarketApiCredsFromConfig(config);
-  return configuredCreds
-    ? { creds: configuredCreds, source: "configured" as const }
-    : await withMutedPolymarketClientLogs(async () => {
-      const l1Client = new ClobClient({
-        host: config.polymarketClobHost,
-        chain,
-        signer: walletClient,
-        signatureType,
-        funderAddress,
-        throwOnError: true,
-      });
-      return deriveOrCreatePolymarketApiCreds(l1Client);
+  const resolved = await withMutedPolymarketClientLogs(async () => {
+    const l1Client = new ClobClient({
+      host: config.polymarketClobHost,
+      chain,
+      signer: walletClient,
+      signatureType,
+      funderAddress,
+      throwOnError: true,
     });
+    return withExtendedAxiosTimeout(config.liveApiKeyDeriveTimeoutMs, () => deriveOrCreatePolymarketApiCreds(l1Client));
+  });
+  memoizedPolymarketApiCreds = resolved;
+  return resolved;
 }
 
 export async function defaultPolymarketClientFactory(config: AppConfig): Promise<PolymarketClobClientBundle> {
@@ -2924,7 +2953,15 @@ export class PolymarketOrderClient implements VenueOrderClient {
 
   private async client(): Promise<PolymarketClobClientBundle> {
     this.clientPromise ??= this.clientFactory(this.config);
-    return asPolymarketClientBundle(await this.clientPromise);
+    try {
+      return asPolymarketClientBundle(await this.clientPromise);
+    } catch (error) {
+      // Never cache a REJECTED factory promise: a single transient failure (e.g. an L2 api-key derive
+      // timeout) would otherwise poison the memo for the whole process and block every subsequent order until
+      // restart. Clear it so the next call retries fresh.
+      this.clientPromise = null;
+      throw error;
+    }
   }
 
   private async getOrderBook(tokenId: string, now = Date.now()): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">> {

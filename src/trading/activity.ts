@@ -415,7 +415,11 @@ export class TradingActivityStore {
   private getPolymarketClient(): Promise<PolymarketClobLike> {
     if (!this.config) throw new Error("Polymarket account client requires worker config");
     if (!this.polymarketClientPromise) {
-      this.polymarketClientPromise = defaultPolymarketClientFactory(this.config).then((bundle) => "client" in bundle ? bundle.client : bundle);
+      const pending = defaultPolymarketClientFactory(this.config).then((bundle) => "client" in bundle ? bundle.client : bundle);
+      // Never cache a rejected client promise (e.g. a transient api-key derive timeout): clear it on failure
+      // so the next account refresh retries fresh instead of being poisoned for the process lifetime.
+      pending.catch(() => { if (this.polymarketClientPromise === pending) this.polymarketClientPromise = null; });
+      this.polymarketClientPromise = pending;
     }
     return this.polymarketClientPromise;
   }

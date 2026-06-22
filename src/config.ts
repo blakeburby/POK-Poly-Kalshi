@@ -73,6 +73,7 @@ export interface AppConfig {
   liveMinExecutableLiquidityShares: number;
   liveMaxExecutableAskSlippageCents: number;
   liveOrderTimeoutMs: number;
+  liveApiKeyDeriveTimeoutMs: number;
   liveHedgeMaxLossDollars: number;
   liveHedgeFeeBufferDollars: number;
   liveHedgeMinCrossTicks: number;
@@ -367,6 +368,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveMinExecutableLiquidityShares: Math.max(0, envNumber(env, "LIVE_MIN_EXECUTABLE_LIQUIDITY_SHARES", 0)),
     liveMaxExecutableAskSlippageCents: Math.max(0, envNumber(env, "LIVE_MAX_EXECUTABLE_ASK_SLIPPAGE_CENTS", 0)),
     liveOrderTimeoutMs: envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
+    // One-time L2 API-key derive/create is NOT a hot-path order — give it a generous budget instead of the
+    // 2500ms order timeout (the global axios default), which was cutting derivation short and blocking trading.
+    liveApiKeyDeriveTimeoutMs: Math.max(1_000, envNumber(env, "LIVE_API_KEY_DERIVE_TIMEOUT_MS", 15_000)),
     liveHedgeRetryAttempts: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_ATTEMPTS", 2)),
     liveHedgeRetryBudgetMs: Math.max(0, envNumber(env, "LIVE_HEDGE_RETRY_BUDGET_MS", 1_500)),
     liveHedgeMaxLossDollars,
