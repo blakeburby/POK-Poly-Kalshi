@@ -273,7 +273,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     reentryIntervalMs: envNumber(env, "ARB_REENTRY_INTERVAL_MS", 15_000),
     arbScanHeartbeatMs: envNumber(env, "ARB_SCAN_HEARTBEAT_MS", 250),
     staleBookMs: envNumber(env, "STALE_BOOK_MS", 10_000),
-    marketDiscoveryIntervalMs: envNumber(env, "MARKET_DISCOVERY_INTERVAL_MS", 30_000),
+    // Backstop discovery cadence only. Timeliness comes from the 15-min window-boundary refreshes
+    // (discoveryBoundaryRefreshEnabled) + the per-capture queueRediscovery trigger; re-running full discovery
+    // (2 HTTP fetches + strike resolution + hot-path warmup) every 30s was needless steady CPU/network churn.
+    marketDiscoveryIntervalMs: envNumber(env, "MARKET_DISCOVERY_INTERVAL_MS", 300_000),
     dashboardStreamIntervalMs: envNumber(env, "DASHBOARD_STREAM_INTERVAL_MS", 1_000),
     dashboardSignalRefreshMs: envNumber(env, "DASHBOARD_SIGNAL_REFRESH_MS", 1_000),
     dashboardAnalyticsRefreshMs: envNumber(env, "DASHBOARD_ANALYTICS_REFRESH_MS", 5_000),

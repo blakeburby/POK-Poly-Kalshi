@@ -6,7 +6,7 @@ import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
-import type { ArbCandidate, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
+import type { ArbCandidate, BinaryContract, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
 import { emptyTradingActivity } from "../trading/activity";
 import { trimSignalForTransport, recentSignalsSignature } from "./signal-transport";
 import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity, VenuePnlSnapshot, EquityCurveSnapshot } from "../../types/trading";
@@ -79,6 +79,21 @@ function heavyRefreshMs(runtime: DashboardRuntime): number {
   return Math.max(runtime.config.dashboardSignalRefreshMs, 5_000);
 }
 
+// Trim book depth in the DASHBOARD snapshot only (top N levels/side) so frequent polling serializes a small
+// payload instead of the full book (which had ballooned to hundreds of levels). Display-only: live EXECUTION
+// reads the BookStore directly (runtime.books.snapshot() in the executor), never this trimmed JSON.
+const SNAPSHOT_MAX_BOOK_LEVELS = 25;
+function trimBookSnapshot(books: { kalshi: BinaryContract[]; polymarket: BinaryContract[] }): { kalshi: BinaryContract[]; polymarket: BinaryContract[] } {
+  const cap = (c: BinaryContract): BinaryContract => ({
+    ...c,
+    yesAskLevels: c.yesAskLevels?.slice(0, SNAPSHOT_MAX_BOOK_LEVELS),
+    noAskLevels: c.noAskLevels?.slice(0, SNAPSHOT_MAX_BOOK_LEVELS),
+    yesBidLevels: c.yesBidLevels?.slice(0, SNAPSHOT_MAX_BOOK_LEVELS),
+    noBidLevels: c.noBidLevels?.slice(0, SNAPSHOT_MAX_BOOK_LEVELS),
+  });
+  return { kalshi: books.kalshi.map(cap), polymarket: books.polymarket.map(cap) };
+}
+
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
@@ -111,10 +126,17 @@ async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache
 }
 
 async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
-  if (runtime.getAnalytics) return runtime.getAnalytics(now);
+  // Cache BOTH the live-analytics path and the DB-fallback path. Previously the getAnalytics path returned
+  // uncached on EVERY poll, recomputing hourly/daily/weekly aggregates per request and adding steady CPU.
   const cached = cache?.analytics;
-  if (cached && now - cached.refreshedAt < runtime.config.dashboardAnalyticsRefreshMs) {
+  const ttl = runtime.getAnalytics ? heavyRefreshMs(runtime) : runtime.config.dashboardAnalyticsRefreshMs;
+  if (cached && now - cached.refreshedAt < ttl) {
     return cached.value;
+  }
+  if (runtime.getAnalytics) {
+    const live = await runtime.getAnalytics(now);
+    if (cache) cache.analytics = { refreshedAt: now, value: live };
+    return live;
   }
   const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]));
   const value = buildDashboardAnalytics(analyticsSignals, now, {
@@ -323,7 +345,7 @@ function sortedCandidates(runtime: DashboardRuntime, now: number): { liveCandida
  */
 export async function createLiveSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<Partial<DashboardSnapshot>> {
   const startedAt = Date.now();
-  const books = runtime.books.snapshot();
+  const books = trimBookSnapshot(runtime.books.snapshot());
   const scannerStatus = runtime.getScannerStatus();
   const execution = await cachedExecutionReadiness(runtime, now, cache);
   const { liveCandidates, syntheticStructures } = sortedCandidates(runtime, now);
@@ -349,7 +371,7 @@ export async function createLiveSnapshot(runtime: DashboardRuntime, now = Date.n
 
 export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
   const snapshotStartedAt = Date.now();
-  const books = runtime.books.snapshot();
+  const books = trimBookSnapshot(runtime.books.snapshot());
   const scannerStatus = runtime.getScannerStatus();
   const [recentSignals, analytics] = await Promise.all([
     cachedRecentSignals(runtime, now, cache),

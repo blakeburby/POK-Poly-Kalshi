@@ -134,6 +134,36 @@ test("Kalshi orderbook parser handles current dollars_fp snapshot and delta fram
   assert.deepEqual(delta?.noAskLevels?.[0], { price: 0.6, size: 5 });
 });
 
+test("Kalshi orderbook parser prunes dust sizes and consolidates float-noise prices (bounded book)", () => {
+  const parser = new KalshiOrderbookParser();
+  const snapshot = parser.apply("orderbook_snapshot", {
+    market_ticker: "KXBTC15M",
+    // 0.39 and 0.39000001 must collapse to ONE price key; the 0.38 femto-share dust level must be dropped.
+    yes_dollars_fp: [["0.3900", "10.00"], ["0.39000001", "4.00"], ["0.3800", "0.00000000005"]],
+    no_dollars_fp: [["0.6100", "7.00"]],
+  }, 1_800_000_000_000);
+
+  assert.equal(snapshot?.yesBidLevels?.length, 1, "float-noise prices consolidate; dust level dropped");
+  assert.equal(snapshot?.yesBidLevels?.[0].price, 0.39);
+  const allLevels = [
+    ...(snapshot?.yesBidLevels ?? []),
+    ...(snapshot?.noBidLevels ?? []),
+    ...(snapshot?.yesAskLevels ?? []),
+    ...(snapshot?.noAskLevels ?? []),
+  ];
+  assert.ok(allLevels.length > 0 && allLevels.every((l) => l.size >= 1e-6), "no dust levels survive");
+
+  // A delta that drives a level's size down to dust residue must DELETE it, not leave a phantom level.
+  parser.apply("orderbook_snapshot", { market_ticker: "KX2", yes_dollars_fp: [["0.4000", "5.00"]] }, 1_800_000_000_000);
+  const drained = parser.apply("orderbook_delta", {
+    market_ticker: "KX2",
+    side: "yes",
+    price_dollars: "0.4000",
+    delta_fp: "-4.9999999", // 5 - 4.9999999 = 1e-7 < dust epsilon → level removed
+  }, 1_800_000_000_100);
+  assert.equal(drained?.yesBidLevels?.length, 0, "dust residue from a delta is pruned, not kept");
+});
+
 test("Polymarket CLOB websocket parser ignores heartbeat text frames", () => {
   assert.equal(parsePolymarketBookSocketPayload(Buffer.from("PONG")), null);
   assert.equal(parsePolymarketBookSocketPayload(Buffer.from("PING")), null);

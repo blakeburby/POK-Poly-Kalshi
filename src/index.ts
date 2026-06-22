@@ -15,6 +15,7 @@ import { discoverKalshiBtcContracts } from "./discovery/kalshi";
 import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnostics } from "./discovery/polymarket";
 import { LiveExecutor } from "./execution/executor";
 import { buildPublicWorkerHealth } from "./health";
+import { startRuntimeHealthMonitor, sampleRuntimeHealth, getRuntimeHealth } from "./diagnostics/runtime-health";
 import { installLowLatencyHttpTransport, preconnectLiveHttpEndpoints } from "./execution/http-transport";
 import { CachedLiveExecutionLockStore, LiveExposureCache } from "./execution/live-hot-path";
 import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator } from "./execution/venue-confirmations";
@@ -202,6 +203,7 @@ async function main(): Promise<void> {
   }
 
   let discoveryInFlight: Promise<void> | null = null;
+  let discoveryRetryTimer: NodeJS.Timeout | null = null;
   function refreshDiscovery(): Promise<void> {
     if (discoveryInFlight) return discoveryInFlight;
     discoveryInFlight = (async () => {
@@ -230,6 +232,11 @@ async function main(): Promise<void> {
       } catch (error) {
         lastDiscoveryError = error instanceof Error ? error.message : String(error);
         logEvent({ severity: "ERROR", category: "DISCOVERY", message: "discovery refresh failed", context: { error: lastDiscoveryError } });
+        // The steady interval is a 5-min backstop, so retry a FAILED discovery sooner — otherwise a transient
+        // fetch error could leave the worker without fresh contracts for minutes. One in-flight retry at a time.
+        if (!discoveryRetryTimer) {
+          discoveryRetryTimer = setTimeout(() => { discoveryRetryTimer = null; void refreshDiscovery(); }, 30_000);
+        }
       } finally {
         discoveryInFlight = null;
       }
@@ -294,6 +301,20 @@ async function main(): Promise<void> {
   const analyticsTimer = setInterval(() => void reconcileAnalytics().catch((error) => {
     logEvent({ severity: "ERROR", category: "DB", message: "analytics reconciliation failed", context: { error: error instanceof Error ? error.message : String(error) } });
   }), Math.max(1_000, config.dashboardAnalyticsRefreshMs));
+  // Runtime-health watchdog: surface event-loop stall / CPU steal (burst-credit throttle) immediately instead
+  // of letting it silently halt trading. Single sampler so the /proc/stat steal delta stays consistent.
+  startRuntimeHealthMonitor();
+  const runtimeHealthTimer = setInterval(() => {
+    const h = sampleRuntimeHealth();
+    if (h.eventLoopLagP99Ms > 1_000 || (h.cpuStealPercent ?? 0) > 40) {
+      logEvent({
+        severity: "WARN",
+        category: "BOOT",
+        message: "runtime health degraded: event-loop stall / CPU throttle",
+        context: { eventLoopLagMeanMs: h.eventLoopLagMeanMs, eventLoopLagP99Ms: h.eventLoopLagP99Ms, cpuStealPercent: h.cpuStealPercent },
+      });
+    }
+  }, 10_000);
   const boundaryDiscoveryTimers = scheduleBoundaryRefreshes();
 
   const server = createServer((request, response) => {
@@ -343,13 +364,16 @@ async function main(): Promise<void> {
             readinessError = error;
           }
         }
-        sendJson(response, 200, buildPublicWorkerHealth({
-          config,
-          scannerStatus: scanner.status(),
-          now,
-          readiness,
-          readinessError,
-        }));
+        sendJson(response, 200, {
+          ...buildPublicWorkerHealth({
+            config,
+            scannerStatus: scanner.status(),
+            now,
+            readiness,
+            readinessError,
+          }),
+          runtimeHealth: getRuntimeHealth(),
+        });
         return;
       }
       if (request.url === "/status") {
@@ -382,6 +406,8 @@ async function main(): Promise<void> {
     clearInterval(hotPathWarmTimer);
     if (scanHeartbeatTimer) clearInterval(scanHeartbeatTimer);
     clearInterval(analyticsTimer);
+    clearInterval(runtimeHealthTimer);
+    if (discoveryRetryTimer) clearTimeout(discoveryRetryTimer);
     for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();
     polymarket.close();

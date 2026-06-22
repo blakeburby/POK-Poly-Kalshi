@@ -43,17 +43,28 @@ function dollarsToCentsDollars(value: unknown, mode: "bid" | "ask"): number | nu
   return Math.max(0, Math.min(100, rounded)) / 100;
 }
 
+// Kalshi trades integer contracts, so any level size below this is dust (e.g. float residue from repeated
+// orderbook_delta add/subtract, observed as ~8.5e-14) and must be treated as zero — otherwise depthWeightedAsk
+// walks phantom levels and computes a garbage VWAP/edge.
+const MIN_LEVEL_SIZE = 1e-6;
+// Backstop cap on levels emitted per side. Kalshi is a 1¢ grid (≤99 real prices); more than this means the
+// book Map accumulated near-duplicate/float-noise prices — bound the array so the per-scan sort/walk stays cheap.
+const MAX_BOOK_LEVELS = 120;
+
 function normalizePrice(value: unknown): number | null {
   if (value == null) return null;
   const parsed = typeof value === "number" ? value : Number.parseFloat(String(value));
   if (!Number.isFinite(parsed)) return null;
-  return parsed > 1 ? Math.max(0, Math.min(100, parsed)) / 100 : Math.max(0, Math.min(1, parsed));
+  const normalized = parsed > 1 ? Math.max(0, Math.min(100, parsed)) / 100 : Math.max(0, Math.min(1, parsed));
+  // Round to a 4-decimal grid so float-imprecise prices (0.2600001 vs 0.26) collapse to the SAME Map key
+  // instead of accumulating as distinct near-duplicate levels (the 440-levels-on-one-contract bug).
+  return Math.round(normalized * 10_000) / 10_000;
 }
 
 function normalizeSize(value: unknown): number | null {
   if (value == null) return null;
   const parsed = typeof value === "number" ? value : Number.parseFloat(String(value));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= MIN_LEVEL_SIZE ? parsed : null;
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -80,15 +91,17 @@ function parseLevel(value: unknown): BookLevel | null {
 
 function sortedBids(levels: Iterable<BookLevel>): BookLevel[] {
   return [...levels]
-    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.size > 0)
-    .sort((a, b) => b.price - a.price);
+    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.size >= MIN_LEVEL_SIZE)
+    .sort((a, b) => b.price - a.price)
+    .slice(0, MAX_BOOK_LEVELS);
 }
 
 function askFromOppositeBids(levels: Iterable<BookLevel>): BookLevel[] {
   return [...levels]
-    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.size > 0)
+    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.size >= MIN_LEVEL_SIZE)
     .map((level) => ({ price: Math.round((1 - level.price) * 10_000) / 10_000, size: level.size }))
-    .sort((a, b) => a.price - b.price);
+    .sort((a, b) => a.price - b.price)
+    .slice(0, MAX_BOOK_LEVELS);
 }
 
 function bestBid(levels: BookLevel[]): number | null {
@@ -135,7 +148,8 @@ interface KalshiBookState {
 
 function setBookLevel(levels: Map<number, number>, price: number | null, size: number | null): void {
   if (price == null || size == null) return;
-  if (size <= 0) levels.delete(price);
+  // Treat dust (≤ epsilon) as zero so delta-accumulation residue doesn't persist as a phantom level.
+  if (size < MIN_LEVEL_SIZE) levels.delete(price);
   else levels.set(price, size);
 }
 
