@@ -2,7 +2,12 @@
 
 ## Runtime Model
 
-POK is live-only. The production worker runs on the Hostinger VPS as the systemd service `pok-worker`. It monitors Kalshi and Polymarket books, evaluates protected BTC 15-minute spreads, and records only real live execution attempts and venue evidence. To pause new entries without taking the process down, set `ARB_ENABLED=false` in `/etc/pok-poly-kalshi/worker.env` and restart `pok-worker`.
+POK is live-only. The production worker runs on an **AWS Lightsail instance in Montreal (ca-central-1)** as the
+systemd service `pok-worker` (working dir `/opt/pok-poly-kalshi`, env file `/etc/pok-poly-kalshi/worker.env`).
+
+> **Naming note:** the deploy npm scripts (`hostinger:*`) and the `HOSTINGER_SSH_TARGET` variable are
+> historically named after an earlier Hostinger VPS. They now target the **AWS Lightsail** box — the names are
+> kept only to avoid churning the deploy tooling. "Hostinger" anywhere in this repo means "the production box." It monitors Kalshi and Polymarket books, evaluates protected BTC 15-minute spreads, and records only real live execution attempts and venue evidence. To pause new entries without taking the process down, set `ARB_ENABLED=false` in `/etc/pok-poly-kalshi/worker.env` and restart `pok-worker`.
 
 ## Required Environment
 
@@ -116,12 +121,12 @@ The dashboard has one live surface:
 
 The browser never receives venue secrets or the worker bearer token. It is read-only and cannot arm, disarm, clear locks, or place orders.
 
-## Hostinger Deploy Flow
+## Deploy Flow (AWS Lightsail box; `hostinger:*` scripts are historically named)
 
 Railway worker deploys are not the production path. Keep Railway only as a possible Postgres provider through `DATABASE_URL`.
 
-1. Create and push a dedicated branch, normally `hostinger-exact-share-readiness`.
-2. Set `HOSTINGER_SSH_TARGET` to the Hostinger SSH target.
+1. Create and push a dedicated branch, normally `hostinger-exact-share-readiness` (kept in lockstep with `main`).
+2. Set `HOSTINGER_SSH_TARGET` to the production box SSH target (the AWS Lightsail instance).
 3. Run the read-only precheck:
 
 ```bash

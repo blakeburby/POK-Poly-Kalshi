@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { VenueOrderEventHub, type VenueOrderEventInput, type VenueOrderEventWriter } from "../src/db/venue-order-events";
 import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator, type LiveSignalReconciliationStore } from "../src/execution/venue-confirmations";
 import type { VenueOrderResult } from "../src/execution/live-clients";
-import type { ArbCandidate, ArbLeg, UserStreamVenueState } from "../src/types";
-import type { LiveExecutionLock, LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
+import type { ArbCandidate, ArbLeg, LiveExecutionLock, UserStreamVenueState } from "../src/types";
+import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 
 class MemoryEventStore implements VenueOrderEventWriter {
   events: VenueOrderEventInput[] = [];
@@ -620,7 +620,7 @@ test("confirmation coordinator STILL locks on a LATE fill BEYOND accountedFill +
   // finalized executor never booked -> it MUST lock (the coordinator is the sole detector on the late path).
   await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 6.5 });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(locks.lock?.reason ?? "", /fill mismatch 6.5\/5/);
+  assert.match((locks.lock as LiveExecutionLock | null)?.reason ?? "", /fill mismatch 6.5\/5/);
 });
 
 test("confirmation coordinator does NOT lock on the lock-21 production overfill (5.256409/5) arriving late after a REST-5 reconcile", async () => {

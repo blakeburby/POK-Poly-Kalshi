@@ -5,7 +5,7 @@ import { buildDashboardAnalytics } from "../src/analytics/performance";
 import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, type DashboardRuntime, type DashboardSnapshotCache } from "../src/dashboard/worker-api";
 import type { AppConfig } from "../src/config";
 import { LatencyMonitor } from "../src/latency/metrics";
-import type { DashboardSignal } from "../src/types";
+import type { DashboardSignal, LiveExecutionReadiness } from "../src/types";
 import type { TradingActivitySnapshot } from "../types/trading";
 import { contract } from "./helpers";
 
@@ -22,6 +22,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     dashboardStreamIntervalMs: 250,
     dashboardSignalRefreshMs: 1_000,
     dashboardAnalyticsRefreshMs: 5_000,
+    equityBackfillOnBoot: false,
     executionConcurrency: 2,
     discoveryBoundaryRefreshEnabled: true,
     kalshiApiBase: "",
@@ -129,6 +130,36 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
     dashboardApiToken: "secret-token",
+    liveDynamicSizingEnabled: false,
+    liveMinOrderSize: 8,
+    liveMaxOrderSize: 8,
+    liveDynamicSizingMaxKalshiSlippageCents: 10,
+    liveDynamicSizingCashAware: false,
+    liveFeeAwareGateEnabled: false,
+    livePolymarketFirstCrossCents: 0,
+    livePolymarketQuoteMaxAgeMs: 750,
+    liveHedgeQuoteMaxAgeMs: 750,
+    liveQuoteSkewBothFreshEnabled: true,
+    liveApiKeyDeriveTimeoutMs: 15_000,
+    liveHedgeMinCrossTicks: 2,
+    liveHedgeRetryAttempts: 2,
+    liveHedgeRetryBudgetMs: 1_500,
+    liveHotReadinessBalanceCoverageEnabled: true,
+    liveHotPathLockCacheGraceMs: 0,
+    liveQuoteFreshnessFromWsOnly: false,
+    liveReentrySkipZeroExposure: false,
+    liveQuarantineCapSettleGraceMs: 0,
+    liveConfirmationFlatMissNonBlocking: true,
+    liveConfirmationOverfillTolerant: false,
+    liveConfirmationStatusTolerant: false,
+    liveConfirmationAcceptRestEvidence: false,
+    liveAcceptStreamAckAsOrderResult: false,
+    livePolymarketTimeoutRecoveryResolvesNoFill: false,
+    liveFillQualityInputCacheMaxAgeMs: 0,
+    liveAutoUnwindEnabled: false,
+    liveAutoUnwindMaxLossDollars: 0.05,
+    liveAutoUnwindTimeoutMs: 1_500,
+    dashboardRealtimeSecret: "",
     ...input,
   };
 }
@@ -277,7 +308,7 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
         requiredCollateral: 1,
       },
       lastAttempt: null,
-    }),
+    } as unknown as LiveExecutionReadiness),
     getLogs: () => [{ timestamp: new Date(now).toISOString(), severity: "INFO", category: "SCANNER", message: "ok" }],
     getLatencySnapshot: (latencyNow, snapshotBuildMs) => {
       const latency = new LatencyMonitor();

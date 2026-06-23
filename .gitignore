@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .next/
+# Next.js regenerates this on every build (and rewrites the routes path), so tracking it just
+# churns git status / lockstep diffs. It is recreated automatically by `next dev` / `next build`.
+next-env.d.ts
 out/
 .env
 .env.local

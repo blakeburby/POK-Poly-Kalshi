@@ -206,9 +206,9 @@ test("Polymarket user stream does not re-auth unchanged open subscriptions", asy
 
   const client = new PolymarketUserStreamClient(
     "wss://example.invalid",
-    { recordEvent: async () => {} },
+    { recordEvent: async () => {} } as unknown as ConstructorParameters<typeof PolymarketUserStreamClient>[1],
     async () => ({ key: "key", secret: "secret", passphrase: "passphrase" }),
-    () => socket,
+    () => socket as unknown as ReturnType<NonNullable<ConstructorParameters<typeof PolymarketUserStreamClient>[3]>>,
   );
 
   client.setSubscriptions(["condition-a"]);
@@ -315,6 +315,12 @@ test("authenticated user stream parsers normalize venue order events", () => {
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// The book clients' socket factory expects a `ws` RawWebSocket (a Pick of the real WebSocket type,
+// with its overloaded typed `on`). FakeBookSocket is a deliberately-loose test double, so its return
+// is cast to each client's actual factory-return type at the call site.
+type PolymarketSocketFactoryReturn = ReturnType<NonNullable<ConstructorParameters<typeof PolymarketBookClient>[1]>>;
+type KalshiSocketFactoryReturn = ReturnType<NonNullable<ConstructorParameters<typeof KalshiTickerClient>[1]>>;
+
 class FakeBookSocket {
   readyState = 1; // WebSocket.OPEN
   sent: string[] = [];
@@ -346,7 +352,7 @@ test("PolymarketBookClient forces a reconnect when the open book feed goes silen
   const client = new PolymarketBookClient("wss://x", () => {
     const s = new FakeBookSocket();
     sockets.push(s);
-    return s;
+    return s as unknown as PolymarketSocketFactoryReturn;
   }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clock });
 
   client.setSubscriptions(["token-a"]);
@@ -365,7 +371,7 @@ test("PolymarketBookClient keeps a live feed connected and pings it (no false re
   const client = new PolymarketBookClient("wss://x", () => {
     const s = new FakeBookSocket();
     sockets.push(s);
-    return s;
+    return s as unknown as PolymarketSocketFactoryReturn;
   }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clock });
 
   client.setSubscriptions(["token-a"]);
@@ -416,7 +422,7 @@ test("KalshiTickerClient forces a reconnect when the open orderbook feed goes si
     const c = new KalshiTickerClient("wss://x", () => {
       const s = new FakeBookSocket();
       sockets.push(s);
-      return s;
+      return s as unknown as KalshiSocketFactoryReturn;
     }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clockRef.v });
     c.setSubscriptions(["KXBTC15M"]);
     const f = sockets[0];
@@ -436,7 +442,7 @@ test("KalshiTickerClient keeps a live orderbook feed connected (no false reconne
     const c = new KalshiTickerClient("wss://x", () => {
       const s = new FakeBookSocket();
       sockets.push(s);
-      return s;
+      return s as unknown as KalshiSocketFactoryReturn;
     }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clockRef.v });
     c.setSubscriptions(["KXBTC15M"]);
     const s = sockets[0];

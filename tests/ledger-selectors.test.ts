@@ -69,11 +69,11 @@ test("latency: trim-snapshot keeps only UI-read scalars (executionTimings/featur
 
   assert.deepEqual(Object.keys(t.executionTimings!).sort(),
     ["kalshiRttMs", "polymarketConfirmationMs", "polymarketRttMs", "totalMs", "venueSubmitSkewMs"]);
-  assert.deepEqual(Object.keys(t.fillQualitySnapshot!.features as Record<string, unknown>).sort(),
+  assert.deepEqual(Object.keys(t.fillQualitySnapshot!.features as unknown as Record<string, unknown>).sort(),
     ["kalshiRttP50Ms", "kalshiRttP95Ms"]);
   // scalars the views read are preserved; the big sub-objects are dropped
   assert.equal(t.fillQualitySnapshot!.pairedFillProbability, 0.9);
-  assert.equal((t.fillQualitySnapshot as Record<string, unknown>).pairedFillConfidence, undefined);
+  assert.equal((t.fillQualitySnapshot as unknown as Record<string, unknown>).pairedFillConfidence, undefined);
   assert.equal(t.leadLagSnapshot!.leaderVenue, "kalshi");
   assert.equal(t.leadLagSnapshot!.windows.length, 0);
 });

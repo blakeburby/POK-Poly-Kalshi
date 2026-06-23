@@ -56,6 +56,7 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
       liveOrderTimeoutMs: 2_500,
       liveHedgeMaxLossDollars: 0.02,
       liveHedgeFeeBufferDollars: 0.01,
+      liveHedgeMinCrossTicks: 2,
       liveOrderPlacementMode: "parallel_quick",
       kalshiHedgeOrderMode: "ui_quick_order",
       kalshiUiQuickOrderCapValidated: false,

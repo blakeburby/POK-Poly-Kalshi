@@ -106,6 +106,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     dashboardStreamIntervalMs: 250,
     dashboardSignalRefreshMs: 1_000,
     dashboardAnalyticsRefreshMs: 5_000,
+    equityBackfillOnBoot: false,
     executionConcurrency: 1,
     discoveryBoundaryRefreshEnabled: true,
     kalshiApiBase: "https://api.elections.kalshi.com/trade-api/v2",
@@ -233,6 +234,16 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
     dashboardApiToken: "token",
+    liveDynamicSizingCashAware: false,
+    liveApiKeyDeriveTimeoutMs: 15_000,
+    liveHotPathLockCacheGraceMs: 0,
+    liveQuoteFreshnessFromWsOnly: false,
+    liveReentrySkipZeroExposure: false,
+    liveQuarantineCapSettleGraceMs: 0,
+    liveConfirmationStatusTolerant: false,
+    liveAcceptStreamAckAsOrderResult: false,
+    liveFillQualityInputCacheMaxAgeMs: 0,
+    dashboardRealtimeSecret: "",
     ...input,
   };
 }
@@ -996,7 +1007,7 @@ test("Kalshi FIX execution reports parse fill, fee, and timestamps", () => {
 });
 
 test("Kalshi FIX order client submits NO hedge through capped supported IOC route", async () => {
-  let placed: KalshiFixOrderInput | null = null;
+  let placed: KalshiFixOrderInput | null = null as KalshiFixOrderInput | null;
   const session: KalshiFixOrderSessionLike = {
     async readiness() {
       return { ready: true, reason: null };
@@ -2729,7 +2740,7 @@ test("Polymarket readiness requires proxy funder and funded collateral", async (
     }
 
     async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
-      return { balance: this.balance, allowance: this.allowance };
+      return { balance: this.balance, allowance: this.allowance } as unknown as BalanceAllowanceResponse;
     }
 
     async updateBalanceAllowance(): Promise<void> {
@@ -2927,7 +2938,7 @@ test("Polymarket readiness syncs CLOB balance allowance before deciding readines
     }
 
     async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
-      return { balance: this.balance, allowance: null };
+      return { balance: this.balance, allowance: null } as unknown as BalanceAllowanceResponse;
     }
 
     async updateBalanceAllowance(): Promise<void> {
@@ -3404,7 +3415,7 @@ test("live executor keeps parallel market available and starts both venue orders
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
   const starts: Venue[] = [];
-  let releaseKalshi = () => undefined;
+  let releaseKalshi: () => void = () => undefined;
   class ParallelClient extends FakeVenueClient {
     async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
       starts.push(this.venue);
@@ -4366,7 +4377,7 @@ test("P1: liveAcceptStreamAckAsOrderResult finalizes from the stream ack WITHOUT
   // stream confirmation arrives immediately. The point of P1: execute() must finalize off the stream ack
   // while the REST is still unresolved.
   let restResolved = false;
-  let releaseRest: (() => void) | null = null;
+  let releaseRest: (() => void) | null = null as (() => void) | null;
   const restGate = new Promise<void>((resolve) => { releaseRest = resolve; });
   class GatedSlowRestClient extends FakeVenueClient {
     async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {

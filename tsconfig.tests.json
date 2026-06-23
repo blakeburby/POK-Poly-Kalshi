@@ -1,0 +1,15 @@
+{
+  // Type-checks the test suite, which neither tsconfig.json (excludes tests/) nor tsconfig.worker.json
+  // (includes only src/types/scripts) cover. Without this, `npm test` runs through tsx (transpile-only),
+  // so test files that build literal `as AppConfig` objects silently drift from the real config shape —
+  // a dropped re-export or a new required field becomes a runtime surprise instead of a compile error.
+  // Run via `npm run typecheck:test`; wired into CI alongside the worker typecheck.
+  "extends": "./tsconfig.worker.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx", "types/**/*.ts"],
+  "exclude": ["node_modules", "app", ".next"]
+}

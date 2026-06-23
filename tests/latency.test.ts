@@ -37,7 +37,7 @@ test("latency stats report latest, p50, p95, empty states, and current book ages
 });
 
 test("coalesced scan scheduler runs one immediate follow-up with the newest update", async () => {
-  let releaseFirst = () => undefined;
+  let releaseFirst: () => void = () => undefined;
   const firstScan = new Promise<void>((resolve) => {
     releaseFirst = resolve;
   });
@@ -259,7 +259,7 @@ test("live hot-path scanner suppresses automatic lock writes when disabled", asy
   ]);
 
   let lockCalls = 0;
-  let updated: ExecutionResult | null = null;
+  let updated: ExecutionResult | null = null as ExecutionResult | null;
   const scanner = new CrossVenueArbScanner(
     books,
     {

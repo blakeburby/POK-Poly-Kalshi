@@ -1,51 +1,54 @@
-# POK Poly Kalshi
+# POK · Poly–Kalshi
 
-Live-only worker plus read-only quant dashboard for deterministic BTC 15-minute binary options spreads between Polymarket and Kalshi.
+Live-only worker + read-only quant dashboard for deterministic **BTC 15-minute binary-option spreads** between
+**Polymarket** and **Kalshi**. When the same event can be bought below its \$1 guaranteed payout across both
+venues, the worker executes both legs to lock the spread.
 
 The strategy only considers protected structures:
 
-- Buy YES on the lower strike.
-- Buy NO on the higher strike.
+- Buy **YES** on the lower strike, **NO** on the higher strike.
 - Enter only when the executable, cushioned live edge clears `ARB_MIN_PROFIT_DOLLARS`.
+- Order-book prices are WebSocket-driven; REST handles discovery, metadata, readiness, order submission, and
+  post-submit recovery.
 
-Order-book prices are WebSocket-driven. REST is used for discovery, metadata hydration, readiness checks, order submission, and post-submit recovery.
+## Documentation map
 
-## Commands
+| Doc | Read it for |
+| --- | --- |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the system is shaped: data flow, module map, invariants, glossary. **Start here.** |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Local setup, the `npm run verify` gate, house conventions, deploy discipline. |
+| [docs/ENVIRONMENT.md](./docs/ENVIRONMENT.md) | Every environment variable, its type, default, and purpose. |
+| [RUNBOOK.md](./RUNBOOK.md) | Production operations: pause/resume, deploy flow, lock resolution, incident response. |
+| [docs/](./docs) | Design notes and dated audits (incl. the 2026-06-23 architecture audit). |
+
+## Quick start
 
 ```bash
 npm install
-npm run migrate
-npm run worker
-npm run dev:dashboard
-npm test
+cp deploy/vps/pok-worker.env.example .env   # set DATABASE_URL (+ venue secrets only if trading)
+npm run migrate                             # apply DB schema
+npm run worker                              # start the trade engine (ARB_ENABLED=false to run without entering)
+npm run dev:dashboard                       # local dashboard
+npm run verify                              # typecheck (src + tests) + full test suite
 ```
-
-Execution is live-capable only. Use `ARB_ENABLED=false` to keep the worker online while preventing new entries.
 
 ## Processes
 
-- Production worker: Lightsail (Montreal) systemd service `pok-worker`, `root@15.175.128.184`
-- Local worker: `npm run migrate && npm run worker`
-- Vercel dashboard: `npm run build:dashboard` (deploy with `vercel --prod`; aliases `pokstrategies.com`)
-- Worker-only typecheck: `npm run build:worker`
-
-The dashboard is read-only. It authenticates operators with `DASHBOARD_PASSWORD`, then proxies server-side to the worker with `WORKER_API_BASE` and `DASHBOARD_API_TOKEN`.
+- **Production worker**: AWS Lightsail (Montreal) systemd service `pok-worker` — see [RUNBOOK.md](./RUNBOOK.md).
+- **Dashboard**: Next.js on Vercel (aliases `pokstrategies.com`); read-only, authenticates operators with
+  `DASHBOARD_PASSWORD` and proxies server-side to the worker via `WORKER_API_BASE` + `DASHBOARD_API_TOKEN`.
+  It cannot arm, disarm, clear locks, or place orders.
 
 ## Branching & deploys
 
-> **Invariant: `main` and `hostinger-exact-share-readiness` must always point to the same commit. `main` is never behind.**
-
-Both the production worker (`npm run hostinger:deploy`) and the Vercel dashboard deploy from `hostinger-exact-share-readiness`. `main` must mirror exactly what is live, so every push to the deploy branch must also fast-forward `main` in the same step:
+> **Invariant:** `main` and `hostinger-exact-share-readiness` always point at the same commit; `main` is never
+> behind. Both the worker and the dashboard deploy from `hostinger-exact-share-readiness`.
 
 ```bash
 git push origin hostinger-exact-share-readiness
-git push origin hostinger-exact-share-readiness:main   # keep main on the same commit — always a clean fast-forward
+git push origin hostinger-exact-share-readiness:main          # mirror — always a clean fast-forward
+git rev-parse origin/main origin/hostinger-exact-share-readiness   # the two SHAs must match
 ```
 
-The deploy branch is always a strict superset of `main`, so this never conflicts. Do not commit to `main` independently — it tracks the deploy branch exactly. After any deploy, confirm they match:
-
-```bash
-git rev-parse origin/main origin/hostinger-exact-share-readiness   # the two SHAs must be identical
-```
-
-See the `/deploy` skill (`.claude/skills/deploy/`) for the full guarded flow.
+Do not commit to `main` independently. See the guarded deploy flow in [RUNBOOK.md](./RUNBOOK.md) and the
+`/deploy` skill (`.claude/skills/deploy/`).

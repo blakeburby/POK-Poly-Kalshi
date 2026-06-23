@@ -1,0 +1,17 @@
+# Generated / vendored
+node_modules/
+.next/
+.vercel/
+dist/
+coverage/
+package-lock.json
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# SQL migrations are hand-formatted and version-frozen
+src/db/migrations/
+
+# Audit evidence and captured fixtures
+docs/audits/**/evidence/
+*.har
+*.har.json

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CachedLiveExecutionLockStore } from "../src/execution/live-hot-path";
-import type { LiveExecutionLock, LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
+import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
+import type { LiveExecutionLock } from "../src/types";
 
 function lock(reason: string): LiveExecutionLock {
   return { id: 1, createdAt: new Date(0).toISOString(), reason, severity: "critical", sourceSignalId: null, executionGroupId: null, details: {}, clearedAt: null, clearReason: null };

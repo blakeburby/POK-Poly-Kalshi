@@ -509,7 +509,7 @@ test("live reconciliation blocks unresolved partial fills but ignores operator-r
   assert.ok(candidate);
 
   const unresolvedDb: Queryable = {
-    async query() {
+    async query<T = Record<string, unknown>>(): Promise<{ rows: T[] }> {
       return {
         rows: [{
           id: 14741,
@@ -521,7 +521,7 @@ test("live reconciliation blocks unresolved partial fills but ignores operator-r
           polymarket_fill_count: 5,
           venue_confirmations: null,
           reconciliation_resolved_at: null,
-        }],
+        } as T],
       };
     },
   };
@@ -529,7 +529,7 @@ test("live reconciliation blocks unresolved partial fills but ignores operator-r
   assert.match(unresolved ?? "", /signal #14741 is marked partial_fill/);
 
   const resolvedDb: Queryable = {
-    async query() {
+    async query<T = Record<string, unknown>>(): Promise<{ rows: T[] }> {
       return {
         rows: [{
           id: 14741,
@@ -541,7 +541,7 @@ test("live reconciliation blocks unresolved partial fills but ignores operator-r
           polymarket_fill_count: 5,
           venue_confirmations: null,
           reconciliation_resolved_at: "2026-05-11T03:10:00.000Z",
-        }],
+        } as T],
       };
     },
   };
@@ -555,8 +555,8 @@ test("live reconciliation ignores quarantined partials under cap but blocks over
   assert.ok(candidate);
 
   const db: Queryable = {
-    async query(sql) {
-      if (/SUM\(risk_quarantine_exposure_dollars\)/.test(sql)) return { rows: [{ total: 4.2, count: 1 }] };
+    async query<T = Record<string, unknown>>(sql: string): Promise<{ rows: T[] }> {
+      if (/SUM\(risk_quarantine_exposure_dollars\)/.test(sql)) return { rows: [{ total: 4.2, count: 1 } as T] };
       return { rows: [] };
     },
   };
@@ -574,7 +574,7 @@ test("live reconciliation keeps unknown venue statuses blocking until resolved",
   assert.ok(candidate);
 
   const db: Queryable = {
-    async query() {
+    async query<T = Record<string, unknown>>(): Promise<{ rows: T[] }> {
       return {
         rows: [{
           id: 14742,
@@ -586,7 +586,7 @@ test("live reconciliation keeps unknown venue statuses blocking until resolved",
           polymarket_fill_count: 0,
           venue_confirmations: null,
           reconciliation_resolved_at: null,
-        }],
+        } as T],
       };
     },
   };
