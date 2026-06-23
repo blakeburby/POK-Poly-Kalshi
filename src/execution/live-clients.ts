@@ -220,12 +220,33 @@ function roundPrice(value: number): number {
 }
 
 export function sanitizeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message
-    .replace(/0x[a-fA-F0-9]{32,}/g, "0x[redacted]")
-    .replace(/\/v1\/users\/[^/"'\s]+/g, "/v1/users/[redacted]")
-    .replace(/(cookie|x-csrf-token|csrf|authorization)\s*[:=]\s*[^,;}\]\s]+/gi, "$1=[redacted]")
-    .slice(0, 500);
+  try {
+    let message: string;
+    if (error instanceof Error) {
+      message = error.message || error.name || "Error";
+      // axios/network errors often carry a legible `code`/HTTP status while `.message` can be an opaque
+      // "Converting circular structure to JSON" (a socket got serialized upstream). Surface the code/status
+      // so the real cause (timeout=ECONNABORTED/ETIMEDOUT, auth=401, etc.) is never masked.
+      const code = (error as { code?: unknown }).code;
+      const status = (error as { response?: { status?: unknown } }).response?.status
+        ?? (error as { status?: unknown }).status;
+      const tags = [typeof code === "string" ? code : null, status != null ? `status=${status}` : null].filter(Boolean);
+      if (tags.length > 0) message = `${message} (${tags.join(" ")})`;
+    } else {
+      message = String(error);
+    }
+    // Some socket/custom errors set `.message` to a non-string (object/number); coercing before the redaction
+    // `.replace` chain keeps this hot-path catch helper from ever throwing. Redaction runs inside the try so a
+    // pathological value can never escape unredacted — any failure falls through to the safe literal below.
+    if (typeof message !== "string") message = String(message);
+    return message
+      .replace(/0x[a-fA-F0-9]{32,}/g, "0x[redacted]")
+      .replace(/\/v1\/users\/[^/"'\s]+/g, "/v1/users/[redacted]")
+      .replace(/(cookie|x-csrf-token|csrf|authorization)\s*[:=]\s*[^,;}\]\s]+/gi, "$1=[redacted]")
+      .slice(0, 500);
+  } catch {
+    return "[unserializable error]";
+  }
 }
 
 function stringOrNull(value: unknown): string | null {

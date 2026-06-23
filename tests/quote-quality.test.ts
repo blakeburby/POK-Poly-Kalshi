@@ -31,6 +31,9 @@ test("config defaults the live minimum edge to one cent", () => {
   assert.equal(loadConfig({}).minProfitDollars, 0.01);
   assert.equal(loadConfig({}).liveMaxTradesPerWindow, 3);
   assert.equal(loadConfig({}).arbScanHeartbeatMs, 250);
+  // P1.3: the both-fresh skew relaxation defaults ON; the strict absolute-skew gate is opt-in via the flag.
+  assert.equal(loadConfig({}).liveQuoteSkewBothFreshEnabled, true);
+  assert.equal(loadConfig({ LIVE_QUOTE_SKEW_BOTH_FRESH_ENABLED: "false" }).liveQuoteSkewBothFreshEnabled, false);
 });
 
 test("W2: dynamic sizing config defaults to a single-point band (byte-identical) and guards concurrency", () => {
@@ -91,7 +94,8 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and raw 
   assert.equal(stale.ok, false);
   assert.match(stale.reason ?? "", /stale/);
 
-  const skewed = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 300 }] }, safetyConfig({ liveQuoteMaxAgeMs: 1_000 }), now);
+  // Strict-mode (flag off): an absolute quote skew over the sync limit is rejected even when both books are fresh.
+  const skewed = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 300 }] }, safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSkewBothFreshEnabled: false }), now);
   assert.equal(skewed.ok, false);
   assert.match(skewed.reason ?? "", /quote skew/);
 
@@ -109,6 +113,44 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and raw 
   }, config, now);
   assert.equal(noEdge.ok, false);
   assert.match(noEdge.reason ?? "", /cushioned executable edge 0.0400 below threshold 0.0500/);
+});
+
+test("P1.3: skew gate relaxes when both books are individually fresh, keeps protection when older book is stale", () => {
+  const now = 1_800_000_000_000;
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now - 300, // 300ms skew vs Kalshi, above the 250ms sync limit
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 5 }],
+    updatedAt: now,
+  });
+  const candidate = candidateFrom(poly, kalshi);
+  const books = { kalshi: [kalshi], polymarket: [poly] };
+
+  // Default (flag on): both books within liveQuoteMaxAgeMs (1000ms) -> skew alone no longer drops a fillable pair.
+  const relaxed = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250 }), now);
+  assert.equal(relaxed.ok, true);
+
+  // Flag off: strict absolute-skew gate still rejects the same pair.
+  const strict = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250, liveQuoteSkewBothFreshEnabled: false }), now);
+  assert.equal(strict.ok, false);
+  assert.match(strict.reason ?? "", /quote skew/);
+
+  // Default (flag on) but the older (Polymarket) book is beyond the tight liveQuoteMaxAgeMs while still inside its
+  // own laxer freshness bound -> the skew protection still bites (we don't trade a genuinely stale-vs-fresh pair).
+  const stillStale = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveQuoteMaxAgeMs: 200, livePolymarketQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250 }), now);
+  assert.equal(stillStale.ok, false);
+  assert.match(stillStale.reason ?? "", /quote skew/);
 });
 
 test("live quote quality enforces minimum book depth above order size without raising execution cap", () => {

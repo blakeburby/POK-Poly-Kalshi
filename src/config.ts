@@ -69,6 +69,7 @@ export interface AppConfig {
   livePolymarketQuoteMaxAgeMs: number;
   liveHedgeQuoteMaxAgeMs: number;
   liveQuoteSyncMaxSkewMs: number;
+  liveQuoteSkewBothFreshEnabled: boolean;
   liveMinBookDepthShares: number;
   // Default-inert anti-dust guards (0 = off) that make a future LIVE_ORDER_SIZE cut safe: require N
   // genuine ask contracts within a price band of the best ask, and/or bound worstAsk(size)-topAsk
@@ -382,6 +383,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       envNumber(env, "LIVE_HEDGE_QUOTE_MAX_AGE_MS", envNumber(env, "LIVE_QUOTE_MAX_AGE_MS", 750)),
     ),
     liveQuoteSyncMaxSkewMs: envNumber(env, "LIVE_QUOTE_SYNC_MAX_SKEW_MS", 250),
+    // When true (default), don't skip on quote skew if BOTH legs are individually within liveQuoteMaxAgeMs
+    // (each fresh enough to fill — skew just reflects one venue being quieter). Set false to restore the
+    // strict absolute-skew gate. The execution layer (FAK/FOK + cushion) safely handles a book that moved.
+    liveQuoteSkewBothFreshEnabled: envBoolean(env, "LIVE_QUOTE_SKEW_BOTH_FRESH_ENABLED", true),
     liveMinBookDepthShares: envNumber(env, "LIVE_MIN_BOOK_DEPTH_SHARES", 10),
     liveMinExecutableLiquidityShares: Math.max(0, envNumber(env, "LIVE_MIN_EXECUTABLE_LIQUIDITY_SHARES", 0)),
     liveMaxExecutableAskSlippageCents: Math.max(0, envNumber(env, "LIVE_MAX_EXECUTABLE_ASK_SLIPPAGE_CENTS", 0)),

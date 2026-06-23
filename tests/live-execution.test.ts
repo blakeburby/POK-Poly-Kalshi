@@ -20,6 +20,7 @@ import {
   type KalshiFixOrderSessionLike,
   KalshiUiQuickOrderClient,
   polymarketApiCredsFromConfig,
+  sanitizeError,
   resolvePolymarketApiCreds,
   resetPolymarketApiCredsMemo,
   isPolymarketAuthError,
@@ -42,6 +43,36 @@ import { contract } from "./helpers";
 
 const { privateKey: kalshiTestPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const kalshiTestPrivateKeyPem = kalshiTestPrivateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+test("P0.1: sanitizeError never throws, surfaces code/status, and redacts secrets", () => {
+  // Hot-path catch helper: must NEVER throw, on any input, so an order-error path can't crash on logging.
+  const throwingMessage = new Error("x");
+  Object.defineProperty(throwingMessage, "message", { get() { throw new Error("boom"); } });
+  assert.doesNotThrow(() => sanitizeError(throwingMessage));
+  assert.equal(sanitizeError(throwingMessage), "[unserializable error]");
+
+  // A non-string `.message` with no code/status tag previously made the redaction `.replace` throw.
+  const nonStringMessage = new Error("placeholder");
+  Object.defineProperty(nonStringMessage, "message", { value: { nested: "obj" }, configurable: true });
+  assert.doesNotThrow(() => sanitizeError(nonStringMessage));
+
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  assert.doesNotThrow(() => sanitizeError(circular));
+
+  // Legible cause: axios-style code/status are appended, not masked.
+  const timeout = Object.assign(new Error("timeout of 2500ms exceeded"), { code: "ECONNABORTED" });
+  assert.match(sanitizeError(timeout), /ECONNABORTED/);
+  const http = Object.assign(new Error("Request failed"), { response: { status: 401 } });
+  assert.match(sanitizeError(http), /status=401/);
+
+  // Secret redaction still applies (private key hex, user path, auth header key).
+  const leaky = new Error("key 0x0123456789abcdef0123456789abcdef0123456789abcdef hit /v1/users/0xdeadbeef cookie=abc123");
+  const sanitized = sanitizeError(leaky);
+  assert.match(sanitized, /0x\[redacted\]/);
+  assert.match(sanitized, /\/v1\/users\/\[redacted\]/);
+  assert.doesNotMatch(sanitized, /0123456789abcdef0123456789abcdef/);
+});
 
 async function withKalshiEnv<T>(operation: () => Promise<T>): Promise<T> {
   const previousKeyId = process.env.KALSHI_API_KEY_ID;

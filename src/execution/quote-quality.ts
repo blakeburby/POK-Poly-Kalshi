@@ -258,7 +258,18 @@ export function evaluateLiveQuoteQuality(
 
   let failureReason = kalshi.reason ?? polymarket.reason;
   if (!failureReason && quoteSkewMs != null && quoteSkewMs > config.liveQuoteSyncMaxSkewMs) {
-    failureReason = `quote skew ${quoteSkewMs}ms exceeds ${config.liveQuoteSyncMaxSkewMs}ms`;
+    // Both legs already passed their individual staleness checks above (kalshi/polymarket .reason are null
+    // here), so when both books are within liveQuoteMaxAgeMs they are each fresh enough to fill and the skew
+    // just reflects one venue being quieter — don't drop a fillable candidate for it. Only skip on skew when
+    // a book is genuinely stale. Flag off restores the strict absolute-skew gate. Execution (FAK/FOK +
+    // cushion) safely handles a book that moved in the interim: a moved book FAK-misses rather than mis-fills.
+    const olderBookAgeMs = kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
+      ? now - Math.min(kalshi.snapshot.updatedAt, polymarket.snapshot.updatedAt)
+      : null;
+    const bothFresh = olderBookAgeMs != null && olderBookAgeMs <= config.liveQuoteMaxAgeMs;
+    if (!config.liveQuoteSkewBothFreshEnabled || !bothFresh) {
+      failureReason = `quote skew ${quoteSkewMs}ms exceeds ${config.liveQuoteSyncMaxSkewMs}ms`;
+    }
   }
 
   const projectedPremium = kalshi.snapshot?.vwap != null && polymarket.snapshot?.vwap != null
