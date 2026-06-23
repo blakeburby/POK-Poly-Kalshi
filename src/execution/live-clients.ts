@@ -2115,7 +2115,12 @@ export class PolymarketOrderClient implements VenueOrderClient {
     }
 
     const geoblock = await this.geoblockChecker(now);
-    if (geoblock.blocked !== false) {
+    // The geoblock status is always fetched so it stays visible on /health + the dashboard. Whether a
+    // non-clear verdict (blocked:true, or null/unknown) HARD-BLOCKS readiness is governed by the gate flag.
+    // When the gate is disabled the verdict is advisory only: we fall through to the live balance/creds
+    // check and still attach geoblockReadinessFields(geoblock) below, so the blocked country/region remains
+    // reported while readiness is allowed to go green.
+    if (this.config.polymarketGeoblockGateEnabled && geoblock.blocked !== false) {
       const readiness = {
         configured: true,
         ready: false,

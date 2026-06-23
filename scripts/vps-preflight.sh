@@ -7,13 +7,19 @@ echo "Checking Polymarket geoblock from this runtime..."
 GEOBLOCK_JSON="$(curl -fsS "$GEOBLOCK_URL")"
 echo "$GEOBLOCK_JSON"
 
-GEOBLOCK_JSON="$GEOBLOCK_JSON" node <<'NODE'
+GEOBLOCK_JSON="$GEOBLOCK_JSON" POLYMARKET_GEOBLOCK_GATE_ENABLED="${POLYMARKET_GEOBLOCK_GATE_ENABLED:-true}" node <<'NODE'
 const parsed = JSON.parse(process.env.GEOBLOCK_JSON);
+const gateEnabled = !["0", "false", "no", "off"].includes(String(process.env.POLYMARKET_GEOBLOCK_GATE_ENABLED ?? "true").toLowerCase());
+const where = `country=${parsed.country ?? "unknown"} region=${parsed.region ?? "unknown"}`;
 if (parsed.blocked !== false) {
-  console.error(`Polymarket geoblock failed: blocked=${parsed.blocked} country=${parsed.country ?? "unknown"} region=${parsed.region ?? "unknown"}`);
-  process.exit(20);
+  if (gateEnabled) {
+    console.error(`Polymarket geoblock failed: blocked=${parsed.blocked} ${where}`);
+    process.exit(20);
+  }
+  console.warn(`Polymarket geoblock is blocked (blocked=${parsed.blocked} ${where}) but POLYMARKET_GEOBLOCK_GATE_ENABLED=false; treating as advisory and continuing.`);
+} else {
+  console.log(`Polymarket geoblock passed: ${where}`);
 }
-console.log(`Polymarket geoblock passed: country=${parsed.country ?? "unknown"} region=${parsed.region ?? "unknown"}`);
 NODE
 
 if command -v node >/dev/null 2>&1; then

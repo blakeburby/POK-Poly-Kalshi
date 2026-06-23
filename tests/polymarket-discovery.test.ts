@@ -74,6 +74,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketChainId: 137,
     polymarketClobHost: "https://clob.polymarket.com",
     polymarketGeoblockUrl: "https://polymarket.com/api/geoblock",
+    polymarketGeoblockGateEnabled: true,
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
     liveTakerPriceCushionCents: 2,

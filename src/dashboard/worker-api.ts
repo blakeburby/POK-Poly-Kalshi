@@ -292,6 +292,7 @@ function buildHealth(runtime: DashboardRuntime): DashboardSnapshot["health"] {
     liveFinalRecoveryPollMs: runtime.config.liveFinalRecoveryPollMs,
     liveAutoResolveVerifiedIncidents: runtime.config.liveAutoResolveVerifiedIncidents,
     liveAutoHardlocksEnabled: runtime.config.liveAutoHardlocksEnabled,
+    polymarketGeoblockGateEnabled: runtime.config.polymarketGeoblockGateEnabled,
     liveExactExposureRequired: runtime.config.liveExactExposureRequired,
     liveExecutionQualityGateEnabled: runtime.config.liveExecutionQualityGateEnabled,
     liveExecutionQualityLookbackMs: runtime.config.liveExecutionQualityLookbackMs,

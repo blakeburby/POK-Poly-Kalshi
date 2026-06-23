@@ -617,6 +617,7 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
       liveFinalRecoveryPollMs: 500,
       liveAutoResolveVerifiedIncidents: true,
       liveAutoHardlocksEnabled: true,
+      polymarketGeoblockGateEnabled: true,
       liveExactExposureRequired: true,
       liveExecutionQualityGateEnabled: true,
       liveExecutionQualityLookbackMs: 3_600_000,

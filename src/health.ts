@@ -98,6 +98,7 @@ export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Rec
     livePolymarketFirstMinFillShares: config.livePolymarketFirstMinFillShares,
     livePolymarketFirstMaxFillShares: config.livePolymarketFirstMaxFillShares,
     liveAutoHardlocksEnabled: config.liveAutoHardlocksEnabled,
+    polymarketGeoblockGateEnabled: config.polymarketGeoblockGateEnabled,
     liveExactExposureRequired: config.liveExactExposureRequired,
     liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,
     liveExecutionQualityLookbackMs: config.liveExecutionQualityLookbackMs,

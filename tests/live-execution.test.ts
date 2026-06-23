@@ -110,6 +110,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     polymarketChainId: 137,
     polymarketClobHost: "https://clob.polymarket.com",
     polymarketGeoblockUrl: "https://polymarket.com/api/geoblock",
+    polymarketGeoblockGateEnabled: true,
     polymarketOrderType: "FOK",
     liveOrderSize: 1,
     liveDynamicSizingEnabled: false,
@@ -2767,6 +2768,74 @@ test("Polymarket readiness is not ready when worker egress is geoblocked or unkn
   assert.match(unknownReadiness.reason ?? "", /timeout/);
 });
 
+test("Polymarket geoblock gate can be disabled so a blocked egress is advisory, not a hard block", async () => {
+  class FundedFakeClob implements PolymarketClobLike {
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+
+    async postOrder(): Promise<unknown> {
+      return { success: true };
+    }
+
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: "9000000", allowance: "10000000" };
+    }
+
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+
+  // blocked:true, but POLYMARKET_GEOBLOCK_GATE_ENABLED=false -> readiness must NOT short-circuit. It proceeds
+  // to the live balance/creds check and goes green, while still reporting the geoblock verdict advisorily.
+  let factoryCalls = 0;
+  const advisory = new PolymarketOrderClient(config({
+    polymarketGeoblockGateEnabled: false,
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => {
+    factoryCalls += 1;
+    return new FundedFakeClob();
+  }, async (now) => ({
+    blocked: true,
+    country: "CA",
+    region: "QC",
+    checkedAt: now,
+    reason: "Polymarket CLOB trading blocked from worker egress",
+  }));
+  const advisoryReadiness = await advisory.readiness(1_800_000_000_000);
+
+  assert.equal(advisoryReadiness.ready, true);
+  assert.equal(advisoryReadiness.reason, null);
+  assert.equal(advisoryReadiness.balance, 9);
+  // The geoblock verdict is still surfaced (so /health + the dashboard keep showing the true region).
+  assert.equal(advisoryReadiness.geoblockBlocked, true);
+  assert.equal(advisoryReadiness.geoblockCountry, "CA");
+  assert.equal(advisoryReadiness.geoblockRegion, "QC");
+  assert.equal(advisoryReadiness.geoblockCheckedAt, 1_800_000_000_000);
+  assert.ok(factoryCalls > 0, "the live balance/creds path runs when the geoblock gate is advisory");
+
+  // An unknown (blocked:null) verdict also stops hard-blocking once the gate is disabled.
+  const unknownAdvisory = new PolymarketOrderClient(config({
+    polymarketGeoblockGateEnabled: false,
+    polymarketSignatureType: 2,
+    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+  }), async () => new FundedFakeClob(), async (now) => ({
+    blocked: null,
+    country: null,
+    region: null,
+    checkedAt: now,
+    reason: "Polymarket geoblock check failed: timeout",
+  }));
+  const unknownAdvisoryReadiness = await unknownAdvisory.readiness(1_800_000_000_500);
+
+  assert.equal(unknownAdvisoryReadiness.ready, true);
+  assert.equal(unknownAdvisoryReadiness.geoblockBlocked, null);
+});
+
 test("Polymarket readiness syncs CLOB balance allowance before deciding readiness", async () => {
   class SyncingFakeClob implements PolymarketClobLike {
     updateCalls = 0;
@@ -3180,6 +3249,8 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "kalshi_first_exact" }).liveOrderPlacementMode, "kalshi_first_exact");
   assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
+  assert.equal(loadConfig({}).polymarketGeoblockGateEnabled, true);
+  assert.equal(loadConfig({ POLYMARKET_GEOBLOCK_GATE_ENABLED: "false" }).polymarketGeoblockGateEnabled, false);
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);

@@ -48,6 +48,7 @@ export interface AppConfig {
   polymarketChainId: number;
   polymarketClobHost: string;
   polymarketGeoblockUrl: string;
+  polymarketGeoblockGateEnabled: boolean;
   polymarketOrderType: "FOK" | "FAK";
   liveOrderSize: number;
   liveDynamicSizingEnabled: boolean;
@@ -323,6 +324,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     polymarketChainId: envNumber(env, "POLYMARKET_CHAIN_ID", 137),
     polymarketClobHost: envString(env, "POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
     polymarketGeoblockUrl: envString(env, "POLYMARKET_GEOBLOCK_URL", "https://polymarket.com/api/geoblock"),
+    // When false, the Polymarket geoblock check is treated as ADVISORY: readiness/deploy gates no longer
+    // hard-block on geoblockBlocked!==false. The geoblock status is still fetched and reported (so /health and
+    // the dashboard keep showing the true country/region/blocked verdict), it just stops pausing trading.
+    // Default true preserves the original hard-gate behavior byte-for-byte.
+    polymarketGeoblockGateEnabled: envBoolean(env, "POLYMARKET_GEOBLOCK_GATE_ENABLED", true),
     polymarketOrderType: envString(env, "POLYMARKET_ORDER_TYPE", "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK",
     liveOrderSize,
     liveDynamicSizingEnabled,

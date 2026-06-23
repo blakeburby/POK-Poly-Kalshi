@@ -873,6 +873,7 @@ export interface DashboardSnapshot {
     liveFinalRecoveryPollMs: number;
     liveAutoResolveVerifiedIncidents: boolean;
     liveAutoHardlocksEnabled: boolean;
+    polymarketGeoblockGateEnabled: boolean;
     liveExactExposureRequired: boolean;
     liveExecutionQualityGateEnabled: boolean;
     liveExecutionQualityLookbackMs: number;

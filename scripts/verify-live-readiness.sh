@@ -54,7 +54,7 @@ const checks = [
   ["execution.kalshi.ready=true", kalshi.ready === true],
   ["execution.polymarket.ready=true", polymarket.ready === true],
   ["execution.polymarket.reason=null", polymarket.reason == null],
-  ["execution.polymarket.geoblockBlocked=false", polymarket.geoblockBlocked === false],
+  ["execution.polymarket.geoblockBlocked=false (advisory when geoblock gate disabled)", runtimeHealth.polymarketGeoblockGateEnabled === false || polymarket.geoblockBlocked === false],
   ["execution.polymarket.balance>0", Number(polymarket.balance) > 0],
   ["execution.quoteMaxAgeMs<=750", Number(execution.quoteMaxAgeMs) <= 750],
   ["execution.quoteSyncMaxSkewMs<=250", Number(execution.quoteSyncMaxSkewMs) <= 250],
