@@ -3,10 +3,19 @@ import { z } from "zod";
 import { getKalshiWebsocketHeaders } from "./auth";
 import { logEvent, logThrottle } from "../logger";
 import type { BookLevel } from "../types";
-import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../ws/reconnect";
+import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError, shouldForceFeedReconnect } from "../ws/reconnect";
 
 type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState">;
 type WebSocketFactory = (url: string, options: { headers: Record<string, string> }) => RawWebSocket;
+
+export interface KalshiTickerClientOptions {
+  /** Force a reconnect if the open socket receives no orderbook update for this long (ms); 0 disables. */
+  feedSilenceMs?: number;
+  /** Feed-liveness check cadence (ms). */
+  heartbeatIntervalMs?: number;
+  /** Injectable clock for tests. */
+  now?: () => number;
+}
 
 export interface KalshiTickerSnapshot {
   marketTicker: string;
@@ -261,11 +270,24 @@ export class KalshiTickerClient {
   private messageId = 1;
   private intentionalClose = false;
   private subscriptionFingerprint = "";
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private lastMessageAt = 0;
+  private readonly feedSilenceMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly url: string,
     private readonly wsFactory: WebSocketFactory = (wsUrl, options) => new WebSocket(wsUrl, options),
-  ) {}
+    options: KalshiTickerClientOptions = {},
+  ) {
+    // Feed-liveness watchdog: force a reconnect when the socket stays open but no orderbook update arrives
+    // for this long (0 disables). The Kalshi market WS has no PING/keepalive, so a server that goes silent
+    // without closing the socket would otherwise leave the book to age out undetected.
+    this.feedSilenceMs = options.feedSilenceMs ?? 30_000;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
+    this.now = options.now ?? (() => Date.now());
+  }
 
   onSnapshot(listener: (snapshot: KalshiTickerSnapshot) => void): () => void {
     this.listeners.add(listener);
@@ -294,6 +316,7 @@ export class KalshiTickerClient {
     this.intentionalClose = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    this.clearHeartbeat();
     this.socket?.close();
     this.socket = null;
     this.subscriptionFingerprint = "";
@@ -328,8 +351,10 @@ export class KalshiTickerClient {
       this.reconnectAttempts = 0;
       this.rateLimitAttempts = 0;
       this.rateLimitBackoffUntil = 0;
+      this.lastMessageAt = this.now();
       this.subscriptionFingerprint = this.subscriptionFingerprintFor(this.desired);
       socket.send(JSON.stringify(buildKalshiSubscribeMessage(this.messageId++, this.desired)));
+      this.startHeartbeat(socket);
       logEvent({ category: "KALSHI", message: "websocket subscribed", context: { subscriptions: this.desired.size } });
     });
 
@@ -338,6 +363,8 @@ export class KalshiTickerClient {
         const payload = JSON.parse(raw.toString()) as { type?: string; msg?: unknown };
         const snapshot = this.parser.apply(payload.type, payload.msg);
         if (!snapshot) return;
+        // A real orderbook snapshot proves the book feed is alive — reset the silence watchdog clock.
+        this.lastMessageAt = this.now();
         this.latest.set(snapshot.marketTicker, snapshot);
         for (const listener of this.listeners) listener(snapshot);
       } catch (error) {
@@ -360,6 +387,7 @@ export class KalshiTickerClient {
       if (!this.intentionalClose && isRateLimitError(reasonText)) this.registerRateLimit(reasonText);
       this.socket = null;
       this.subscriptionFingerprint = "";
+      this.clearHeartbeat();
       if (!this.intentionalClose) this.scheduleReconnect();
     });
   }
@@ -378,6 +406,42 @@ export class KalshiTickerClient {
       message: "websocket rate limited",
       context: { retryInMs: delay, details },
     });
+  }
+
+  private startHeartbeat(socket: RawWebSocket): void {
+    this.clearHeartbeat();
+    // Watchdog disabled → no liveness interval needed (unlike Polymarket, the Kalshi interval has no PING
+    // to keep alive, so it would otherwise be a pure no-op tick for the life of the connection).
+    if (this.feedSilenceMs <= 0) return;
+    this.heartbeatTimer = setInterval(() => {
+      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
+        this.clearHeartbeat();
+        return;
+      }
+      // Feed-liveness watchdog: the Kalshi market socket can stay open while the server stops sending
+      // orderbook updates. The close-driven reconnect never fires in that case, so detect the silence
+      // here and force a reconnect (close → scheduleReconnect → fresh full subscribe).
+      if (shouldForceFeedReconnect({
+        now: this.now(),
+        lastMessageAt: this.lastMessageAt,
+        feedSilenceMs: this.feedSilenceMs,
+        desiredSubscriptions: this.desired.size,
+        socketOpen: socket.readyState === WebSocket.OPEN,
+      })) {
+        logThrottle("kalshi-ws-feed-silent", 30_000, {
+          severity: "WARN",
+          category: "KALSHI",
+          message: "websocket feed silent, forcing reconnect",
+          context: { silenceMs: this.now() - this.lastMessageAt, feedSilenceMs: this.feedSilenceMs, subscriptions: this.desired.size },
+        });
+        socket.close();
+      }
+    }, this.heartbeatIntervalMs);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   private scheduleReconnect(): void {

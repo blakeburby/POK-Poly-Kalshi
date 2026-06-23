@@ -31,6 +31,7 @@ export interface AppConfig {
   kalshiFixEnableIocCancelReport: boolean;
   kalshiFixPreserveOriginalOrderQty: boolean;
   kalshiWsUrl: string;
+  kalshiBookFeedSilenceMs: number;
   kalshiSeriesTicker: string;
   polymarketWsUrl: string;
   polymarketBookFeedSilenceMs: number;
@@ -304,6 +305,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     kalshiFixEnableIocCancelReport: envBoolean(env, "KALSHI_FIX_ENABLE_IOC_CANCEL_REPORT", true),
     kalshiFixPreserveOriginalOrderQty: envBoolean(env, "KALSHI_FIX_PRESERVE_ORIGINAL_ORDER_QTY", true),
     kalshiWsUrl: envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
+    // Force a Kalshi market-data WS reconnect if the open socket goes silent (no orderbook update) this
+    // long. The Kalshi book feed has no PING/keepalive, so a silent-but-open socket is otherwise
+    // undetectable until a natural close. 0 disables the watchdog.
+    kalshiBookFeedSilenceMs: envNumber(env, "KALSHI_BOOK_FEED_SILENCE_MS", 30_000),
     kalshiSeriesTicker: envString(env, "KALSHI_SERIES_TICKER", "KXBTC15M"),
     polymarketWsUrl: envString(env, "POLYMARKET_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
     // Force a market-data WS reconnect if the open socket goes silent (no book message) this long. Recovers

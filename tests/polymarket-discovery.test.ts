@@ -57,6 +57,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiFixEnableIocCancelReport: true,
     kalshiFixPreserveOriginalOrderQty: true,
     kalshiWsUrl: "",
+    kalshiBookFeedSilenceMs: 30_000,
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
     polymarketBookFeedSilenceMs: 30_000,

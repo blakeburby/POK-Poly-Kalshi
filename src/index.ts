@@ -165,7 +165,9 @@ async function main(): Promise<void> {
   });
   const scanScheduler = new CoalescedScanScheduler(scanner, latency);
 
-  const kalshi = new KalshiTickerClient(config.kalshiWsUrl);
+  const kalshi = new KalshiTickerClient(config.kalshiWsUrl, undefined, {
+    feedSilenceMs: config.kalshiBookFeedSilenceMs,
+  });
   const polymarket = new PolymarketBookClient(config.polymarketWsUrl, undefined, {
     feedSilenceMs: config.polymarketBookFeedSilenceMs,
   });

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildKalshiSubscribeMessage, KalshiOrderbookParser, parseKalshiTickerSnapshot } from "../src/kalshi/client";
+import { generateKeyPairSync } from "node:crypto";
+import { buildKalshiSubscribeMessage, KalshiOrderbookParser, KalshiTickerClient, parseKalshiTickerSnapshot } from "../src/kalshi/client";
 import { buildKalshiUserStreamSubscribeMessage, parseKalshiUserStreamMessage } from "../src/kalshi/user-stream";
 import {
   buildPolymarketSubscribeMessage,
@@ -365,23 +366,93 @@ test("PolymarketBookClient keeps a live feed connected and pings it (no false re
     const s = new FakeBookSocket();
     sockets.push(s);
     return s;
-  }, { feedSilenceMs: 10_000, heartbeatIntervalMs: 5, now: () => clock });
+  }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clock });
 
   client.setSubscriptions(["token-a"]);
   const sock = sockets[0];
   sock.fire("open"); // lastMessageAt = 0
-  clock = 50;
-  // a real book payload resets the silence clock
+  clock = 80; // still inside the 100ms window
+  // A real book payload MUST reset the silence clock to 80 (load-bearing): at clock=160 the silence-since-
+  // message is 80ms (< 100, alive), but silence-since-open is 160ms, so a broken reset would force-close.
   sock.fire("message", Buffer.from(JSON.stringify({
     event_type: "book",
     asset_id: "token-a",
     bids: [{ price: "0.39", size: "10" }],
     asks: [{ price: "0.41", size: "7" }],
   })));
-  clock = 120; // 70ms since last message, far below the 10s threshold
+  clock = 160;
   await delay(40);
 
   assert.equal(sock.closeCount, 0, "a live feed is never force-closed");
   assert.ok(sock.sent.some((m) => m === "PING"), "heartbeat still pings a healthy socket");
+  client.close();
+});
+
+// Kalshi market-data WS auth (getKalshiWebsocketHeaders) requires a signing key; set test creds around
+// any client that opens a socket.
+const kalshiTestKeyPem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+function withKalshiTestEnv<T>(fn: () => T): T {
+  const prev = {
+    id: process.env.KALSHI_API_KEY_ID,
+    pk: process.env.KALSHI_PRIVATE_KEY,
+    b64: process.env.KALSHI_PRIVATE_KEY_B64,
+  };
+  process.env.KALSHI_API_KEY_ID = "test-key";
+  process.env.KALSHI_PRIVATE_KEY = kalshiTestKeyPem;
+  delete process.env.KALSHI_PRIVATE_KEY_B64;
+  try {
+    return fn();
+  } finally {
+    if (prev.id == null) delete process.env.KALSHI_API_KEY_ID; else process.env.KALSHI_API_KEY_ID = prev.id;
+    if (prev.pk == null) delete process.env.KALSHI_PRIVATE_KEY; else process.env.KALSHI_PRIVATE_KEY = prev.pk;
+    if (prev.b64 == null) delete process.env.KALSHI_PRIVATE_KEY_B64; else process.env.KALSHI_PRIVATE_KEY_B64 = prev.b64;
+  }
+}
+
+test("KalshiTickerClient forces a reconnect when the open orderbook feed goes silent", async () => {
+  const { client, first } = withKalshiTestEnv(() => {
+    let clockRef = { v: 0 };
+    const sockets: FakeBookSocket[] = [];
+    const c = new KalshiTickerClient("wss://x", () => {
+      const s = new FakeBookSocket();
+      sockets.push(s);
+      return s;
+    }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clockRef.v });
+    c.setSubscriptions(["KXBTC15M"]);
+    const f = sockets[0];
+    f.fire("open"); // lastMessageAt = 0, subscribe sent, heartbeat started
+    clockRef.v = 1_000; // 1000ms silence > 100ms threshold
+    return { client: c, first: f };
+  });
+  await delay(40); // let the 5ms heartbeat tick run
+  assert.ok(first.closeCount >= 1, "a silent Kalshi orderbook feed forced the socket closed (triggers reconnect+resubscribe)");
+  client.close();
+});
+
+test("KalshiTickerClient keeps a live orderbook feed connected (no false reconnect)", async () => {
+  const { client, sock } = withKalshiTestEnv(() => {
+    const clockRef = { v: 0 };
+    const sockets: FakeBookSocket[] = [];
+    const c = new KalshiTickerClient("wss://x", () => {
+      const s = new FakeBookSocket();
+      sockets.push(s);
+      return s;
+    }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clockRef.v });
+    c.setSubscriptions(["KXBTC15M"]);
+    const s = sockets[0];
+    s.fire("open"); // lastMessageAt = 0
+    clockRef.v = 80; // still inside the 100ms window
+    // A real orderbook snapshot MUST reset the silence clock to 80. This is load-bearing: at clock=160 below
+    // the silence-since-snapshot is 80ms (< 100, alive), but silence-since-open is 160ms — so a broken reset
+    // would force-close and fail this test.
+    s.fire("message", Buffer.from(JSON.stringify({
+      type: "orderbook_snapshot",
+      msg: { market_ticker: "KXBTC15M", yes_dollars_fp: [["0.3900", "10.00"]], no_dollars_fp: [["0.6100", "7.00"]] },
+    })));
+    clockRef.v = 160;
+    return { client: c, sock: s };
+  });
+  await delay(40);
+  assert.equal(sock.closeCount, 0, "a live Kalshi feed is never force-closed");
   client.close();
 });

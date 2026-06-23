@@ -93,6 +93,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiFixEnableIocCancelReport: true,
     kalshiFixPreserveOriginalOrderQty: true,
     kalshiWsUrl: "",
+    kalshiBookFeedSilenceMs: 30_000,
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
     polymarketBookFeedSilenceMs: 30_000,
@@ -3254,6 +3255,8 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({ POLYMARKET_GEOBLOCK_GATE_ENABLED: "false" }).polymarketGeoblockGateEnabled, false);
   assert.equal(loadConfig({}).polymarketBookFeedSilenceMs, 30_000);
   assert.equal(loadConfig({ POLYMARKET_BOOK_FEED_SILENCE_MS: "0" }).polymarketBookFeedSilenceMs, 0);
+  assert.equal(loadConfig({}).kalshiBookFeedSilenceMs, 30_000);
+  assert.equal(loadConfig({ KALSHI_BOOK_FEED_SILENCE_MS: "0" }).kalshiBookFeedSilenceMs, 0);
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
