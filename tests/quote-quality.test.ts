@@ -34,6 +34,9 @@ test("config defaults the live minimum edge to one cent", () => {
   // P1.3: the both-fresh skew relaxation defaults ON; the strict absolute-skew gate is opt-in via the flag.
   assert.equal(loadConfig({}).liveQuoteSkewBothFreshEnabled, true);
   assert.equal(loadConfig({ LIVE_QUOTE_SKEW_BOTH_FRESH_ENABLED: "false" }).liveQuoteSkewBothFreshEnabled, false);
+  // P1.4: the hot-path balance-coverage relaxation defaults ON; opt out restores the strict warmed-coverage skip.
+  assert.equal(loadConfig({}).liveHotReadinessBalanceCoverageEnabled, true);
+  assert.equal(loadConfig({ LIVE_HOT_READINESS_BALANCE_COVERAGE_ENABLED: "false" }).liveHotReadinessBalanceCoverageEnabled, false);
 });
 
 test("W2: dynamic sizing config defaults to a single-point band (byte-identical) and guards concurrency", () => {

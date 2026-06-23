@@ -89,6 +89,7 @@ export interface AppConfig {
   liveParallelExecutionEnabled: boolean;
   liveHotPathEnabled: boolean;
   liveHotPathCacheMaxAgeMs: number;
+  liveHotReadinessBalanceCoverageEnabled: boolean;
   liveHotPathLockCacheGraceMs: number;
   liveHotPathWarmIntervalMs: number;
   liveQuoteFreshnessFromWsOnly: boolean;
@@ -405,6 +406,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveParallelExecutionEnabled: envBoolean(env, "LIVE_PARALLEL_EXECUTION_ENABLED", true),
     liveHotPathEnabled: envBoolean(env, "LIVE_HOT_PATH_ENABLED", true),
     liveHotPathCacheMaxAgeMs: envNumber(env, "LIVE_HOT_PATH_CACHE_MAX_AGE_MS", 5_000),
+    // P1.4: with dynamic sizing on, a candidate can need more collateral than the warm loop pre-warmed the
+    // Polymarket readiness cache for (warmed at liveOrderSize). When true (default), the hot-path readiness
+    // check stops hard-skipping such candidates and instead checks whether the cache's ACTUAL last-seen
+    // balance + allowance cover the candidate's collateral (same predicates as a live checkReadiness, no extra
+    // fetch) -- it only serves ready when the account demonstrably funds the larger size. Set false to restore
+    // the strict warmed-coverage skip. Safe: Polymarket is the cancelable FAK first leg (an over-estimate just
+    // FAK-misses, no one-sided exposure); never makes smaller candidates stricter.
+    liveHotReadinessBalanceCoverageEnabled: envBoolean(env, "LIVE_HOT_READINESS_BALANCE_COVERAGE_ENABLED", true),
     // H1: grace beyond the lock-cache max age during which getActiveLock serves the LAST-GOOD lock state (and
     // kicks a background refresh) instead of synthesizing a critical breaker that halts ALL scanning on a
     // transient DB-read lag. Safe because locks are self-engaged by this single worker (engageLock updates the

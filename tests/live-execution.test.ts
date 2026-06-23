@@ -160,6 +160,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     livePolymarketQuoteMaxAgeMs: 750,
     liveHedgeQuoteMaxAgeMs: 750,
     liveQuoteSyncMaxSkewMs: 250,
+    liveQuoteSkewBothFreshEnabled: true,
     liveMinBookDepthShares: 1,
     liveMinExecutableLiquidityShares: 0,
     liveMaxExecutableAskSlippageCents: 0,
@@ -178,6 +179,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveParallelExecutionEnabled: false,
     liveHotPathEnabled: false,
     liveHotPathCacheMaxAgeMs: 5_000,
+    liveHotReadinessBalanceCoverageEnabled: true,
     liveHotPathWarmIntervalMs: 1_000,
     livePolymarketPresignEnabled: false,
     livePolymarketSignedOrderTtlMs: 5_000,
@@ -1976,6 +1978,44 @@ test("Polymarket hot-path preflight uses warmed readiness and metadata without n
   assert.equal(fake.negRiskCalls, 0);
   assert.equal(fake.versionCalls, 0);
   assert.equal(fake.createCalls, 1);
+});
+
+test("P1.4: hot-path readiness serves a larger dynamic-size candidate when cached balance + allowance cover it", async () => {
+  const now = 1_800_000_000_000;
+  class CoverageFakeClob implements PolymarketClobLike {
+    constructor(private readonly bal: string, private readonly allow: string) {}
+    async getOrderBook() { return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false }; }
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> { return { tokenId: order.tokenID } as unknown as SignedOrder; }
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> { return { tokenId: order.tokenID } as unknown as SignedOrder; }
+    async postOrder(): Promise<unknown> { return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" }; }
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> { return { balance: this.bal, allowance: this.allow }; }
+    async updateBalanceAllowance(): Promise<void> {}
+  }
+  const leg: ArbLeg = { venue: "polymarket", contractId: "poly", direction: "yes", strike: 1500, ask: 0.4, tokenId: "yes-token" };
+  const ctx = (requiredCollateral: number): LiveOrderContext => ({
+    executionGroupId: "group", clientOrderId: "client", size: 20, maxBuyPrice: 0.95,
+    requiredCollateral, requestedAt: now + 100, placementMode: "polymarket_first_exact",
+  });
+  // Isolate the readiness decision from the optional pre-sign path.
+  const cfg = (over: Partial<AppConfig> = {}) => config({ liveHotPathEnabled: true, liveHotPathCacheMaxAgeMs: 5_000, livePolymarketPresignEnabled: false, ...over });
+
+  // Warm sizes the cache for liveOrderSize-collateral (2.3); the account actually holds balance 20 / allowance 20.
+  // Flag ON (default): an 8-collateral candidate exceeds the warmed 2.3 but is funded -> readiness passes.
+  const on = new PolymarketOrderClient(cfg(), async () => new CoverageFakeClob("20", "20"), allowedGeoblock);
+  await on.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  assert.equal(await on.preflightOrder(leg, ctx(8)), null);
+  // ...but a candidate beyond the actual balance (25 > 20) is still correctly skipped, naming the real shortfall.
+  assert.match(await on.preflightOrder(leg, ctx(25)) ?? "", /balance 20\/allowance 20 is below required collateral 25/);
+
+  // Flag OFF: strict warmed-coverage skip is restored (byte-identical to prior behavior).
+  const off = new PolymarketOrderClient(cfg({ liveHotReadinessBalanceCoverageEnabled: false }), async () => new CoverageFakeClob("20", "20"), allowedGeoblock);
+  await off.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  assert.match(await off.preflightOrder(leg, ctx(8)) ?? "", /covers 2.3 collateral but 8 is required/);
+
+  // Allowance still binds: balance covers 8 but allowance (6) does not -> skip even with the flag on.
+  const allow = new PolymarketOrderClient(cfg(), async () => new CoverageFakeClob("20", "6"), allowedGeoblock);
+  await allow.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
+  assert.match(await allow.preflightOrder(leg, ctx(8)) ?? "", /balance 20\/allowance 6 is below required collateral 8/);
 });
 
 test("Polymarket optional pre-sign stores signed order for hot-path placement", async () => {

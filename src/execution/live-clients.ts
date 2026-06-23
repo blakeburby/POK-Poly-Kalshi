@@ -2983,11 +2983,38 @@ export class PolymarketOrderClient implements VenueOrderClient {
       };
     }
     if ((cached.requiredCollateral ?? 0) + 1e-9 < requiredCollateral) {
-      return {
-        ...cached,
-        ready: false,
-        reason: `Polymarket hot readiness cache covers ${cached.requiredCollateral ?? 0} collateral but ${requiredCollateral} is required`,
-      };
+      // The cache was warmed for a smaller collateral (the warm loop sizes for liveOrderSize), but
+      // cached.balance/allowance are the ACTUAL last-seen on-chain values. With dynamic sizing a candidate can
+      // need more — if the cached balance + allowance independently cover it (the same sufficiency predicates
+      // checkReadiness() uses: balance>0 and >= required; allowance null=OK else >= required), the account
+      // genuinely funds the larger size, so don't hard-skip a fillable candidate. No extra fetch -> the FAK hot
+      // path stays non-blocking. Requires cached.ready (creds derived + geoblock cleared at warm time). Flag off
+      // restores the strict warmed-coverage skip. Over-estimation is harmless: Polymarket is the cancelable FAK
+      // first leg, so an under-funded order FAK-misses (no fill, no one-sided exposure) rather than mis-hedging.
+      const balanceCovers = this.config.liveHotReadinessBalanceCoverageEnabled
+        && cached.ready === true
+        && cached.balance != null
+        && cached.balance > 0
+        && cached.balance + 1e-9 >= requiredCollateral
+        && (cached.allowance == null || cached.allowance + 1e-9 >= requiredCollateral);
+      if (!balanceCovers) {
+        // Name the real blocker: a genuine funding shortfall (cache ready, but the actual last-seen
+        // balance/allowance can't cover this size) vs the plain warmed-coverage skip (flag off, or cache not
+        // ready) — so the skip reason isn't misread as a cache-sizing artifact when the wallet is underfunded.
+        const fundingShortfall = this.config.liveHotReadinessBalanceCoverageEnabled
+          && cached.ready === true
+          && (cached.balance == null
+            || cached.balance + 1e-9 < requiredCollateral
+            || (cached.allowance != null && cached.allowance + 1e-9 < requiredCollateral));
+        return {
+          ...cached,
+          ready: false,
+          reason: fundingShortfall
+            ? `Polymarket hot readiness cache balance ${cached.balance ?? 0}/allowance ${cached.allowance ?? "unlimited"} is below required collateral ${requiredCollateral}`
+            : `Polymarket hot readiness cache covers ${cached.requiredCollateral ?? 0} collateral but ${requiredCollateral} is required`,
+        };
+      }
+      return { ...cached, requiredCollateral };
     }
     return cached;
   }
