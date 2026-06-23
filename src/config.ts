@@ -33,6 +33,7 @@ export interface AppConfig {
   kalshiWsUrl: string;
   kalshiSeriesTicker: string;
   polymarketWsUrl: string;
+  polymarketBookFeedSilenceMs: number;
   polymarketDiscoveryUrl: string;
   polymarketLiveDataWsUrl: string;
   polymarketPriceToBeatSymbol: string;
@@ -305,6 +306,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     kalshiWsUrl: envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
     kalshiSeriesTicker: envString(env, "KALSHI_SERIES_TICKER", "KXBTC15M"),
     polymarketWsUrl: envString(env, "POLYMARKET_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+    // Force a market-data WS reconnect if the open socket goes silent (no book message) this long. Recovers
+    // a silently-dead feed that the close-driven reconnect path can't detect. 0 disables the watchdog.
+    polymarketBookFeedSilenceMs: envNumber(env, "POLYMARKET_BOOK_FEED_SILENCE_MS", 30_000),
     polymarketDiscoveryUrl: envString(
       env,
       "POLYMARKET_DISCOVERY_URL",

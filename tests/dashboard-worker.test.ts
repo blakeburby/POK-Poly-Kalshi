@@ -42,6 +42,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiWsUrl: "",
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
+    polymarketBookFeedSilenceMs: 30_000,
     polymarketDiscoveryUrl: "",
     polymarketLiveDataWsUrl: "",
     polymarketPriceToBeatSymbol: "btc/usd",

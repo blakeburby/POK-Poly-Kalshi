@@ -2,10 +2,19 @@ import WebSocket from "ws";
 import { z } from "zod";
 import { logEvent, logThrottle } from "../logger";
 import type { BookLevel } from "../types";
-import { computeReconnectDelay, isRateLimitError } from "../ws/reconnect";
+import { computeReconnectDelay, isRateLimitError, shouldForceFeedReconnect } from "../ws/reconnect";
 
 type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState">;
 type WebSocketFactory = (url: string) => RawWebSocket;
+
+export interface PolymarketBookClientOptions {
+  /** Force a reconnect if the open socket receives no book message for this long (ms); 0 disables. */
+  feedSilenceMs?: number;
+  /** Heartbeat + feed-liveness check cadence (ms). */
+  heartbeatIntervalMs?: number;
+  /** Injectable clock for tests. */
+  now?: () => number;
+}
 
 export interface TokenBookSnapshot {
   tokenId: string;
@@ -234,11 +243,23 @@ export class PolymarketBookClient {
   private readonly subscribed = new Set<string>();
   private reconnectAttempts = 0;
   private intentionalClose = false;
+  private lastMessageAt = 0;
+  private readonly feedSilenceMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly url: string,
     private readonly wsFactory: WebSocketFactory = (wsUrl) => new WebSocket(wsUrl),
-  ) {}
+    options: PolymarketBookClientOptions = {},
+  ) {
+    // Feed-liveness watchdog: force a reconnect when the socket stays open but no book message arrives
+    // for this long (0 disables). A reconnect re-sends a full subscribe, recovering a silently-dead feed
+    // that the close-driven reconnect path cannot detect on its own.
+    this.feedSilenceMs = options.feedSilenceMs ?? 30_000;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
+    this.now = options.now ?? (() => Date.now());
+  }
 
   onSnapshot(listener: (snapshot: TokenBookSnapshot) => void): () => void {
     this.listeners.add(listener);
@@ -284,6 +305,7 @@ export class PolymarketBookClient {
 
     socket.on("open", () => {
       this.reconnectAttempts = 0;
+      this.lastMessageAt = this.now();
       socket.send(JSON.stringify(buildPolymarketSubscribeMessage(this.desired)));
       this.subscribed.clear();
       for (const tokenId of this.desired) this.subscribed.add(tokenId);
@@ -296,6 +318,10 @@ export class PolymarketBookClient {
         const payload = parsePolymarketBookSocketPayload(raw);
         if (payload == null) return;
         const snapshots = this.parser.apply(payload);
+        // Reset the silence watchdog only on real book data (a `book` snapshot or a `price_change` both
+        // yield snapshots) — not on bare acks/keepalives — so a feed that delivers everything except book
+        // deltas is still detected as silent.
+        if (snapshots.length > 0) this.lastMessageAt = this.now();
         for (const snapshot of snapshots) {
           if (!this.desired.has(snapshot.tokenId)) continue;
           for (const listener of this.listeners) listener(snapshot);
@@ -346,6 +372,25 @@ export class PolymarketBookClient {
         this.clearHeartbeat();
         return;
       }
+      // Feed-liveness watchdog: a socket can stay open while the server stops sending book deltas. The
+      // close-driven reconnect path never fires in that case, so detect the silence here and force a
+      // reconnect (close → scheduleReconnect → fresh full subscribe).
+      if (shouldForceFeedReconnect({
+        now: this.now(),
+        lastMessageAt: this.lastMessageAt,
+        feedSilenceMs: this.feedSilenceMs,
+        desiredSubscriptions: this.desired.size,
+        socketOpen: socket.readyState === WebSocket.OPEN,
+      })) {
+        logThrottle("poly-ws-feed-silent", 30_000, {
+          severity: "WARN",
+          category: "POLYMARKET",
+          message: "websocket feed silent, forcing reconnect",
+          context: { silenceMs: this.now() - this.lastMessageAt, feedSilenceMs: this.feedSilenceMs, subscriptions: this.desired.size },
+        });
+        socket.close();
+        return;
+      }
       try {
         socket.send("PING");
       } catch (error) {
@@ -356,7 +401,7 @@ export class PolymarketBookClient {
           context: { error: error instanceof Error ? error.message : String(error) },
         });
       }
-    }, 10_000);
+    }, this.heartbeatIntervalMs);
   }
 
   private clearHeartbeat(): void {

@@ -95,6 +95,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     kalshiWsUrl: "",
     kalshiSeriesTicker: "KXBTC15M",
     polymarketWsUrl: "",
+    polymarketBookFeedSilenceMs: 30_000,
     polymarketDiscoveryUrl: "",
     polymarketLiveDataWsUrl: "",
     polymarketPriceToBeatSymbol: "btc/usd",
@@ -3251,6 +3252,8 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   assert.equal(loadConfig({}).polymarketGeoblockGateEnabled, true);
   assert.equal(loadConfig({ POLYMARKET_GEOBLOCK_GATE_ENABLED: "false" }).polymarketGeoblockGateEnabled, false);
+  assert.equal(loadConfig({}).polymarketBookFeedSilenceMs, 30_000);
+  assert.equal(loadConfig({ POLYMARKET_BOOK_FEED_SILENCE_MS: "0" }).polymarketBookFeedSilenceMs, 0);
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
   assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);

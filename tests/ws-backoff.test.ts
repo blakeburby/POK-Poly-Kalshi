@@ -5,6 +5,7 @@ import { buildKalshiUserStreamSubscribeMessage, parseKalshiUserStreamMessage } f
 import {
   buildPolymarketSubscribeMessage,
   buildPolymarketSubscriptionUpdate,
+  PolymarketBookClient,
   PolymarketBookParser,
   parsePolymarketBookSocketPayload,
 } from "../src/polymarket/client";
@@ -14,7 +15,7 @@ import {
   parsePolymarketUserStreamSocketPayload,
   PolymarketUserStreamClient,
 } from "../src/polymarket/user-stream";
-import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError } from "../src/ws/reconnect";
+import { computeRateLimitBackoffDelay, computeReconnectDelay, isRateLimitError, shouldForceFeedReconnect } from "../src/ws/reconnect";
 
 test("websocket rate-limit and reconnect delays follow backoff policy", () => {
   assert.equal(isRateLimitError("Unexpected server response: 429"), true);
@@ -309,4 +310,78 @@ test("authenticated user stream parsers normalize venue order events", () => {
   assert.equal(polyTrade.fillPrice, 0.91);
   assert.equal(polyOrder.status, "matched");
   assert.equal(polyOrder.remainingCount, 0);
+});
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+class FakeBookSocket {
+  readyState = 1; // WebSocket.OPEN
+  sent: string[] = [];
+  closeCount = 0;
+  private readonly handlers = new Map<string, (...args: unknown[]) => void>();
+  on(event: string, cb: (...args: unknown[]) => void): void { this.handlers.set(event, cb); }
+  send(data: unknown): void { this.sent.push(String(data)); }
+  close(): void {
+    this.closeCount += 1;
+    this.readyState = 3; // CLOSED
+    this.handlers.get("close")?.(1006, Buffer.from(""));
+  }
+  fire(event: string, ...args: unknown[]): void { this.handlers.get(event)?.(...args); }
+}
+
+test("shouldForceFeedReconnect fires only on an open, subscribed, silent feed", () => {
+  const base = { now: 100_000, lastMessageAt: 0, feedSilenceMs: 30_000, desiredSubscriptions: 2, socketOpen: true };
+  assert.equal(shouldForceFeedReconnect(base), true, "open + subscribed + silent beyond threshold -> reconnect");
+  assert.equal(shouldForceFeedReconnect({ ...base, lastMessageAt: 80_000 }), false, "20s silence < 30s threshold -> stay");
+  assert.equal(shouldForceFeedReconnect({ ...base, lastMessageAt: 70_000 }), false, "exactly at threshold (not strictly greater) -> stay");
+  assert.equal(shouldForceFeedReconnect({ ...base, feedSilenceMs: 0 }), false, "watchdog disabled -> never reconnect");
+  assert.equal(shouldForceFeedReconnect({ ...base, socketOpen: false }), false, "closed socket handled by close-driven reconnect, not this");
+  assert.equal(shouldForceFeedReconnect({ ...base, desiredSubscriptions: 0 }), false, "nothing subscribed -> not a silent-feed condition");
+});
+
+test("PolymarketBookClient forces a reconnect when the open book feed goes silent", async () => {
+  let clock = 0;
+  const sockets: FakeBookSocket[] = [];
+  const client = new PolymarketBookClient("wss://x", () => {
+    const s = new FakeBookSocket();
+    sockets.push(s);
+    return s;
+  }, { feedSilenceMs: 100, heartbeatIntervalMs: 5, now: () => clock });
+
+  client.setSubscriptions(["token-a"]);
+  const first = sockets[0];
+  first.fire("open"); // lastMessageAt = now() = 0, full subscribe sent, heartbeat started
+  clock = 1_000; // 1000ms of silence, well beyond the 100ms threshold
+  await delay(40); // let the 5ms heartbeat tick run
+
+  assert.ok(first.closeCount >= 1, "a silent feed forced the socket closed (which triggers a fresh reconnect+resubscribe)");
+  client.close();
+});
+
+test("PolymarketBookClient keeps a live feed connected and pings it (no false reconnect)", async () => {
+  let clock = 0;
+  const sockets: FakeBookSocket[] = [];
+  const client = new PolymarketBookClient("wss://x", () => {
+    const s = new FakeBookSocket();
+    sockets.push(s);
+    return s;
+  }, { feedSilenceMs: 10_000, heartbeatIntervalMs: 5, now: () => clock });
+
+  client.setSubscriptions(["token-a"]);
+  const sock = sockets[0];
+  sock.fire("open"); // lastMessageAt = 0
+  clock = 50;
+  // a real book payload resets the silence clock
+  sock.fire("message", Buffer.from(JSON.stringify({
+    event_type: "book",
+    asset_id: "token-a",
+    bids: [{ price: "0.39", size: "10" }],
+    asks: [{ price: "0.41", size: "7" }],
+  })));
+  clock = 120; // 70ms since last message, far below the 10s threshold
+  await delay(40);
+
+  assert.equal(sock.closeCount, 0, "a live feed is never force-closed");
+  assert.ok(sock.sent.some((m) => m === "PING"), "heartbeat still pings a healthy socket");
+  client.close();
 });

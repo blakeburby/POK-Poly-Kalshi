@@ -19,3 +19,24 @@ export function computeReconnectDelay(input: {
     : { delayMs: retryDelay, reason: "socket_retry" };
 }
 
+/**
+ * Feed-liveness watchdog predicate. A WebSocket can stay socket-open while the server silently stops
+ * delivering data (e.g. order-book deltas): app-level heartbeats keep sending, the socket never emits a
+ * `close`, so reconnect logic (which is close-driven) never fires and the feed is silently dead. This
+ * returns true when the connection is open with active subscriptions but no message has arrived within
+ * `feedSilenceMs` — the caller should force a reconnect (close → reconnect re-sends a full subscribe).
+ * `feedSilenceMs <= 0` disables the watchdog.
+ */
+export function shouldForceFeedReconnect(input: {
+  now: number;
+  lastMessageAt: number;
+  feedSilenceMs: number;
+  desiredSubscriptions: number;
+  socketOpen: boolean;
+}): boolean {
+  if (input.feedSilenceMs <= 0) return false;
+  if (!input.socketOpen) return false;
+  if (input.desiredSubscriptions <= 0) return false;
+  return input.now - input.lastMessageAt > input.feedSilenceMs;
+}
+
