@@ -519,7 +519,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       false,
     ),
     liveExactExposureRequired: envBoolean(env, "LIVE_EXACT_EXPOSURE_REQUIRED", false),
-    liveExecutionQualityGateEnabled: envBoolean(env, "LIVE_EXECUTION_QUALITY_GATE_ENABLED", true),
+    // Operator default (2026-06-24): execution-quality gate OFF by default (opt-IN), same posture as the
+    // auto-hardlocks. When on it blocks candidates whose quality-adjusted edge (projectedEdge ×
+    // recentExactFillRate − mismatchCost) goes negative; off, it's advisory-only (computed + logged, never
+    // blocks). Set LIVE_EXECUTION_QUALITY_GATE_ENABLED=true to re-enable; the deploy/resume/staging scripts
+    // no longer force this key, so an explicit value in worker.env persists across deploys.
+    liveExecutionQualityGateEnabled: envBoolean(env, "LIVE_EXECUTION_QUALITY_GATE_ENABLED", false),
     liveExecutionQualityLookbackMs: envNumber(env, "LIVE_EXECUTION_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),
     liveExecutionQualitySampleLimit: envNumber(env, "LIVE_EXECUTION_QUALITY_SAMPLE_LIMIT", 50),
     liveExecutionQualityMinSamples: envNumber(env, "LIVE_EXECUTION_QUALITY_MIN_SAMPLES", 5),

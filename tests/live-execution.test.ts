@@ -3909,7 +3909,9 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({ KALSHI_BOOK_FEED_SILENCE_MS: "0" }).kalshiBookFeedSilenceMs, 0);
   assert.equal(loadConfig({}).liveExactExposureRequired, false);
   assert.equal(loadConfig({ LIVE_EXACT_EXPOSURE_REQUIRED: "true" }).liveExactExposureRequired, true);
-  assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, true);
+  // Operator default 2026-06-24: execution-quality gate OFF by default; opt in with LIVE_EXECUTION_QUALITY_GATE_ENABLED=true.
+  assert.equal(loadConfig({}).liveExecutionQualityGateEnabled, false);
+  assert.equal(loadConfig({ LIVE_EXECUTION_QUALITY_GATE_ENABLED: "true" }).liveExecutionQualityGateEnabled, true);
   assert.equal(loadConfig({}).liveKalshiMinCashDollars, 5);
   assert.equal(loadConfig({ LIVE_KALSHI_MIN_CASH_DOLLARS: "100" }).liveKalshiMinCashDollars, 100);
   assert.equal(loadConfig({}).liveFillQualityScoringEnabled, true);

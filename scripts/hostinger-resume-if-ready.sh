@@ -109,9 +109,8 @@ apply_safety_env_policy() {
   set_env_value LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES 15
   set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 5
   set_env_value LIVE_RECONCILE_BEFORE_TRADE true
-  # Auto-hardlocks OFF by default (operator choice 2026-06-24); not forced here so an explicit
-  # LIVE_AUTO_HARDLOCKS_ENABLED=true in worker.env persists. See hostinger-branch-deploy.sh.
-  set_env_value LIVE_EXECUTION_QUALITY_GATE_ENABLED true
+  # Auto-hardlocks + execution-quality gate OFF by default (operator choice 2026-06-24); not forced here so an
+  # explicit =true in worker.env persists. See hostinger-branch-deploy.sh.
   set_env_value LIVE_USER_STREAMS_ENABLED true
 }
 
