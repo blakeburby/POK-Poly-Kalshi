@@ -528,3 +528,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dashboardRealtimeSecret: envString(env, "DASHBOARD_REALTIME_SECRET"),
   };
 }
+
+/**
+ * Fail-fast boot validation. Called once at startup (index.ts) — NOT inside loadConfig, because tests and
+ * monitor-only setups call loadConfig() without secrets. When live trading is armed (ARB_ENABLED=true) every
+ * credential the order path needs must be present, so a misconfiguration aborts the boot with a clear message
+ * instead of surfacing as an opaque failure on the first live order. DATABASE_URL is required in all modes.
+ * Kalshi creds are read straight from env (they are consumed in kalshi/auth.ts, not carried on AppConfig).
+ */
+export function validateConfig(config: AppConfig, env: NodeJS.ProcessEnv = process.env): void {
+  const missing: string[] = [];
+  if (!config.databaseUrl.trim()) missing.push("DATABASE_URL");
+  if (config.arbEnabled) {
+    if (!config.polymarketPrivateKey.trim()) missing.push("POLYMARKET_PRIVATE_KEY");
+    // signature type 0 = EOA (self-funded); any non-EOA type signs against a proxy/safe and needs the funder.
+    if (config.polymarketSignatureType !== 0 && !config.polymarketFunderAddress.trim()) {
+      missing.push("POLYMARKET_FUNDER_ADDRESS (required for proxy/safe POLYMARKET_SIGNATURE_TYPE)");
+    }
+    if (!env.KALSHI_API_KEY_ID?.trim()) missing.push("KALSHI_API_KEY_ID");
+    if (!env.KALSHI_PRIVATE_KEY?.trim() && !env.KALSHI_PRIVATE_KEY_B64?.trim()) {
+      missing.push("KALSHI_PRIVATE_KEY or KALSHI_PRIVATE_KEY_B64");
+    }
+  }
+  if (missing.length > 0) {
+    const scope = config.arbEnabled ? "live-trading " : "";
+    throw new Error(
+      `Invalid configuration: missing required ${scope}settings: ${missing.join(", ")}. ` +
+        "Set them in the worker env, or set ARB_ENABLED=false to run in monitor-only mode.",
+    );
+  }
+}

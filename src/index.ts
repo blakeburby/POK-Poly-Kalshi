@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { oldestAnalyticsSinceMs } from "./analytics/performance";
 import { AnalyticsStore } from "./analytics/store";
 import { BookStore } from "./books/book-store";
-import { loadConfig } from "./config";
+import { loadConfig, validateConfig } from "./config";
 import { handleDashboardRequest } from "./dashboard/worker-api";
 import { DashboardSignalsNotifier } from "./dashboard/signals-notifier";
 import { createPool } from "./db/pool";
@@ -43,6 +43,7 @@ function sendJson(response: import("node:http").ServerResponse, status: number, 
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  validateConfig(config); // fail fast on missing secrets/DB before touching the network or the order path
   installLowLatencyHttpTransport(config);
   void preconnectLiveHttpEndpoints(config);
   const pool = createPool(config);

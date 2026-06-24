@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig } from "../src/config";
+import { loadConfig, validateConfig } from "../src/config";
 import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder, expectedKalshiFeePerShare, selectExecutableSize } from "../src/execution/quote-quality";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { AppConfig } from "../src/config";
@@ -37,6 +37,29 @@ test("config defaults the live minimum edge to one cent", () => {
   // P1.4: the hot-path balance-coverage relaxation defaults ON; opt out restores the strict warmed-coverage skip.
   assert.equal(loadConfig({}).liveHotReadinessBalanceCoverageEnabled, true);
   assert.equal(loadConfig({ LIVE_HOT_READINESS_BALANCE_COVERAGE_ENABLED: "false" }).liveHotReadinessBalanceCoverageEnabled, false);
+});
+
+test("validateConfig fails fast on missing live secrets and passes monitor-only / fully-credentialed boots", () => {
+  const kalshiEnv = { KALSHI_API_KEY_ID: "k", KALSHI_PRIVATE_KEY: "pk" };
+  const fullCfg = loadConfig({ DATABASE_URL: "postgres://x", POLYMARKET_PRIVATE_KEY: "0xkey", POLYMARKET_SIGNATURE_TYPE: "0" });
+
+  // Live + every credential present -> boots.
+  assert.doesNotThrow(() => validateConfig(fullCfg, kalshiEnv));
+  // KALSHI_PRIVATE_KEY_B64 satisfies the private-key requirement (prod uses the b64 form).
+  assert.doesNotThrow(() => validateConfig(fullCfg, { KALSHI_API_KEY_ID: "k", KALSHI_PRIVATE_KEY_B64: "b64" }));
+
+  // Live + missing Polymarket key / Kalshi creds -> aborts with a legible message.
+  assert.throws(() => validateConfig(loadConfig({ DATABASE_URL: "postgres://x" }), kalshiEnv), /POLYMARKET_PRIVATE_KEY/);
+  assert.throws(() => validateConfig(fullCfg, {}), /KALSHI_API_KEY_ID/);
+  // A proxy/safe signature type (non-EOA) requires the funder address.
+  assert.throws(
+    () => validateConfig(loadConfig({ DATABASE_URL: "postgres://x", POLYMARKET_PRIVATE_KEY: "0xkey", POLYMARKET_SIGNATURE_TYPE: "2" }), kalshiEnv),
+    /FUNDER/,
+  );
+
+  // Monitor mode (ARB_ENABLED=false): venue secrets not required, but DATABASE_URL still is.
+  assert.doesNotThrow(() => validateConfig(loadConfig({ ARB_ENABLED: "false", DATABASE_URL: "postgres://x" }), {}));
+  assert.throws(() => validateConfig(loadConfig({ ARB_ENABLED: "false" }), {}), /DATABASE_URL/);
 });
 
 test("W2: dynamic sizing config defaults to a single-point band (byte-identical) and guards concurrency", () => {

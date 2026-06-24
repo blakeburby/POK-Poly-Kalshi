@@ -19,6 +19,7 @@ import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
 import { fillQualityBlockReason, scoreFillQuality } from "./fill-quality";
 import { evaluateLiveQuoteQuality, captureShadowLadder, CUSHIONED_EDGE_REASON_PREFIX, selectExecutableSize } from "./quote-quality";
+import { roundPrice } from "./num-utils";
 import { leadLagBlockReason, scoreLeadLag, type LeadLagHistory } from "../signals/lead-lag";
 import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
 
@@ -30,10 +31,6 @@ function legForVenue(candidate: ArbCandidate, venue: "kalshi" | "polymarket"): A
   if (candidate.lower.venue === venue) return candidate.lower;
   if (candidate.higher.venue === venue) return candidate.higher;
   return null;
-}
-
-function roundPrice(value: number): number {
-  return Math.round(value * 10_000) / 10_000;
 }
 
 function failed(reason: string): ExecutionResult {

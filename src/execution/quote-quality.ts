@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config";
 import type { ArbCandidate, ArbLeg, BinaryContract, BookLevel, LegDirection, QuoteSnapshot, QuoteSnapshotLeg, ShadowLadderCapture, ShadowLadderLeg, ShadowLadderProbe, Venue } from "../types";
+import { roundPrice } from "./num-utils";
 
 export interface LiveQuoteBooks {
   kalshi: BinaryContract[];
@@ -24,10 +25,6 @@ export interface LiveQuoteEvaluation {
   polymarketLeg: ArbLeg | null;
   kalshiMaxBuyPrice: number | null;
   polymarketMaxBuyPrice: number | null;
-}
-
-function roundPrice(value: number): number {
-  return Math.round(value * 10_000) / 10_000;
 }
 
 function finite(value: unknown): value is number {

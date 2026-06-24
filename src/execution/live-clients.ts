@@ -18,6 +18,7 @@ import { createWalletClient, http } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
+import { roundPrice } from "./num-utils";
 import { getKalshiHeaders } from "../kalshi/auth";
 import { KalshiFixOrderSession, type KalshiFixOrderExecution, type KalshiFixOrderInput } from "../kalshi/fix";
 import type { ArbLeg, LiveKalshiHedgeTimeInForce, LiveOrderPlacementMode, Venue, VenueExecutionReadiness } from "../types";
@@ -213,10 +214,6 @@ function fixedDollars(value: number): string {
 
 function fixedCount(value: number): string {
   return Math.max(0, value).toFixed(2);
-}
-
-function roundPrice(value: number): number {
-  return Math.round(value * 10_000) / 10_000;
 }
 
 export function sanitizeError(error: unknown): string {
