@@ -13,7 +13,7 @@
     "fee-aware-gate:calibrate": "tsx scripts/fee-aware-gate-calibrate.ts",
     "lead-lag:calibrate": "tsx scripts/lead-lag-calibrate.ts",
     "worker": "tsx src/index.ts",
-    "test": "node --import tsx --test --test-isolation=none tests/*.test.ts tests/*.test.tsx",
+    "test": "node --import tsx --test --experimental-test-isolation=none tests/*.test.ts tests/*.test.tsx",
     "typecheck": "npm run build:worker",
     "typecheck:test": "tsc -p tsconfig.tests.json --noEmit",
     "typecheck:all": "npm run build:worker && npm run typecheck:test",
