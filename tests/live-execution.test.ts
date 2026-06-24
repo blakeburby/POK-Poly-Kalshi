@@ -3897,7 +3897,9 @@ test("live executor keeps parallel market available and starts both venue orders
     loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "kalshi_first_exact" }).liveOrderPlacementMode,
     "kalshi_first_exact",
   );
-  assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
+  // Operator default 2026-06-24: auto-hardlocks OFF by default; opt in with LIVE_AUTO_HARDLOCKS_ENABLED=true.
+  assert.equal(loadConfig({}).liveAutoHardlocksEnabled, false);
+  assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "true" }).liveAutoHardlocksEnabled, true);
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   assert.equal(loadConfig({}).polymarketGeoblockGateEnabled, true);
   assert.equal(loadConfig({ POLYMARKET_GEOBLOCK_GATE_ENABLED: "false" }).polymarketGeoblockGateEnabled, false);

@@ -477,7 +477,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveFinalRecoveryTimeoutMs: envNumber(env, "LIVE_FINAL_RECOVERY_TIMEOUT_MS", 3_000),
     liveFinalRecoveryPollMs: envNumber(env, "LIVE_FINAL_RECOVERY_POLL_MS", 250),
     liveAutoResolveVerifiedIncidents: envBoolean(env, "LIVE_AUTO_RESOLVE_VERIFIED_INCIDENTS", true),
-    liveAutoHardlocksEnabled: envBoolean(env, "LIVE_AUTO_HARDLOCKS_ENABLED", true),
+    // Operator default (2026-06-24): auto-hardlocks/circuit-breakers OFF by default. The loss-cap,
+    // underfill, and fill-mismatch hardlocks + the quarantine-halt are the catastrophe backstops; running
+    // without them means an underfilled leg becomes a NAKED one-sided position and money-bleed has no
+    // auto-stop. They are now opt-IN: set LIVE_AUTO_HARDLOCKS_ENABLED=true to re-enable. The deploy/resume
+    // scripts no longer force this key, so an explicit =true in worker.env persists across deploys.
+    liveAutoHardlocksEnabled: envBoolean(env, "LIVE_AUTO_HARDLOCKS_ENABLED", false),
     liveConfirmationFlatMissNonBlocking: envBoolean(env, "LIVE_CONFIRMATION_FLAT_MISS_NONBLOCKING", true),
     // When true, a Polymarket FAK fill within the operator's overfill band
     // ([liveOrderSize, livePolymarketFirstMaxFillShares]) is classified as a clean two-sided fill
