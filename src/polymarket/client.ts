@@ -1,10 +1,10 @@
 import WebSocket from "ws";
 import { z } from "zod";
-import { logEvent, logThrottle } from "../logger";
+import { logEvent } from "../logger";
 import type { BookLevel } from "../types";
-import { computeReconnectDelay, isRateLimitError, shouldForceFeedReconnect } from "../ws/reconnect";
+import { isRateLimitError } from "../ws/reconnect";
+import { ReconnectingWebSocketClient, type RawWebSocket, type ReconnectingWebSocketClientOptions } from "../ws/reconnecting-websocket-client";
 
-type RawWebSocket = Pick<WebSocket, "on" | "send" | "close" | "readyState">;
 type WebSocketFactory = (url: string) => RawWebSocket;
 
 export interface PolymarketBookClientOptions {
@@ -233,32 +233,21 @@ export class PolymarketBookParser {
   }
 }
 
-export class PolymarketBookClient {
-  private readonly desired = new Set<string>();
+export class PolymarketBookClient extends ReconnectingWebSocketClient {
   private readonly listeners = new Set<(snapshot: TokenBookSnapshot) => void>();
   private readonly parser = new PolymarketBookParser();
-  private socket: RawWebSocket | null = null;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
   private readonly subscribed = new Set<string>();
-  private reconnectAttempts = 0;
-  private intentionalClose = false;
-  private lastMessageAt = 0;
-  private readonly feedSilenceMs: number;
-  private readonly heartbeatIntervalMs: number;
-  private readonly now: () => number;
+  protected readonly sendsPing = true; // Polymarket CLOB needs a periodic PING keepalive.
 
   constructor(
     private readonly url: string,
     private readonly wsFactory: WebSocketFactory = (wsUrl) => new WebSocket(wsUrl),
     options: PolymarketBookClientOptions = {},
   ) {
-    // Feed-liveness watchdog: force a reconnect when the socket stays open but no book message arrives
-    // for this long (0 disables). A reconnect re-sends a full subscribe, recovering a silently-dead feed
-    // that the close-driven reconnect path cannot detect on its own.
-    this.feedSilenceMs = options.feedSilenceMs ?? 30_000;
-    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
-    this.now = options.now ?? (() => Date.now());
+    // Feed-liveness watchdog (in the base): force a reconnect when the socket stays open but no book message
+    // arrives for feedSilenceMs (0 disables). A reconnect re-sends a full subscribe, recovering a silently-dead
+    // feed that the close-driven reconnect path cannot detect on its own.
+    super("POLYMARKET", "poly-ws", options);
   }
 
   onSnapshot(listener: (snapshot: TokenBookSnapshot) => void): () => void {
@@ -281,71 +270,50 @@ export class PolymarketBookClient {
     this.ensureSocket();
   }
 
-  close(): void {
-    this.intentionalClose = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.clearHeartbeat();
-    this.subscribed.clear();
-    this.socket?.close();
-    this.socket = null;
+  protected createSocket(): RawWebSocket | null {
+    logEvent({ category: "POLYMARKET", message: "websocket connecting", context: { subscriptions: this.desired.size } });
+    return this.wsFactory(this.url);
   }
 
-  private ensureSocket(): void {
-    if (this.desired.size === 0) {
-      this.close();
-      return;
+  protected onOpen(socket: RawWebSocket): void {
+    socket.send(JSON.stringify(buildPolymarketSubscribeMessage(this.desired)));
+    this.subscribed.clear();
+    for (const tokenId of this.desired) this.subscribed.add(tokenId);
+  }
+
+  protected handleMessage(raw: WebSocket.RawData): void {
+    const payload = parsePolymarketBookSocketPayload(raw);
+    if (payload == null) return;
+    const snapshots = this.parser.apply(payload);
+    // Reset the silence watchdog only on real book data (a `book` snapshot or a `price_change` both yield
+    // snapshots) — not on bare acks/keepalives — so a feed that delivers everything except book deltas is
+    // still detected as silent.
+    if (snapshots.length > 0) this.lastMessageAt = this.now();
+    for (const snapshot of snapshots) {
+      if (!this.desired.has(snapshot.tokenId)) continue;
+      for (const listener of this.listeners) listener(snapshot);
     }
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
+  }
 
-    logEvent({ category: "POLYMARKET", message: "websocket connecting", context: { subscriptions: this.desired.size } });
-    const socket = this.wsFactory(this.url);
-    this.socket = socket;
-    this.intentionalClose = false;
+  protected sendHeartbeat(socket: RawWebSocket): void {
+    try {
+      socket.send("PING");
+    } catch (error) {
+      logEvent({
+        severity: "ERROR",
+        category: "POLYMARKET",
+        message: "websocket heartbeat failed",
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
 
-    socket.on("open", () => {
-      this.reconnectAttempts = 0;
-      this.lastMessageAt = this.now();
-      socket.send(JSON.stringify(buildPolymarketSubscribeMessage(this.desired)));
-      this.subscribed.clear();
-      for (const tokenId of this.desired) this.subscribed.add(tokenId);
-      this.startHeartbeat(socket);
-      logEvent({ category: "POLYMARKET", message: "websocket subscribed", context: { subscriptions: this.desired.size } });
-    });
+  protected resetSubscriptionState(): void {
+    this.subscribed.clear();
+  }
 
-    socket.on("message", (raw: WebSocket.RawData) => {
-      try {
-        const payload = parsePolymarketBookSocketPayload(raw);
-        if (payload == null) return;
-        const snapshots = this.parser.apply(payload);
-        // Reset the silence watchdog only on real book data (a `book` snapshot or a `price_change` both
-        // yield snapshots) — not on bare acks/keepalives — so a feed that delivers everything except book
-        // deltas is still detected as silent.
-        if (snapshots.length > 0) this.lastMessageAt = this.now();
-        for (const snapshot of snapshots) {
-          if (!this.desired.has(snapshot.tokenId)) continue;
-          for (const listener of this.listeners) listener(snapshot);
-        }
-      } catch (error) {
-        logEvent({
-          severity: "ERROR",
-          category: "POLYMARKET",
-          message: "websocket parse error",
-          context: { error: error instanceof Error ? error.message : String(error) },
-        });
-      }
-    });
-
-    socket.on("error", (error: Error) => {
-      logEvent({ severity: "ERROR", category: "POLYMARKET", message: "websocket error", context: { error: error.message } });
-    });
-
-    socket.on("close", (_code: number, reason: Buffer) => {
-      this.socket = null;
-      this.clearHeartbeat();
-      this.subscribed.clear();
-      if (!this.intentionalClose) this.scheduleReconnect(reason.toString());
-    });
+  protected reconnectRateLimitBackoffUntil(reasonText: string): number {
+    return isRateLimitError(reasonText) ? Date.now() + 15_000 : 0;
   }
 
   private applySubscriptionDelta(previous: Set<string>, next: Set<string>): void {
@@ -363,70 +331,5 @@ export class PolymarketBookClient {
     if (added.length > 0 || removed.length > 0) {
       logEvent({ category: "POLYMARKET", message: "websocket subscription refreshed", context: { subscriptions: next.size } });
     }
-  }
-
-  private startHeartbeat(socket: RawWebSocket): void {
-    this.clearHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
-        this.clearHeartbeat();
-        return;
-      }
-      // Feed-liveness watchdog: a socket can stay open while the server stops sending book deltas. The
-      // close-driven reconnect path never fires in that case, so detect the silence here and force a
-      // reconnect (close → scheduleReconnect → fresh full subscribe).
-      if (shouldForceFeedReconnect({
-        now: this.now(),
-        lastMessageAt: this.lastMessageAt,
-        feedSilenceMs: this.feedSilenceMs,
-        desiredSubscriptions: this.desired.size,
-        socketOpen: socket.readyState === WebSocket.OPEN,
-      })) {
-        logThrottle("poly-ws-feed-silent", 30_000, {
-          severity: "WARN",
-          category: "POLYMARKET",
-          message: "websocket feed silent, forcing reconnect",
-          context: { silenceMs: this.now() - this.lastMessageAt, feedSilenceMs: this.feedSilenceMs, subscriptions: this.desired.size },
-        });
-        socket.close();
-        return;
-      }
-      try {
-        socket.send("PING");
-      } catch (error) {
-        logEvent({
-          severity: "ERROR",
-          category: "POLYMARKET",
-          message: "websocket heartbeat failed",
-          context: { error: error instanceof Error ? error.message : String(error) },
-        });
-      }
-    }, this.heartbeatIntervalMs);
-  }
-
-  private clearHeartbeat(): void {
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    this.heartbeatTimer = null;
-  }
-
-  private scheduleReconnect(reasonText: string): void {
-    if (this.reconnectTimer || this.desired.size === 0) return;
-    this.reconnectAttempts += 1;
-    const rateLimitBackoffUntil = isRateLimitError(reasonText) ? Date.now() + 15_000 : 0;
-    const { delayMs, reason } = computeReconnectDelay({
-      attempt: this.reconnectAttempts,
-      now: Date.now(),
-      rateLimitBackoffUntil,
-    });
-    logThrottle(`poly-ws-reconnect:${reason}`, 10_000, {
-      severity: "WARN",
-      category: "POLYMARKET",
-      message: "websocket reconnect scheduled",
-      context: { delayMs, reason, attempt: this.reconnectAttempts },
-    });
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.ensureSocket();
-    }, delayMs);
   }
 }
