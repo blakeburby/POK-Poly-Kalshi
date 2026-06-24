@@ -28,13 +28,13 @@ npm run verify     # = build:worker (typecheck src) + typecheck:test + npm test
 
 Individually:
 
-| Command | Checks |
-| --- | --- |
-| `npm run build:worker` | Typecheck the worker (`src/`, `tsconfig.worker.json`). |
-| `npm run typecheck:test` | Typecheck the **tests** (`tsconfig.tests.json`). Tests were historically unchecked, which let test config literals drift from `AppConfig` — this gate prevents that. |
-| `npm test` | The full suite (`node --test` via `tsx`). |
-| `npm run build:dashboard` | `next build` for the dashboard (`app/`). |
-| `npm run format:check` | Prettier (advisory; the existing tree is not yet fully formatted). |
+| Command                   | Checks                                                                                                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run build:worker`    | Typecheck the worker (`src/`, `tsconfig.worker.json`).                                                                                                               |
+| `npm run typecheck:test`  | Typecheck the **tests** (`tsconfig.tests.json`). Tests were historically unchecked, which let test config literals drift from `AppConfig` — this gate prevents that. |
+| `npm test`                | The full suite (`node --test` via `tsx`).                                                                                                                            |
+| `npm run build:dashboard` | `next build` for the dashboard (`app/`).                                                                                                                             |
+| `npm run format:check`    | Prettier — the tree is fully formatted and CI enforces it; run `npm run format` to fix.                                                                              |
 
 CI (`.github/workflows/ci.yml`) runs the same `build:worker` + `typecheck:test` + `npm test` on every push/PR.
 

@@ -1,7 +1,9 @@
 import type { ArbCandidate, BinaryContract, DashboardSnapshot } from "../../src/types";
 
 export function sortCandidatesForBlotter(candidates: ArbCandidate[]): ArbCandidate[] {
-  return [...candidates].sort((left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs);
+  return [...candidates].sort(
+    (left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs,
+  );
 }
 
 export function sortContractsForBook(contracts: BinaryContract[]): BinaryContract[] {
@@ -13,7 +15,9 @@ export function isContractStale(contract: BinaryContract, snapshot: DashboardSna
 }
 
 export function staleContractCount(snapshot: DashboardSnapshot): number {
-  return [...snapshot.books.kalshi, ...snapshot.books.polymarket].filter((contract) => isContractStale(contract, snapshot)).length;
+  return [...snapshot.books.kalshi, ...snapshot.books.polymarket].filter((contract) =>
+    isContractStale(contract, snapshot),
+  ).length;
 }
 
 export function venueStatus(snapshot: DashboardSnapshot, venue: "kalshi" | "polymarket"): "empty" | "stale" | "live" {
@@ -24,7 +28,12 @@ export function venueStatus(snapshot: DashboardSnapshot, venue: "kalshi" | "poly
 
 export function formatDollars(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return "--";
-  return value.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
 }
 
 export function formatCents(value: number | null): string {

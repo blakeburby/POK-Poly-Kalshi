@@ -128,10 +128,42 @@ test("protected spread risk classification and guaranteed edge", () => {
 
 test("performance analytics count only exact paired live fills", () => {
   const signals = [
-    signal({ id: 1, executionGroupId: "real-group-1", kalshiFillId: "real-kalshi-1", polymarketFillId: "real-poly-1", kalshiFillCount: 5, polymarketFillCount: 5 }),
-    signal({ id: 2, action: "failed", executionGroupId: "real-failed", kalshiFillId: null, polymarketFillId: null, kalshiFillCount: 0, polymarketFillCount: 0 }),
-    signal({ id: 3, executionGroupId: "legacy-dry-run", kalshiFillId: "dry-run-kalshi-3", polymarketFillId: "dry-run-poly-3", kalshiFillCount: 5, polymarketFillCount: 5, kalshiFillPrice: 0.1, polymarketFillPrice: 0.1 }),
-    signal({ id: 4, executionGroupId: "mismatch", kalshiFillId: "real-kalshi-4", polymarketFillId: "real-poly-4", kalshiFillCount: 5, polymarketFillCount: 0, partialFill: true }),
+    signal({
+      id: 1,
+      executionGroupId: "real-group-1",
+      kalshiFillId: "real-kalshi-1",
+      polymarketFillId: "real-poly-1",
+      kalshiFillCount: 5,
+      polymarketFillCount: 5,
+    }),
+    signal({
+      id: 2,
+      action: "failed",
+      executionGroupId: "real-failed",
+      kalshiFillId: null,
+      polymarketFillId: null,
+      kalshiFillCount: 0,
+      polymarketFillCount: 0,
+    }),
+    signal({
+      id: 3,
+      executionGroupId: "legacy-dry-run",
+      kalshiFillId: "dry-run-kalshi-3",
+      polymarketFillId: "dry-run-poly-3",
+      kalshiFillCount: 5,
+      polymarketFillCount: 5,
+      kalshiFillPrice: 0.1,
+      polymarketFillPrice: 0.1,
+    }),
+    signal({
+      id: 4,
+      executionGroupId: "mismatch",
+      kalshiFillId: "real-kalshi-4",
+      polymarketFillId: "real-poly-4",
+      kalshiFillCount: 5,
+      polymarketFillCount: 0,
+      partialFill: true,
+    }),
   ];
   const analytics = buildDashboardAnalytics(signals, generatedAt);
   // Only the exact paired live fill (id 1) is counted; dry-run + partial + failed excluded.

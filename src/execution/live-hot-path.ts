@@ -1,6 +1,10 @@
 import type { LiveExecutionLock, Venue, VenueConfirmations, DashboardSignal, ArbCandidate } from "../types";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../db/live-execution-locks";
-import { buildLiveExecutionQualityStatus, liveExecutionQualityBlockReason, type LiveExecutionQualityOptions } from "./execution-quality";
+import {
+  buildLiveExecutionQualityStatus,
+  liveExecutionQualityBlockReason,
+  type LiveExecutionQualityOptions,
+} from "./execution-quality";
 
 export interface LiveExposureSignalReader {
   listLiveExposureSignals(now: number, limit?: number): Promise<DashboardSignal[]>;
@@ -19,16 +23,16 @@ function confirmedByUserStream(confirmations: VenueConfirmations | null | undefi
 }
 
 function hasLiveExposure(signal: DashboardSignal): boolean {
-  return Boolean(signal.executionGroupId)
-    && signal.reconciliationResolvedAt == null
-    && (
-      signal.action === "filled"
-      || signal.partialFill === true
-      || (signal.kalshiFillCount ?? 0) > 0
-      || (signal.polymarketFillCount ?? 0) > 0
-      || ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "")
-      || ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "")
-    );
+  return (
+    Boolean(signal.executionGroupId) &&
+    signal.reconciliationResolvedAt == null &&
+    (signal.action === "filled" ||
+      signal.partialFill === true ||
+      (signal.kalshiFillCount ?? 0) > 0 ||
+      (signal.polymarketFillCount ?? 0) > 0 ||
+      ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "") ||
+      ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? ""))
+  );
 }
 
 function isSubmittedLiveAttempt(signal: DashboardSignal): boolean {
@@ -49,11 +53,13 @@ function hasExactExposureProblem(signal: DashboardSignal): boolean {
   const kalshiCount = signal.kalshiFillCount ?? 0;
   const polymarketCount = signal.polymarketFillCount ?? 0;
   const hasMismatch = Math.abs(kalshiCount - polymarketCount) > 0.000001;
-  return signal.riskQuarantinedAt != null
-    || signal.partialFill === true
-    || hasMismatch
-    || ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "")
-    || ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "");
+  return (
+    signal.riskQuarantinedAt != null ||
+    signal.partialFill === true ||
+    hasMismatch ||
+    ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "") ||
+    ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "")
+  );
 }
 
 function exactExposureReason(signals: DashboardSignal[]): string | null {
@@ -205,16 +211,21 @@ export class LiveExposureCache {
     this.refreshInFlight = (async () => {
       const [signals, submittedAttempts, exactExposureSignals, executionQualitySignals] = await Promise.all([
         this.reader.listLiveExposureSignals(now, LiveExposureCache.exposureRefreshLimit),
-        this.reader.listLiveSubmittedAttemptSignals?.(now, LiveExposureCache.submittedAttemptRefreshLimit) ?? Promise.resolve([]),
+        this.reader.listLiveSubmittedAttemptSignals?.(now, LiveExposureCache.submittedAttemptRefreshLimit) ??
+          Promise.resolve([]),
         this.reader.listLiveExactExposureSignals?.(LiveExposureCache.exactExposureRefreshLimit) ?? Promise.resolve([]),
-        this.reader.listLiveExecutionQualitySignals?.(now, 24 * 60 * 60 * 1_000, LiveExposureCache.executionQualityRefreshLimit) ?? Promise.resolve([]),
+        this.reader.listLiveExecutionQualitySignals?.(
+          now,
+          24 * 60 * 60 * 1_000,
+          LiveExposureCache.executionQualityRefreshLimit,
+        ) ?? Promise.resolve([]),
       ]);
       this.signals = signals.filter(hasLiveExposure);
       this.exactExposureSignals = exactExposureSignals.filter(hasExactExposureProblem);
       this.executionQualitySignals = executionQualitySignals;
-      this.submittedAttemptExpiriesBySignalId = new Map(submittedAttempts
-        .filter(isSubmittedLiveAttempt)
-        .map((signal) => [signal.id, signal.expiryMs]));
+      this.submittedAttemptExpiriesBySignalId = new Map(
+        submittedAttempts.filter(isSubmittedLiveAttempt).map((signal) => [signal.id, signal.expiryMs]),
+      );
       this.refreshedAt = this.now();
     })().finally(() => {
       this.refreshInFlight = null;
@@ -234,7 +245,13 @@ export class LiveExposureCache {
     this.refreshedAt = this.now();
   }
 
-  status(): { ready: boolean; refreshedAt: number | null; ageMs: number | null; cachedSignals: number; reason: string | null } {
+  status(): {
+    ready: boolean;
+    refreshedAt: number | null;
+    ageMs: number | null;
+    cachedSignals: number;
+    reason: string | null;
+  } {
     const ageMs = this.refreshedAt == null ? null : Math.max(0, this.now() - this.refreshedAt);
     const stale = ageMs == null || ageMs > this.maxAgeMs;
     return {
@@ -242,7 +259,9 @@ export class LiveExposureCache {
       refreshedAt: this.refreshedAt,
       ageMs,
       cachedSignals: this.signals.length,
-      reason: stale ? `live hot-path exposure cache is stale: age ${ageMs ?? "unknown"}ms exceeds ${this.maxAgeMs}ms` : null,
+      reason: stale
+        ? `live hot-path exposure cache is stale: age ${ageMs ?? "unknown"}ms exceeds ${this.maxAgeMs}ms`
+        : null,
     };
   }
 
@@ -290,12 +309,17 @@ export class LiveExposureCache {
     return null;
   }
 
-  async liveSubmittedAttemptBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
+  async liveSubmittedAttemptBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    maxTradesPerWindow: number,
+  ): Promise<string | null> {
     const staleReason = await this.ensureFresh(now);
     if (staleReason) return staleReason;
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
-    const submittedAttempts = [...this.submittedAttemptExpiriesBySignalId.values()]
-      .filter((expiryMs) => expiryMs === candidate.expiryMs && expiryMs > now).length;
+    const submittedAttempts = [...this.submittedAttemptExpiriesBySignalId.values()].filter(
+      (expiryMs) => expiryMs === candidate.expiryMs && expiryMs > now,
+    ).length;
     if (submittedAttempts >= maxTrades) {
       return `live submitted attempt limit reached for expiry ${candidate.expiryMs}: ${submittedAttempts}/${maxTrades}`;
     }
@@ -339,7 +363,11 @@ export class LiveExposureCache {
       .slice(0, Math.max(1, Math.floor(limit)));
   }
 
-  async liveExecutionQualityBlockReason(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null> {
+  async liveExecutionQualityBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    options: LiveExecutionQualityOptions,
+  ): Promise<string | null> {
     const staleReason = await this.ensureFresh(now);
     if (staleReason) return staleReason;
     const since = now - Math.max(0, options.lookbackMs);
@@ -352,12 +380,22 @@ export class LiveExposureCache {
     return liveExecutionQualityBlockReason(buildLiveExecutionQualityStatus(samples, candidate, options));
   }
 
-  async liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null> {
+  async liveExposureBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    maxTradesPerWindow: number,
+  ): Promise<string | null> {
     const staleReason = await this.ensureFresh(now);
     if (staleReason) return staleReason;
     const quarantineReason = this.quarantineBlockReason();
     if (quarantineReason) return quarantineReason;
-    const exposed = this.signals.filter((signal) => !riskQuarantined(signal) && signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
+    const exposed = this.signals.filter(
+      (signal) =>
+        !riskQuarantined(signal) &&
+        signal.reconciliationResolvedAt == null &&
+        signal.expiryMs === candidate.expiryMs &&
+        signal.expiryMs > now,
+    );
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
     if (exposed.length >= maxTrades) {
       return `live max trades per window reached for expiry ${candidate.expiryMs}: ${exposed.length}/${maxTrades}`;
@@ -378,7 +416,13 @@ export class LiveExposureCache {
     if (staleReason) return `live reconciliation blocked: ${staleReason}`;
     const quarantineReason = this.quarantineBlockReason();
     if (quarantineReason) return quarantineReason;
-    const exposed = this.signals.filter((signal) => !riskQuarantined(signal) && signal.reconciliationResolvedAt == null && signal.expiryMs === candidate.expiryMs && signal.expiryMs > now);
+    const exposed = this.signals.filter(
+      (signal) =>
+        !riskQuarantined(signal) &&
+        signal.reconciliationResolvedAt == null &&
+        signal.expiryMs === candidate.expiryMs &&
+        signal.expiryMs > now,
+    );
     for (const signal of exposed) {
       if (signal.reconciliationResolvedAt != null) continue;
       const kalshiFillCount = signal.kalshiFillCount ?? 0;
@@ -388,10 +432,17 @@ export class LiveExposureCache {
       if (hasAnyFill && Math.abs(kalshiFillCount - polymarketFillCount) > 0.000001) {
         return `live reconciliation blocked: signal #${signal.id} fill mismatch kalshi=${kalshiFillCount} polymarket=${polymarketFillCount}`;
       }
-      if (hasAnyFill && (!confirmedByUserStream(signal.venueConfirmations, "kalshi") || !confirmedByUserStream(signal.venueConfirmations, "polymarket"))) {
+      if (
+        hasAnyFill &&
+        (!confirmedByUserStream(signal.venueConfirmations, "kalshi") ||
+          !confirmedByUserStream(signal.venueConfirmations, "polymarket"))
+      ) {
         return `live reconciliation blocked: signal #${signal.id} has venue fills without private-stream confirmations`;
       }
-      if (["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "") || ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "")) {
+      if (
+        ["unknown", "unexpected_fill_count"].includes(signal.kalshiStatus ?? "") ||
+        ["unknown", "unexpected_fill_count"].includes(signal.polymarketStatus ?? "")
+      ) {
         return `live reconciliation blocked: signal #${signal.id} has unresolved venue status`;
       }
     }

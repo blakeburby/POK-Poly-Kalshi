@@ -15,7 +15,11 @@ export interface VenueOrderEventSource {
 }
 
 export interface LiveSignalReconciliationStore {
-  liveReconciliationBlockReason(candidate: ArbCandidate, now: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
+  liveReconciliationBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    maxUnresolvedExposureDollars?: number,
+  ): Promise<string | null>;
   liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
 }
 
@@ -87,9 +91,9 @@ export function buildUserStreamReadiness(
   const reason = !enabled
     ? null
     : !kalshi.connected || !kalshi.subscribed
-      ? kalshi.reason ?? "Kalshi user stream is not connected/subscribed"
+      ? (kalshi.reason ?? "Kalshi user stream is not connected/subscribed")
       : !polymarket.connected || !polymarket.subscribed
-        ? polymarket.reason ?? "Polymarket user stream is not connected/subscribed"
+        ? (polymarket.reason ?? "Polymarket user stream is not connected/subscribed")
         : null;
   const lastUserStreamEventAt = Math.max(kalshi.lastEventAt ?? 0, polymarket.lastEventAt ?? 0) || null;
   return {
@@ -104,7 +108,11 @@ export function buildUserStreamReadiness(
   };
 }
 
-export function defaultReconciliationReadiness(enabled: boolean, checkedAt: number | null, reason: string | null): ReconciliationReadiness {
+export function defaultReconciliationReadiness(
+  enabled: boolean,
+  checkedAt: number | null,
+  reason: string | null,
+): ReconciliationReadiness {
   return {
     enabled,
     clean: !enabled || reason == null,
@@ -133,13 +141,17 @@ function resultNeedsConfirmation(result: VenueOrderResult): boolean {
   return timeoutOrUnknown || (result.error == null && (result.fillCount ?? 0) > 0);
 }
 
-function eventMatchesExpected(event: VenueOrderEventInput, pending: Pick<PendingConfirmation, "result" | "leg" | "submittedAtMs">): boolean {
+function eventMatchesExpected(
+  event: VenueOrderEventInput,
+  pending: Pick<PendingConfirmation, "result" | "leg" | "submittedAtMs">,
+): boolean {
   if (event.venue !== pending.result.venue) return false;
   if (event.eventType === "rest_response") return false;
   if (pending.result.clientOrderId && event.clientOrderId === pending.result.clientOrderId) return true;
   if (pending.result.orderId && event.venueOrderId === pending.result.orderId) return true;
   if ((event.receivedAtMs ?? 0) < pending.submittedAtMs - 1_000) return false;
-  if (pending.result.venue === "polymarket" && pending.leg.tokenId && event.assetId === pending.leg.tokenId) return true;
+  if (pending.result.venue === "polymarket" && pending.leg.tokenId && event.assetId === pending.leg.tokenId)
+    return true;
   return Boolean(event.marketId && event.marketId === pending.leg.contractId);
 }
 
@@ -157,8 +169,8 @@ function confirmationFromEvent(
   // confirms cleanly. An UNDERFILL (< expectedSize) or an OVERFILL beyond the band is still a mismatch.
   // band defaults to 0 -> reduces exactly to the strict |fillCount - expectedSize| > eps behavior.
   const band = Math.max(0, overfillBand);
-  const mismatch = fillCount != null
-    && (fillCount < expectedSize - 0.000001 || fillCount > expectedSize + band + 0.000001);
+  const mismatch =
+    fillCount != null && (fillCount < expectedSize - 0.000001 || fillCount > expectedSize + band + 0.000001);
   const failed = isFailureStatus(status);
   // C1: Polymarket emits a matched->mined->confirmed lifecycle; "mined" is not in the strict
   // confirming-status whitelist, so when it resolves the pending confirmation the order falls through to a
@@ -189,7 +201,11 @@ function confirmationFromEvent(
   };
 }
 
-function timeoutConfirmation(result: VenueOrderResult, expectedSize: number, timeoutMs: number): VenueConfirmationResult {
+function timeoutConfirmation(
+  result: VenueOrderResult,
+  expectedSize: number,
+  timeoutMs: number,
+): VenueConfirmationResult {
   return {
     venue: result.venue,
     status: "timeout",
@@ -250,12 +266,13 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       this.lastReconciliation = defaultReconciliationReadiness(false, now, null);
       return null;
     }
-    const reason = await this.options.reconciliationStore?.liveReconciliationBlockReason(
-      candidate,
-      now,
-      this.options.maxUnresolvedExposureDollars,
-    ) ?? null;
-    const quarantine = await this.options.reconciliationStore?.liveRiskQuarantineStatus?.() ?? null;
+    const reason =
+      (await this.options.reconciliationStore?.liveReconciliationBlockReason(
+        candidate,
+        now,
+        this.options.maxUnresolvedExposureDollars,
+      )) ?? null;
+    const quarantine = (await this.options.reconciliationStore?.liveRiskQuarantineStatus?.()) ?? null;
     this.lastReconciliation = {
       ...defaultReconciliationReadiness(true, now, reason),
       quarantinedExposureDollars: quarantine?.total ?? null,
@@ -289,8 +306,17 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     // Records the order with reconciledFillCount = this REST result's fillCount (the executor's accounted
     // fill), so any later stream event for the order is judged against what the executor actually reconciled.
     this.rememberKnownOrder(result, options.executionGroupId, options.expectedSize);
-    const existing = this.recentEvents.find((event) => eventMatchesExpected(event, { result, leg: options.leg, submittedAtMs: options.submittedAtMs }));
-    if (existing) return confirmationFromEvent(existing, result, options.expectedSize, this.confirmationBand(), this.options.confirmationStatusTolerant);
+    const existing = this.recentEvents.find((event) =>
+      eventMatchesExpected(event, { result, leg: options.leg, submittedAtMs: options.submittedAtMs }),
+    );
+    if (existing)
+      return confirmationFromEvent(
+        existing,
+        result,
+        options.expectedSize,
+        this.confirmationBand(),
+        this.options.confirmationStatusTolerant,
+      );
 
     return await new Promise<VenueConfirmationResult>((resolve) => {
       const pending: PendingConfirmation = {
@@ -331,20 +357,35 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
       matchedPending = true;
       clearTimeout(pending.timeout);
       this.pending.delete(pending);
-      const confirmation = confirmationFromEvent(event, pending.result, pending.expectedSize, this.confirmationBand(), this.options.confirmationStatusTolerant);
+      const confirmation = confirmationFromEvent(
+        event,
+        pending.result,
+        pending.expectedSize,
+        this.confirmationBand(),
+        this.options.confirmationStatusTolerant,
+      );
       // Record the executor's REST-confirmed fill (pending.result.fillCount) as the order's reconciled fill,
       // so LATER stream events for the same order (partials or duplicates AT OR BELOW it) are recognized as
       // already-accounted and do not re-lock; a later event revealing MORE still locks.
-      this.rememberKnownOrder({
-        ...pending.result,
-        orderId: confirmation.venueOrderId,
-        clientOrderId: confirmation.clientOrderId ?? pending.result.clientOrderId,
-      }, pending.executionGroupId, pending.expectedSize);
+      this.rememberKnownOrder(
+        {
+          ...pending.result,
+          orderId: confirmation.venueOrderId,
+          clientOrderId: confirmation.clientOrderId ?? pending.result.clientOrderId,
+        },
+        pending.executionGroupId,
+        pending.expectedSize,
+      );
       pending.resolve(confirmation);
       // Live pending path: the executor is reconciling its REST fill right now (floor-hedge + cap-quarantine
       // of any in-tolerance residual), so accountedFill = the REST fill. The overfill band applies (see
       // lockOnUnsafeEvent) — identically on the LATE path below, since the band is a property of the fill.
-      await this.lockOnUnsafeEvent(event, pending.executionGroupId, pending.expectedSize, pending.result.fillCount ?? 0);
+      await this.lockOnUnsafeEvent(
+        event,
+        pending.executionGroupId,
+        pending.expectedSize,
+        pending.result.fillCount ?? 0,
+      );
     }
 
     // Only treat the event via the knownOrderFor path when it did NOT just match a live pending in this
@@ -401,14 +442,19 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     return null;
   }
 
-  private async lockOnUnsafeEvent(event: VenueOrderEventInput, executionGroupId: string, expectedSize: number, accountedFill: number): Promise<void> {
+  private async lockOnUnsafeEvent(
+    event: VenueOrderEventInput,
+    executionGroupId: string,
+    expectedSize: number,
+    accountedFill: number,
+  ): Promise<void> {
     const fillCount = event.fillCount ?? 0;
     // A failure/cancel/reject that filled ZERO shares is a clean flat miss (no shares moved -> no
     // exposure), not a circuit-breaker event. Only a failure that actually moved shares (fillCount > 0)
     // or a genuine size mismatch is lock-worthy. Gated by flatMissNonBlocking (default on); when off, the
     // legacy behavior (lock on any failure status / any size mismatch) is preserved.
     const failure = isFailureStatus(event.status);
-    const lockWorthyFailure = this.options.flatMissNonBlocking === true ? (failure && fillCount > 0) : failure;
+    const lockWorthyFailure = this.options.flatMissNonBlocking === true ? failure && fillCount > 0 : failure;
     // Defer to the EXECUTOR's authoritative reconciliation. `accountedFill` is the fill the executor has
     // accounted for on this order — its REST order-response fill on the live pending path, or the order's
     // recorded reconciled fill on the knownOrderFor LATE path. A user-stream fill event is CONSISTENT (not
@@ -433,9 +479,10 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
     const band = Math.max(0, this.options.overfillToleranceShares ?? 0);
     const overAccounted = accountedFill > 0 && fillCount <= accountedFill + band + 0.000001;
     const filledInBand = fillCount >= expectedSize - 0.000001 && fillCount <= expectedSize + band + 0.000001;
-    const revealsSurplus = this.options.flatMissNonBlocking === true
-      ? fillCount > 0 && !overAccounted && !filledInBand
-      : fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
+    const revealsSurplus =
+      this.options.flatMissNonBlocking === true
+        ? fillCount > 0 && !overAccounted && !filledInBand
+        : fillCount > 0 && Math.abs(fillCount - expectedSize) > 0.000001;
     if (!lockWorthyFailure && !revealsSurplus) return;
     const reason = failure
       ? `live safety lock engaged: ${event.venue} user stream reported ${event.status}`

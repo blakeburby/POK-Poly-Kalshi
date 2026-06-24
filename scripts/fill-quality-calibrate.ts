@@ -1,5 +1,8 @@
 import { createPool } from "../src/db/pool";
-import { buildFillQualityCalibrationReport, type FillQualityCalibrationRow } from "../src/execution/fill-quality-calibration";
+import {
+  buildFillQualityCalibrationReport,
+  type FillQualityCalibrationRow,
+} from "../src/execution/fill-quality-calibration";
 import type { FillQualitySnapshot, SignalAction } from "../src/types";
 import { loadConfig } from "../src/config";
 
@@ -90,7 +93,8 @@ async function main(): Promise<void> {
   const requirePass = process.argv.includes("--require-pass");
   const pool = createPool(config);
   try {
-    const result = await pool.query<DbCalibrationRow>(`
+    const result = await pool.query<DbCalibrationRow>(
+      `
       SELECT
         id, created_at, updated_at, action, partial_fill,
         kalshi_status, polymarket_status, kalshi_error, polymarket_error,
@@ -101,7 +105,9 @@ async function main(): Promise<void> {
         AND execution_group_id IS NOT NULL
       ORDER BY created_at DESC
       LIMIT $1
-    `, [limit]);
+    `,
+      [limit],
+    );
     const report = buildFillQualityCalibrationReport(result.rows.map(rowFromDb), {
       minExpectedEdge,
       minSamples,
@@ -114,9 +120,15 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(JSON.stringify({
-    error: "FILL_QUALITY_CALIBRATION_DB_ERROR",
-    message: error instanceof Error ? error.message : String(error),
-  }, null, 2));
+  console.error(
+    JSON.stringify(
+      {
+        error: "FILL_QUALITY_CALIBRATION_DB_ERROR",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      null,
+      2,
+    ),
+  );
   process.exit(2);
 });

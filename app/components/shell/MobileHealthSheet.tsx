@@ -22,7 +22,11 @@ export function MobileHealthSheet() {
           aria-label="Strategy health"
           className={cn(
             "flex min-h-9 min-w-9 items-center justify-center gap-1.5 rounded-sm border px-2 lg:hidden",
-            tone === "live" ? "border-up/30 bg-up/5" : tone === "halt" ? "border-down/40 bg-down/10" : "border-amber/30 bg-amber/5",
+            tone === "live"
+              ? "border-up/30 bg-up/5"
+              : tone === "halt"
+                ? "border-down/40 bg-down/10"
+                : "border-amber/30 bg-amber/5",
           )}
         >
           <Activity className="size-3.5 text-fg-secondary" strokeWidth={1.75} />

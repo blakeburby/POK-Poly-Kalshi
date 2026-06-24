@@ -11,7 +11,11 @@ export function formatSignedCurrency(value: number | null | undefined): string {
 
 export function formatPercentValue(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "--";
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 0, style: "percent" }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    style: "percent",
+  }).format(value);
 }
 
 export function formatRelativeTime(timestampMs: number | null | undefined, now = Date.now()): string {

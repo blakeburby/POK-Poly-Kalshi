@@ -43,7 +43,10 @@ function economicSide(msg: Record<string, unknown>, fallbackSide: string | null)
   return fallbackSide;
 }
 
-export function buildKalshiUserStreamSubscribeMessage(id: number, marketTickers: Iterable<string>): Record<string, unknown> {
+export function buildKalshiUserStreamSubscribeMessage(
+  id: number,
+  marketTickers: Iterable<string>,
+): Record<string, unknown> {
   const tickers = [...marketTickers].sort();
   const params: Record<string, unknown> = { channels: ["user_orders", "fill"] };
   if (tickers.length > 0) params.market_tickers = tickers;
@@ -51,10 +54,14 @@ export function buildKalshiUserStreamSubscribeMessage(id: number, marketTickers:
 }
 
 export function parseKalshiUserStreamMessage(payload: unknown, receivedAtMs = Date.now()) {
-  const record = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : null;
+  const record =
+    payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
   if (!record) return null;
   const type = stringOrNull(record.type);
-  const msg = record.msg && typeof record.msg === "object" && !Array.isArray(record.msg) ? record.msg as Record<string, unknown> : null;
+  const msg =
+    record.msg && typeof record.msg === "object" && !Array.isArray(record.msg)
+      ? (record.msg as Record<string, unknown>)
+      : null;
   if (!type || !msg) return null;
 
   if (type === "user_order") {
@@ -151,18 +158,28 @@ export class KalshiUserStreamClient {
   }
 
   private ensureSocket(): void {
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING))
+      return;
     let headers: Record<string, string>;
     try {
       headers = getKalshiWebsocketHeaders();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.state = { ...this.state, connected: false, subscribed: false, reason, lastError: reason };
-      logThrottle("kalshi-user-ws-auth", 60_000, { severity: "WARN", category: "KALSHI_USER", message: "user websocket auth unavailable", context: { reason } });
+      logThrottle("kalshi-user-ws-auth", 60_000, {
+        severity: "WARN",
+        category: "KALSHI_USER",
+        message: "user websocket auth unavailable",
+        context: { reason },
+      });
       return;
     }
 
-    logEvent({ category: "KALSHI_USER", message: "user websocket connecting", context: { subscriptions: this.desired.size } });
+    logEvent({
+      category: "KALSHI_USER",
+      message: "user websocket connecting",
+      context: { subscriptions: this.desired.size },
+    });
     const socket = this.wsFactory(this.url, { headers });
     this.socket = socket;
     this.intentionalClose = false;
@@ -183,13 +200,23 @@ export class KalshiUserStreamClient {
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.state = { ...this.state, lastError: reason };
-        logEvent({ severity: "ERROR", category: "KALSHI_USER", message: "user websocket parse error", context: { error: reason } });
+        logEvent({
+          severity: "ERROR",
+          category: "KALSHI_USER",
+          message: "user websocket parse error",
+          context: { error: reason },
+        });
       }
     });
 
     socket.on("error", (error: Error) => {
       this.state = { ...this.state, lastError: error.message, reason: error.message };
-      logEvent({ severity: "ERROR", category: "KALSHI_USER", message: "user websocket error", context: { error: error.message } });
+      logEvent({
+        severity: "ERROR",
+        category: "KALSHI_USER",
+        message: "user websocket error",
+        context: { error: error.message },
+      });
     });
 
     socket.on("close", (_code: number, reason: Buffer) => {
@@ -205,7 +232,11 @@ export class KalshiUserStreamClient {
   private subscribe(socket: RawWebSocket): void {
     socket.send(JSON.stringify(buildKalshiUserStreamSubscribeMessage(this.messageId++, this.desired)));
     this.state = { ...this.state, subscribed: true, reason: null };
-    logEvent({ category: "KALSHI_USER", message: "user websocket subscribed", context: { subscriptions: this.desired.size } });
+    logEvent({
+      category: "KALSHI_USER",
+      message: "user websocket subscribed",
+      context: { subscriptions: this.desired.size },
+    });
   }
 
   private scheduleReconnect(reasonText: string): void {

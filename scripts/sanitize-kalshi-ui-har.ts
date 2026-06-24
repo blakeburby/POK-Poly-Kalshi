@@ -217,7 +217,9 @@ function containsKey(value: JsonValue | null, pattern: RegExp): boolean {
 }
 
 function headerNames(headers: HarHeader[] | undefined): string[] {
-  return [...new Set((headers ?? []).map((header) => String(header.name ?? "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return [...new Set((headers ?? []).map((header) => String(header.name ?? "").trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b),
+  );
 }
 
 function authIndicators(headers: HarHeader[] | undefined): string[] {
@@ -263,9 +265,12 @@ function interestingReasons(entry: SanitizedHarEntry): string[] {
   const body = entry.request.body;
   const responseBody = entry.response.body;
   if (ORDER_LIKE_PATH_PATTERN.test(pathText)) reasons.push("order-like path");
-  if (containsKey(body, QUICK_FIELD_PATTERN) || containsKey(responseBody, QUICK_FIELD_PATTERN)) reasons.push("quick-order-like field");
-  if (containsKey(body, MARKET_FIELD_PATTERN) || containsKey(responseBody, MARKET_FIELD_PATTERN)) reasons.push("market-order-like field");
-  if (containsKey(body, DOLLAR_FIELD_PATTERN) || containsKey(responseBody, DOLLAR_FIELD_PATTERN)) reasons.push("dollar-spend-like field");
+  if (containsKey(body, QUICK_FIELD_PATTERN) || containsKey(responseBody, QUICK_FIELD_PATTERN))
+    reasons.push("quick-order-like field");
+  if (containsKey(body, MARKET_FIELD_PATTERN) || containsKey(responseBody, MARKET_FIELD_PATTERN))
+    reasons.push("market-order-like field");
+  if (containsKey(body, DOLLAR_FIELD_PATTERN) || containsKey(responseBody, DOLLAR_FIELD_PATTERN))
+    reasons.push("dollar-spend-like field");
   if (entry.request.path.endsWith("/portfolio/events/orders")) reasons.push("documented V2 order endpoint");
   if (entry.request.path.endsWith("/portfolio/orders")) reasons.push("legacy order endpoint");
   return reasons;
@@ -278,9 +283,10 @@ function sanitizeEntry(entry: HarEntry): SanitizedHarEntry | null {
   const requestHeaders = entry.request?.headers ?? [];
   const responseHeaders = entry.response?.headers ?? [];
   const requestBody = parseBody(entry.request?.postData?.text, entry.request?.postData?.mimeType);
-  const responseBody = entry.response?.content?.encoding === "base64"
-    ? "[base64 response body redacted]"
-    : parseBody(entry.response?.content?.text, entry.response?.content?.mimeType);
+  const responseBody =
+    entry.response?.content?.encoding === "base64"
+      ? "[base64 response body redacted]"
+      : parseBody(entry.response?.content?.text, entry.response?.content?.mimeType);
 
   const sanitized: SanitizedHarEntry = {
     startedDateTime: entry.startedDateTime ?? null,
@@ -314,7 +320,10 @@ function sanitizeEntry(entry: HarEntry): SanitizedHarEntry | null {
 }
 
 function pathSummary(entries: SanitizedHarEntry[]): SanitizedHarOutput["summary"]["byPath"] {
-  const groups = new Map<string, { method: string; host: string; path: string; count: number; statuses: Set<number> }>();
+  const groups = new Map<
+    string,
+    { method: string; host: string; path: string; count: number; statuses: Set<number> }
+  >();
   for (const entry of entries) {
     const key = `${entry.request.method} ${entry.request.host}${entry.request.path}`;
     const existing = groups.get(key) ?? {
@@ -336,7 +345,9 @@ function pathSummary(entries: SanitizedHarEntry[]): SanitizedHarOutput["summary"
       count: group.count,
       statuses: [...group.statuses].sort((a, b) => a - b),
     }))
-    .sort((a, b) => b.count - a.count || `${a.method} ${a.host}${a.path}`.localeCompare(`${b.method} ${b.host}${b.path}`));
+    .sort(
+      (a, b) => b.count - a.count || `${a.method} ${a.host}${a.path}`.localeCompare(`${b.method} ${b.host}${b.path}`),
+    );
 }
 
 function hasAnyField(entries: SanitizedHarEntry[], pattern: RegExp): boolean {
@@ -350,21 +361,31 @@ function buildDecisionHints(entries: SanitizedHarEntry[]): SanitizedHarOutput["d
   const quickOrderFieldSeen = hasAnyField(entries, QUICK_FIELD_PATTERN);
   const marketOrderFieldSeen = hasAnyField(entries, MARKET_FIELD_PATTERN);
   const dollarSpendFieldSeen = hasAnyField(entries, DOLLAR_FIELD_PATTERN);
-  const apiKeySignedRequestSeen = entries.some((entry) => entry.request.authIndicators.includes("kalshi-access-key") || entry.request.authIndicators.includes("kalshi-access-signature"));
-  const sessionCookieRequestSeen = entries.some((entry) => entry.request.authIndicators.includes("cookie") || entry.request.authIndicators.includes("csrf"));
-  const undocumentedOrderLikeRequestSeen = entries.some((entry) => (
-    entry.interesting
-    && !entry.request.path.startsWith("/trade-api/v2/portfolio/events/orders")
-    && !entry.request.path.startsWith("/trade-api/v2/portfolio/orders")
-  ));
+  const apiKeySignedRequestSeen = entries.some(
+    (entry) =>
+      entry.request.authIndicators.includes("kalshi-access-key") ||
+      entry.request.authIndicators.includes("kalshi-access-signature"),
+  );
+  const sessionCookieRequestSeen = entries.some(
+    (entry) => entry.request.authIndicators.includes("cookie") || entry.request.authIndicators.includes("csrf"),
+  );
+  const undocumentedOrderLikeRequestSeen = entries.some(
+    (entry) =>
+      entry.interesting &&
+      !entry.request.path.startsWith("/trade-api/v2/portfolio/events/orders") &&
+      !entry.request.path.startsWith("/trade-api/v2/portfolio/orders"),
+  );
 
   let recommendedInterpretation = "No order-like Kalshi UI request was found in the sanitized capture.";
   if (documentedV2OrderRequestSeen) {
-    recommendedInterpretation = "UI appears to use the documented V2 order endpoint for at least one order-like request; prefer implementing the supported V2 equivalent.";
+    recommendedInterpretation =
+      "UI appears to use the documented V2 order endpoint for at least one order-like request; prefer implementing the supported V2 equivalent.";
   } else if (legacyOrderRequestSeen) {
-    recommendedInterpretation = "UI appears to use the legacy order endpoint for at least one order-like request; verify in demo/tiny-live only and prefer V2 unless Kalshi confirms legacy behavior.";
+    recommendedInterpretation =
+      "UI appears to use the legacy order endpoint for at least one order-like request; verify in demo/tiny-live only and prefer V2 unless Kalshi confirms legacy behavior.";
   } else if (undocumentedOrderLikeRequestSeen) {
-    recommendedInterpretation = "UI appears to use an undocumented order-like request; document and ask Kalshi for official support before production use.";
+    recommendedInterpretation =
+      "UI appears to use an undocumented order-like request; document and ask Kalshi for official support before production use.";
   }
 
   return {
@@ -383,9 +404,7 @@ function buildDecisionHints(entries: SanitizedHarEntry[]): SanitizedHarOutput["d
 
 export function sanitizeHarObject(har: HarObject, sourceFile: string | null = null): SanitizedHarOutput {
   const entries = har.log?.entries ?? [];
-  const sanitizedEntries = entries
-    .map(sanitizeEntry)
-    .filter((entry): entry is SanitizedHarEntry => entry != null);
+  const sanitizedEntries = entries.map(sanitizeEntry).filter((entry): entry is SanitizedHarEntry => entry != null);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -434,21 +453,25 @@ export function renderMarkdownReport(output: SanitizedHarOutput): string {
     "",
     "| Method | Host | Path | Count | Statuses |",
     "| --- | --- | --- | ---: | --- |",
-    ...output.summary.byPath.map((row) => `| ${row.method} | ${row.host} | \`${row.path}\` | ${row.count} | ${row.statuses.join(", ") || "n/a"} |`),
+    ...output.summary.byPath.map(
+      (row) => `| ${row.method} | ${row.host} | \`${row.path}\` | ${row.count} | ${row.statuses.join(", ") || "n/a"} |`,
+    ),
     "",
     "## Interesting Requests",
     "",
     "| Method | Host | Path | Status | Reasons | Request Keys | Response Keys |",
     "| --- | --- | --- | ---: | --- | --- | --- |",
-    ...interesting.map((entry) => [
-      `| ${entry.request.method}`,
-      entry.request.host,
-      `\`${entry.request.path}\``,
-      String(entry.response.status ?? "n/a"),
-      entry.interestingReasons.join(", "),
-      entry.request.bodyKeys.join(", ") || "none",
-      `${entry.response.bodyKeys.join(", ") || "none"} |`,
-    ].join(" | ")),
+    ...interesting.map((entry) =>
+      [
+        `| ${entry.request.method}`,
+        entry.request.host,
+        `\`${entry.request.path}\``,
+        String(entry.response.status ?? "n/a"),
+        entry.interestingReasons.join(", "),
+        entry.request.bodyKeys.join(", ") || "none",
+        `${entry.response.bodyKeys.join(", ") || "none"} |`,
+      ].join(" | "),
+    ),
     "",
     "## Safety Notes",
     "",
@@ -491,12 +514,18 @@ async function main(): Promise<void> {
   const reportPath = path.join(outDir, `kalshi-ui-capture-report-${timestamp}.md`);
   fs.writeFileSync(jsonPath, `${JSON.stringify(output, null, 2)}\n`);
   fs.writeFileSync(reportPath, renderMarkdownReport(output));
-  console.log(JSON.stringify({
-    sanitizedJson: jsonPath,
-    report: reportPath,
-    kalshiEntryCount: output.kalshiEntryCount,
-    decisionHints: output.decisionHints,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        sanitizedJson: jsonPath,
+        report: reportPath,
+        kalshiEntryCount: output.kalshiEntryCount,
+        decisionHints: output.decisionHints,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 if (require.main === module) {

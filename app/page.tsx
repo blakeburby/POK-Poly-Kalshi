@@ -38,7 +38,9 @@ export default function HomePage() {
       <section className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-px border-t border-line sm:grid-cols-2 lg:grid-cols-4">
         {SECTIONS.map((s) => (
           <div key={s.title} className="border-r border-line/60 px-6 py-8">
-            <h2 className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-fg-secondary">{s.title}</h2>
+            <h2 className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-fg-secondary">
+              {s.title}
+            </h2>
             <p className="mt-2 text-[13px] leading-relaxed text-fg-faint">{s.body}</p>
           </div>
         ))}

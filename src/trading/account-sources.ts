@@ -73,7 +73,7 @@ function logPolymarketAccountWarn(source: string, error: unknown): void {
 }
 
 function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
 function asArray(value: unknown): unknown[] {
@@ -150,9 +150,13 @@ function timestampMs(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function accountSparkline(value: number | null, now: number, dayChangeDollars: number | null = null): TradingSparklinePoint[] {
+function accountSparkline(
+  value: number | null,
+  now: number,
+  dayChangeDollars: number | null = null,
+): TradingSparklinePoint[] {
   const y = value ?? 0;
-  const start = value != null && dayChangeDollars != null ? rounded(value - dayChangeDollars) ?? y : y;
+  const start = value != null && dayChangeDollars != null ? (rounded(value - dayChangeDollars) ?? y) : y;
   return [
     { timestamp: now - 24 * 60 * 60_000, value: start },
     { timestamp: now, value: y },
@@ -163,7 +167,7 @@ async function fetchJson(fetchFn: FetchFn, url: URL, init?: RequestInit): Promis
   const response = await fetchFn(url, init);
   const text = await response.text();
   if (!response.ok) throw new Error(`${url.pathname} failed ${response.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) as unknown : {};
+  return text ? (JSON.parse(text) as unknown) : {};
 }
 
 async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -180,7 +184,12 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
   }
 }
 
-async function fetchJsonWithTimeout(fetchFn: FetchFn, url: URL, init: RequestInit | undefined, timeoutMs: number): Promise<unknown> {
+async function fetchJsonWithTimeout(
+  fetchFn: FetchFn,
+  url: URL,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -190,7 +199,12 @@ async function fetchJsonWithTimeout(fetchFn: FetchFn, url: URL, init: RequestIni
   }
 }
 
-async function fetchKalshiJson(config: AppConfig, fetchFn: FetchFn, path: string, search?: URLSearchParams): Promise<unknown> {
+async function fetchKalshiJson(
+  config: AppConfig,
+  fetchFn: FetchFn,
+  path: string,
+  search?: URLSearchParams,
+): Promise<unknown> {
   const url = new URL(config.kalshiApiBase);
   const basePath = url.pathname.replace(/\/$/, "");
   url.pathname = `${basePath}${path}`;
@@ -199,7 +213,11 @@ async function fetchKalshiJson(config: AppConfig, fetchFn: FetchFn, path: string
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), KALSHI_ACCOUNT_REQUEST_TIMEOUT_MS);
   try {
-    return await fetchJson(fetchFn, url, { method: "GET", headers: getKalshiHeaders("GET", signPath), signal: controller.signal });
+    return await fetchJson(fetchFn, url, {
+      method: "GET",
+      headers: getKalshiHeaders("GET", signPath),
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -210,7 +228,9 @@ function rowsFromPayload(payload: unknown, keys: string[]): JsonRecord[] {
   const record = asRecord(payload);
   if (!record) return [];
   for (const key of keys) {
-    const rows = asArray(record[key]).map(asRecord).filter((row): row is JsonRecord => row != null);
+    const rows = asArray(record[key])
+      .map(asRecord)
+      .filter((row): row is JsonRecord => row != null);
     if (rows.length > 0) return rows;
   }
   return [];
@@ -218,18 +238,22 @@ function rowsFromPayload(payload: unknown, keys: string[]): JsonRecord[] {
 
 function normalizeKalshiBalance(payload: unknown, platform: TradingPlatform, now: number): TradingPortfolioSummary {
   const record = asRecord(payload);
-  const breakdownCash = rowsFromPayload(record?.balance_breakdown, [])
-    .reduce((total, row) => total + (firstNumber(row, ["balance"]) ?? 0), 0);
-  const cashValue = firstMoney(
-    record,
-    ["balance", "available_balance", "available_balance_cents", "cash_balance", "cash_balance_cents", "cash"],
-    ["balance_dollars", "available_balance_dollars", "cash_balance_dollars", "cash_dollars"],
-  ) ?? (breakdownCash > 0 ? rounded(breakdownCash) : null);
-  const portfolioValue = firstMoney(
-    record,
-    ["portfolio_value", "portfolioValue", "portfolio_value_cents", "equity", "total_value"],
-    ["portfolio_value_dollars", "portfolioValueDollars", "equity_dollars", "total_value_dollars"],
-  ) ?? cashValue;
+  const breakdownCash = rowsFromPayload(record?.balance_breakdown, []).reduce(
+    (total, row) => total + (firstNumber(row, ["balance"]) ?? 0),
+    0,
+  );
+  const cashValue =
+    firstMoney(
+      record,
+      ["balance", "available_balance", "available_balance_cents", "cash_balance", "cash_balance_cents", "cash"],
+      ["balance_dollars", "available_balance_dollars", "cash_balance_dollars", "cash_dollars"],
+    ) ?? (breakdownCash > 0 ? rounded(breakdownCash) : null);
+  const portfolioValue =
+    firstMoney(
+      record,
+      ["portfolio_value", "portfolioValue", "portfolio_value_cents", "equity", "total_value"],
+      ["portfolio_value_dollars", "portfolioValueDollars", "equity_dollars", "total_value_dollars"],
+    ) ?? cashValue;
   return {
     platform,
     portfolioValue,
@@ -246,7 +270,9 @@ function normalizeKalshiPosition(row: JsonRecord, now: number): TradingPosition 
   const rawPosition = firstNumber(row, ["position", "position_fp", "net_position", "netPosition", "count"]);
   const yesCount = firstNumber(row, ["yes_count", "yesCount", "yes_count_fp"]);
   const noCount = firstNumber(row, ["no_count", "noCount", "no_count_fp"]);
-  const signedShares = rawPosition ?? (yesCount != null && noCount != null ? yesCount - noCount : yesCount ?? (noCount == null ? null : -noCount));
+  const signedShares =
+    rawPosition ??
+    (yesCount != null && noCount != null ? yesCount - noCount : (yesCount ?? (noCount == null ? null : -noCount)));
   if (signedShares == null || Math.abs(signedShares) < 0.000001) return null;
   const shares = Math.abs(signedShares);
   const outcome = firstString(row, ["outcome", "side", "contract_side"]) ?? (signedShares >= 0 ? "YES" : "NO");
@@ -255,8 +281,9 @@ function normalizeKalshiPosition(row: JsonRecord, now: number): TradingPosition 
     ["market_value", "marketValue", "value", "exposure", "market_exposure"],
     ["market_exposure_dollars", "event_exposure_dollars", "value_dollars", "exposure_dollars"],
   );
-  const averagePrice = priceFromUnknown(firstNumber(row, ["average_price", "avg_price", "avgPrice", "price"]))
-    ?? (value == null || shares <= 0 ? null : rounded(Math.abs(value) / shares));
+  const averagePrice =
+    priceFromUnknown(firstNumber(row, ["average_price", "avg_price", "avgPrice", "price"])) ??
+    (value == null || shares <= 0 ? null : rounded(Math.abs(value) / shares));
   return {
     id: ticker,
     market: ticker,
@@ -272,14 +299,22 @@ function normalizeKalshiOpenOrder(row: JsonRecord, now: number): TradingOpenOrde
   const id = firstString(row, ["order_id", "orderId", "client_order_id", "clientOrderId"]);
   const market = firstString(row, ["ticker", "market_ticker", "marketTicker"]);
   if (!id || !market) return null;
-  const count = firstNumber(row, ["remaining_count", "remainingCount", "remaining_count_fp", "count", "original_count", "initial_count_fp"]);
+  const count = firstNumber(row, [
+    "remaining_count",
+    "remainingCount",
+    "remaining_count_fp",
+    "count",
+    "original_count",
+    "initial_count_fp",
+  ]);
   if (count == null || count <= 0) return null;
   const action = firstString(row, ["action", "side"]) ?? "buy";
   const rawSide = action.toLowerCase();
   const yesPrice = priceFromUnknown(row.yes_price_dollars ?? row.yes_price ?? row.price);
   const noPrice = priceFromUnknown(row.no_price_dollars ?? row.no_price);
   const outcome = firstString(row, ["outcome_side", "contract_side", "outcome"]) ?? (rawSide === "ask" ? "NO" : "YES");
-  const price = outcome.toLowerCase() === "no" ? (noPrice ?? (yesPrice == null ? null : rounded(1 - yesPrice))) : yesPrice;
+  const price =
+    outcome.toLowerCase() === "no" ? (noPrice ?? (yesPrice == null ? null : rounded(1 - yesPrice))) : yesPrice;
   return {
     id,
     market,
@@ -294,16 +329,18 @@ function normalizeKalshiOpenOrder(row: JsonRecord, now: number): TradingOpenOrde
 }
 
 function normalizeKalshiFill(row: JsonRecord, now: number): TradingHistoryRow | null {
-  const id = firstString(row, ["trade_id", "fill_id", "order_id", "id"]) ?? `${firstString(row, ["ticker"]) ?? "kalshi"}-${now}`;
+  const id =
+    firstString(row, ["trade_id", "fill_id", "order_id", "id"]) ?? `${firstString(row, ["ticker"]) ?? "kalshi"}-${now}`;
   const marketName = firstString(row, ["ticker", "market_ticker", "marketTicker"]);
   if (!marketName) return null;
   const shares = firstNumber(row, ["count", "count_fp", "fill_count", "fillCount", "fill_count_fp"]);
   if (shares == null || shares <= 0) return null;
   const action = (firstString(row, ["action", "side"]) ?? "buy").toLowerCase();
   const outcome = (firstString(row, ["outcome_side", "contract_side", "outcome", "side"]) ?? "OUTCOME").toUpperCase();
-  const price = outcome.toLowerCase() === "no"
-    ? priceFromUnknown(row.no_price_dollars ?? row.no_price ?? row.price)
-    : priceFromUnknown(row.yes_price_dollars ?? row.yes_price ?? row.price);
+  const price =
+    outcome.toLowerCase() === "no"
+      ? priceFromUnknown(row.no_price_dollars ?? row.no_price ?? row.price)
+      : priceFromUnknown(row.yes_price_dollars ?? row.yes_price ?? row.price);
   const value = price == null ? null : rounded(shares * price);
   const activity = action.includes("sell") || action === "ask" ? "Sell" : "Buy";
   return {
@@ -325,9 +362,21 @@ async function kalshiAccountActivity(options: AccountSourceOptions): Promise<Pla
   const now = options.now;
   const [balancePayload, positionsPayload, ordersPayload, fillsPayload] = await Promise.all([
     fetchKalshiJson(options.config, fetchFn, "/portfolio/balance"),
-    fetchKalshiJson(options.config, fetchFn, "/portfolio/positions", new URLSearchParams({ limit: "500", count_filter: "position" })),
-    fetchKalshiJson(options.config, fetchFn, "/portfolio/orders", new URLSearchParams({ limit: "100", status: "resting" })),
-    fetchKalshiJson(options.config, fetchFn, "/portfolio/fills", new URLSearchParams({ limit: "100" })).catch(() => null),
+    fetchKalshiJson(
+      options.config,
+      fetchFn,
+      "/portfolio/positions",
+      new URLSearchParams({ limit: "500", count_filter: "position" }),
+    ),
+    fetchKalshiJson(
+      options.config,
+      fetchFn,
+      "/portfolio/orders",
+      new URLSearchParams({ limit: "100", status: "resting" }),
+    ),
+    fetchKalshiJson(options.config, fetchFn, "/portfolio/fills", new URLSearchParams({ limit: "100" })).catch(
+      () => null,
+    ),
   ]);
   const portfolio = normalizeKalshiBalance(balancePayload, "kalshi", now);
   const positions = rowsFromPayload(positionsPayload, ["market_positions", "positions"])
@@ -365,7 +414,12 @@ function polymarketAccountAddress(config: AppConfig): string | null {
   return privateKeyToAccount(normalizePrivateKey(config.polymarketPrivateKey)).address;
 }
 
-async function polymarketDataApi(path: string, address: string, fetchFn: FetchFn, params: Record<string, string> = {}): Promise<unknown> {
+async function polymarketDataApi(
+  path: string,
+  address: string,
+  fetchFn: FetchFn,
+  params: Record<string, string> = {},
+): Promise<unknown> {
   const url = new URL(`${POLYMARKET_DATA_API_BASE}${path}`);
   url.searchParams.set("user", address);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
@@ -426,7 +480,9 @@ function normalizePolymarketActivity(row: JsonRecord, now: number): TradingHisto
   if (shares == null || shares <= 0) return null;
   const activity = type.includes("sell") ? "Sell" : "Buy";
   const price = priceFromUnknown(row.price ?? row.avgPrice);
-  const value = rounded(firstNumber(row, ["usdcSize", "value", "currentValue"])) ?? (price == null ? null : rounded(shares * price));
+  const value =
+    rounded(firstNumber(row, ["usdcSize", "value", "currentValue"])) ??
+    (price == null ? null : rounded(shares * price));
   return {
     id: firstString(row, ["transactionHash", "transaction_hash", "id", "orderId"]) ?? `polymarket-${now}`,
     activity,
@@ -448,7 +504,9 @@ async function resolvePolymarketClient(options: AccountSourceOptions): Promise<P
   return "client" in clientOrBundle ? clientOrBundle.client : clientOrBundle;
 }
 
-async function polymarketCashAndOpenOrders(options: AccountSourceOptions): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
+async function polymarketCashAndOpenOrders(
+  options: AccountSourceOptions,
+): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
   try {
     return await polymarketCashAndOpenOrdersInner(options);
   } catch (error) {
@@ -459,7 +517,9 @@ async function polymarketCashAndOpenOrders(options: AccountSourceOptions): Promi
   }
 }
 
-async function polymarketCashAndOpenOrdersInner(options: AccountSourceOptions): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
+async function polymarketCashAndOpenOrdersInner(
+  options: AccountSourceOptions,
+): Promise<{ cashValue: number | null; openOrders: TradingOpenOrder[] }> {
   const client = await withTimeout(
     resolvePolymarketClient(options),
     POLYMARKET_ACCOUNT_REQUEST_TIMEOUT_MS,
@@ -498,10 +558,19 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
   // unavailable (portfolioValue null) so the carry-forward / "missing venue" path engages, rather than
   // silently fabricating $0 or dropping Polymarket from the combined total.
   const [positionsPayload, valuePayload, activityPayload, accountState] = await Promise.all([
-    polymarketDataApi("/positions", address, fetchFn, { limit: "500", sizeThreshold: "0" }).catch((error) => { logPolymarketAccountWarn("positions", error); return null; }),
-    polymarketDataApi("/value", address, fetchFn).catch((error) => { logPolymarketAccountWarn("value", error); return null; }),
+    polymarketDataApi("/positions", address, fetchFn, { limit: "500", sizeThreshold: "0" }).catch((error) => {
+      logPolymarketAccountWarn("positions", error);
+      return null;
+    }),
+    polymarketDataApi("/value", address, fetchFn).catch((error) => {
+      logPolymarketAccountWarn("value", error);
+      return null;
+    }),
     polymarketDataApi("/activity", address, fetchFn, { limit: "100" }).catch(() => null),
-    polymarketCashAndOpenOrders(options).catch((error) => { logPolymarketAccountWarn("balance", error); return { cashValue: null, openOrders: [] as TradingOpenOrder[] }; }),
+    polymarketCashAndOpenOrders(options).catch((error) => {
+      logPolymarketAccountWarn("balance", error);
+      return { cashValue: null, openOrders: [] as TradingOpenOrder[] };
+    }),
   ]);
   const positionRows = rowsFromPayload(positionsPayload, ["positions"]);
   const positions = positionRows
@@ -514,15 +583,21 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
   // Prefer the /value endpoint only when it reports a positive total; it returns 0/empty for
   // resolved positions, which would zero out genuine open MTM — fall back to the summed marks.
   const positionsValue = reportedValue != null && reportedValue > 0 ? reportedValue : summedPositions;
-  const cashValue = accountState.cashValue ?? options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null;
+  const cashValue =
+    accountState.cashValue ??
+    options.readiness?.polymarket.balance ??
+    options.readiness?.polymarket.collateralBalanceNormalized ??
+    null;
   // Null (unavailable) when no source produced a usable signal — never fabricate $0, which would corrupt the
   // combined total and the equity curve. A real $0 only arises when the CLOB balance genuinely returns 0.
   const hasSignal = cashValue != null || positions.length > 0 || (reportedValue != null && reportedValue > 0);
   const portfolioValue = hasSignal ? rounded((cashValue ?? 0) + positionsValue) : null;
   const accountPnl = positionRows.reduce((total, row) => {
-    return total
-      + (firstNumber(row, ["cashPnl", "cash_pnl"]) ?? 0)
-      + (firstNumber(row, ["realizedPnl", "realized_pnl"]) ?? 0);
+    return (
+      total +
+      (firstNumber(row, ["cashPnl", "cash_pnl"]) ?? 0) +
+      (firstNumber(row, ["realizedPnl", "realized_pnl"]) ?? 0)
+    );
   }, 0);
   const apiHistory = rowsFromPayload(activityPayload, ["activity"])
     .map((row) => normalizePolymarketActivity(row, now))
@@ -539,7 +614,11 @@ async function polymarketAccountActivity(options: AccountSourceOptions): Promise
     positions,
     openOrders: accountState.openOrders,
     history: apiHistory.length > 0 ? apiHistory : undefined,
-    sparkline: accountSparkline(portfolioValue, now, Number.isFinite(accountPnl) && accountPnl !== 0 ? rounded(accountPnl) : null),
+    sparkline: accountSparkline(
+      portfolioValue,
+      now,
+      Number.isFinite(accountPnl) && accountPnl !== 0 ? rounded(accountPnl) : null,
+    ),
     lastUpdatedAt: now,
   };
 }
@@ -550,9 +629,8 @@ export async function accountBackedPlatformActivity(
   options: AccountSourceOptions,
 ): Promise<TradingPlatformActivity> {
   try {
-    const account = platform === "kalshi"
-      ? await kalshiAccountActivity(options)
-      : await polymarketAccountActivity(options);
+    const account =
+      platform === "kalshi" ? await kalshiAccountActivity(options) : await polymarketAccountActivity(options);
     return {
       platform,
       connectionStatus: "live",
@@ -561,7 +639,9 @@ export async function accountBackedPlatformActivity(
       positions: account.positions,
       openOrders: account.openOrders,
       history: account.history ?? fallback.history,
-      sparkline: account.sparkline ?? accountSparkline(account.portfolio.portfolioValue, options.now, account.portfolio.dayChangeDollars),
+      sparkline:
+        account.sparkline ??
+        accountSparkline(account.portfolio.portfolioValue, options.now, account.portfolio.dayChangeDollars),
     };
   } catch (error) {
     if (shouldLogAccountWarn(`${platform}:source`)) {
@@ -572,9 +652,10 @@ export async function accountBackedPlatformActivity(
         context: { platform, error: error instanceof Error ? error.message : String(error) },
       });
     }
-    const cashValue = platform === "polymarket"
-      ? options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null
-      : options.readiness?.kalshi.balance ?? null;
+    const cashValue =
+      platform === "polymarket"
+        ? (options.readiness?.polymarket.balance ?? options.readiness?.polymarket.collateralBalanceNormalized ?? null)
+        : (options.readiness?.kalshi.balance ?? null);
     return {
       ...fallback,
       connectionStatus: "reconnecting",
@@ -598,7 +679,10 @@ export async function accountBackedTradingActivity(
 ): Promise<TradingActivitySnapshot> {
   const [kalshi, polymarket] = await Promise.all([
     accountBackedPlatformActivity("kalshi", fallback.kalshi, { ...options, history: fallback.kalshi.history }),
-    accountBackedPlatformActivity("polymarket", fallback.polymarket, { ...options, history: fallback.polymarket.history }),
+    accountBackedPlatformActivity("polymarket", fallback.polymarket, {
+      ...options,
+      history: fallback.polymarket.history,
+    }),
   ]);
   return { kalshi, polymarket };
 }

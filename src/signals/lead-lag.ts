@@ -78,7 +78,7 @@ function microprice(bid: number | null, ask: number | null, bidSize: number, ask
 
 function liquidity(depth: number, spread: number | null, requiredSize: number): number | null {
   if (spread == null || spread <= 0) return depth / Math.max(1, requiredSize);
-  return (depth / Math.max(1, requiredSize)) / Math.max(spread, 0.01);
+  return depth / Math.max(1, requiredSize) / Math.max(spread, 0.01);
 }
 
 function ofi(previous: BookHistorySample | undefined, next: Omit<BookHistorySample, "ofi">): number | null {
@@ -98,7 +98,10 @@ function ofi(previous: BookHistorySample | undefined, next: Omit<BookHistorySamp
   return roundMetric(bidContribution + askContribution, 4);
 }
 
-function contractLevels(contract: BinaryContract, direction: LegDirection): {
+function contractLevels(
+  contract: BinaryContract,
+  direction: LegDirection,
+): {
   bid: number | null;
   ask: number | null;
   bidLevels: BookLevel[] | undefined;
@@ -106,20 +109,25 @@ function contractLevels(contract: BinaryContract, direction: LegDirection): {
 } {
   return direction === "yes"
     ? {
-      bid: contract.yesBid,
-      ask: contract.yesAsk,
-      bidLevels: contract.yesBidLevels,
-      askLevels: contract.yesAskLevels,
-    }
+        bid: contract.yesBid,
+        ask: contract.yesAsk,
+        bidLevels: contract.yesBidLevels,
+        askLevels: contract.yesAskLevels,
+      }
     : {
-      bid: contract.noBid,
-      ask: contract.noAsk,
-      bidLevels: contract.noBidLevels,
-      askLevels: contract.noAskLevels,
-    };
+        bid: contract.noBid,
+        ask: contract.noAsk,
+        bidLevels: contract.noBidLevels,
+        askLevels: contract.noAskLevels,
+      };
 }
 
-function makeSample(contract: BinaryContract, direction: LegDirection, requiredSize: number, timestamp = contract.updatedAt): Omit<BookHistorySample, "ofi"> {
+function makeSample(
+  contract: BinaryContract,
+  direction: LegDirection,
+  requiredSize: number,
+  timestamp = contract.updatedAt,
+): Omit<BookHistorySample, "ofi"> {
   const levels = contractLevels(contract, direction);
   const bidSize = firstLevelSize(levels.bidLevels);
   const askSize = firstLevelSize(levels.askLevels);
@@ -167,9 +175,17 @@ export class RollingBookHistory {
     this.samples.set(key, existing);
   }
 
-  get(venue: Venue, contractId: string, direction: LegDirection, nowMs: number, lookbackMs: number): BookHistorySample[] {
+  get(
+    venue: Venue,
+    contractId: string,
+    direction: LegDirection,
+    nowMs: number,
+    lookbackMs: number,
+  ): BookHistorySample[] {
     const minTimestamp = nowMs - lookbackMs;
-    return (this.samples.get(historyKey(venue, contractId, direction)) ?? []).filter((sample) => sample.timestamp >= minTimestamp && sample.timestamp <= nowMs);
+    return (this.samples.get(historyKey(venue, contractId, direction)) ?? []).filter(
+      (sample) => sample.timestamp >= minTimestamp && sample.timestamp <= nowMs,
+    );
   }
 }
 
@@ -189,28 +205,43 @@ function average(values: Array<number | null | undefined>): number | null {
 }
 
 function signedAverageMove(windows: LeadLagWindowSnapshot[], venue: Venue): number | null {
-  return average(windows.map((window) => venue === "kalshi" ? window.kalshiMove : window.polymarketMove));
+  return average(windows.map((window) => (venue === "kalshi" ? window.kalshiMove : window.polymarketMove)));
 }
 
 function windowSnapshot(windowMs: number, history: LeadLagHistory, nowMs: number): LeadLagWindowSnapshot {
-  const kalshiSamples = history.kalshi.filter((sample) => sample.timestamp >= nowMs - windowMs && sample.timestamp <= nowMs);
-  const polymarketSamples = history.polymarket.filter((sample) => sample.timestamp >= nowMs - windowMs && sample.timestamp <= nowMs);
+  const kalshiSamples = history.kalshi.filter(
+    (sample) => sample.timestamp >= nowMs - windowMs && sample.timestamp <= nowMs,
+  );
+  const polymarketSamples = history.polymarket.filter(
+    (sample) => sample.timestamp >= nowMs - windowMs && sample.timestamp <= nowMs,
+  );
   const kalshiBase = kalshiSamples[0];
   const polymarketBase = polymarketSamples[0];
   const kalshiLast = kalshiSamples[kalshiSamples.length - 1];
   const polymarketLast = polymarketSamples[polymarketSamples.length - 1];
-  const kalshiMove = kalshiBase?.microprice == null || kalshiLast?.microprice == null ? null : kalshiLast.microprice - kalshiBase.microprice;
-  const polymarketMove = polymarketBase?.microprice == null || polymarketLast?.microprice == null ? null : polymarketLast.microprice - polymarketBase.microprice;
+  const kalshiMove =
+    kalshiBase?.microprice == null || kalshiLast?.microprice == null
+      ? null
+      : kalshiLast.microprice - kalshiBase.microprice;
+  const polymarketMove =
+    polymarketBase?.microprice == null || polymarketLast?.microprice == null
+      ? null
+      : polymarketLast.microprice - polymarketBase.microprice;
   const firstKalshiMoveAtMs = materialMoveAt(kalshiSamples, kalshiBase);
   const firstPolymarketMoveAtMs = materialMoveAt(polymarketSamples, polymarketBase);
   let leaderVenue: LeadLagVenue = "none";
   if (firstKalshiMoveAtMs != null && firstPolymarketMoveAtMs != null) {
-    if (Math.abs(firstKalshiMoveAtMs - firstPolymarketMoveAtMs) >= 2) leaderVenue = firstKalshiMoveAtMs < firstPolymarketMoveAtMs ? "kalshi" : "polymarket";
+    if (Math.abs(firstKalshiMoveAtMs - firstPolymarketMoveAtMs) >= 2)
+      leaderVenue = firstKalshiMoveAtMs < firstPolymarketMoveAtMs ? "kalshi" : "polymarket";
   } else if (firstKalshiMoveAtMs != null) {
     leaderVenue = "kalshi";
   } else if (firstPolymarketMoveAtMs != null) {
     leaderVenue = "polymarket";
-  } else if (kalshiMove != null && polymarketMove != null && Math.max(Math.abs(kalshiMove), Math.abs(polymarketMove)) >= MATERIAL_MOVE) {
+  } else if (
+    kalshiMove != null &&
+    polymarketMove != null &&
+    Math.max(Math.abs(kalshiMove), Math.abs(polymarketMove)) >= MATERIAL_MOVE
+  ) {
     leaderVenue = Math.abs(kalshiMove) > Math.abs(polymarketMove) ? "kalshi" : "polymarket";
   }
 
@@ -239,10 +270,12 @@ function dominantLeader(windows: LeadLagWindowSnapshot[]): LeadLagVenue {
 
 function lagMsEstimate(windows: LeadLagWindowSnapshot[], leaderVenue: LeadLagVenue): number | null {
   if (leaderVenue === "none") return null;
-  const diffs = windows.map((window) => {
-    if (window.firstKalshiMoveAtMs == null || window.firstPolymarketMoveAtMs == null) return null;
-    return Math.abs(window.firstKalshiMoveAtMs - window.firstPolymarketMoveAtMs);
-  }).filter((value): value is number => value != null && Number.isFinite(value));
+  const diffs = windows
+    .map((window) => {
+      if (window.firstKalshiMoveAtMs == null || window.firstPolymarketMoveAtMs == null) return null;
+      return Math.abs(window.firstKalshiMoveAtMs - window.firstPolymarketMoveAtMs);
+    })
+    .filter((value): value is number => value != null && Number.isFinite(value));
   if (diffs.length === 0) return null;
   diffs.sort((left, right) => left - right);
   return diffs[Math.floor(diffs.length / 2)];
@@ -250,8 +283,13 @@ function lagMsEstimate(windows: LeadLagWindowSnapshot[], leaderVenue: LeadLagVen
 
 function cheapVenue(quoteSnapshot: QuoteSnapshot, laggingVenue: Venue | null): Venue | null {
   if (laggingVenue) return laggingVenue;
-  const kalshiPrice = quoteSnapshot.kalshi?.vwap ?? quoteSnapshot.kalshi?.maxBuyPrice ?? quoteSnapshot.kalshi?.worstAsk ?? null;
-  const polymarketPrice = quoteSnapshot.polymarket?.vwap ?? quoteSnapshot.polymarket?.maxBuyPrice ?? quoteSnapshot.polymarket?.worstAsk ?? null;
+  const kalshiPrice =
+    quoteSnapshot.kalshi?.vwap ?? quoteSnapshot.kalshi?.maxBuyPrice ?? quoteSnapshot.kalshi?.worstAsk ?? null;
+  const polymarketPrice =
+    quoteSnapshot.polymarket?.vwap ??
+    quoteSnapshot.polymarket?.maxBuyPrice ??
+    quoteSnapshot.polymarket?.worstAsk ??
+    null;
   if (kalshiPrice == null || polymarketPrice == null) return null;
   return polymarketPrice <= kalshiPrice ? "polymarket" : "kalshi";
 }
@@ -262,22 +300,30 @@ export function leadLagBlockReason(snapshot: LeadLagSnapshot | null | undefined)
 
 export function scoreLeadLag(input: ScoreLeadLagInput): LeadLagSnapshot {
   const { candidate, quoteSnapshot, config, history, nowMs } = input;
-  const windowsMs = config.liveLeadLagWindowsMs.length > 0 ? config.liveLeadLagWindowsMs : [1_000, 5_000, 15_000, 60_000];
+  const windowsMs =
+    config.liveLeadLagWindowsMs.length > 0 ? config.liveLeadLagWindowsMs : [1_000, 5_000, 15_000, 60_000];
   const windows = windowsMs.map((windowMs) => windowSnapshot(windowMs, history, nowMs));
   const leaderVenue = dominantLeader(windows);
-  const laggingVenue: Venue | null = leaderVenue === "kalshi" ? "polymarket" : leaderVenue === "polymarket" ? "kalshi" : null;
-  const leaderVotes = leaderVenue === "none" ? 0 : windows.filter((window) => window.leaderVenue === leaderVenue).length;
-  const usableWindows = windows.filter((window) => window.kalshiUpdateCount > 0 && window.polymarketUpdateCount > 0).length;
+  const laggingVenue: Venue | null =
+    leaderVenue === "kalshi" ? "polymarket" : leaderVenue === "polymarket" ? "kalshi" : null;
+  const leaderVotes =
+    leaderVenue === "none" ? 0 : windows.filter((window) => window.leaderVenue === leaderVenue).length;
+  const usableWindows = windows.filter(
+    (window) => window.kalshiUpdateCount > 0 && window.polymarketUpdateCount > 0,
+  ).length;
   const kalshiMove = signedAverageMove(windows, "kalshi") ?? 0;
   const polymarketMove = signedAverageMove(windows, "polymarket") ?? 0;
   const moveMagnitude = Math.max(Math.abs(kalshiMove), Math.abs(polymarketMove));
-  const updateBalance = usableWindows === 0 ? 0 : Math.min(
-    1,
-    Math.min(
-      average(windows.map((window) => window.kalshiUpdateCount)) ?? 0,
-      average(windows.map((window) => window.polymarketUpdateCount)) ?? 0,
-    ) / 3,
-  );
+  const updateBalance =
+    usableWindows === 0
+      ? 0
+      : Math.min(
+          1,
+          Math.min(
+            average(windows.map((window) => window.kalshiUpdateCount)) ?? 0,
+            average(windows.map((window) => window.polymarketUpdateCount)) ?? 0,
+          ) / 3,
+        );
   const voteConfidence = windows.length === 0 ? 0 : leaderVotes / windows.length;
   const confidence = clamp(voteConfidence * clamp(moveMagnitude / 0.02, 0.25, 1) * clamp(updateBalance, 0.25, 1));
   const cheapLegVenue = cheapVenue(quoteSnapshot, laggingVenue);
@@ -289,19 +335,22 @@ export function scoreLeadLag(input: ScoreLeadLagInput): LeadLagSnapshot {
   const adverseSelectionScore = clamp(polymarketLeadingRisk + bothMovingAgainstEntry - stalenessScore * 0.35);
   const gateEnabled = config.liveLeadLagGateEnabled;
   const shadowMode = !gateEnabled;
-  const gatePassed = !gateEnabled
-    || confidence < config.liveLeadLagMinConfidence
-    || adverseSelectionScore <= config.liveLeadLagMaxAdverseSelectionScore;
-  const blockReason = gateEnabled && !gatePassed
-    ? `lead-lag adverse selection score ${adverseSelectionScore.toFixed(2)} exceeds ${config.liveLeadLagMaxAdverseSelectionScore.toFixed(2)}`
-    : null;
+  const gatePassed =
+    !gateEnabled ||
+    confidence < config.liveLeadLagMinConfidence ||
+    adverseSelectionScore <= config.liveLeadLagMaxAdverseSelectionScore;
+  const blockReason =
+    gateEnabled && !gatePassed
+      ? `lead-lag adverse selection score ${adverseSelectionScore.toFixed(2)} exceeds ${config.liveLeadLagMaxAdverseSelectionScore.toFixed(2)}`
+      : null;
   const reasons: string[] = [];
   const averageUpdatesPerVenue = Math.min(
     average(windows.map((window) => window.kalshiUpdateCount)) ?? 0,
     average(windows.map((window) => window.polymarketUpdateCount)) ?? 0,
   );
   if (usableWindows < 2 || averageUpdatesPerVenue < 2) reasons.push("Book history is thin");
-  if (leaderVenue !== "none") reasons.push(`${leaderVenue === "polymarket" ? "Polymarket" : "Kalshi"} appears to lead recent book movement`);
+  if (leaderVenue !== "none")
+    reasons.push(`${leaderVenue === "polymarket" ? "Polymarket" : "Kalshi"} appears to lead recent book movement`);
   if (laggingVenue === "polymarket") reasons.push("Polymarket leg looks stale/lagging");
   if (bothMovingAgainstEntry > 0) reasons.push("Both venue microprices moved against entry");
   if (blockReason) reasons.push(blockReason);

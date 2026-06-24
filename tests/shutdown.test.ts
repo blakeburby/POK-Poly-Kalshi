@@ -27,7 +27,10 @@ test("idempotent shutdown propagates the first cleanup failure without rerunning
   });
 
   const results = await Promise.allSettled([shutdown(), shutdown()]);
-  assert.deepEqual(results.map((result) => result.status), ["rejected", "rejected"]);
+  assert.deepEqual(
+    results.map((result) => result.status),
+    ["rejected", "rejected"],
+  );
   assert.equal(results[0].status === "rejected" ? results[0].reason : null, error);
   assert.equal(results[1].status === "rejected" ? results[1].reason : null, error);
   await assert.rejects(() => shutdown(), error);

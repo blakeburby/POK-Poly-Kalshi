@@ -6,8 +6,7 @@
 export type StatusTone = "live" | "stale" | "halt" | "idle" | "info";
 export type Sign = "up" | "down" | "flat";
 
-const FINITE = (v: number | null | undefined): v is number =>
-  typeof v === "number" && Number.isFinite(v);
+const FINITE = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v);
 
 export function signOf(v: number | null | undefined, eps = 1e-9): Sign {
   if (!FINITE(v)) return "flat";

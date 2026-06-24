@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildFillQualityCalibrationReport, type FillQualityCalibrationRow } from "../src/execution/fill-quality-calibration";
+import {
+  buildFillQualityCalibrationReport,
+  type FillQualityCalibrationRow,
+} from "../src/execution/fill-quality-calibration";
 import type { FillQualitySnapshot, SignalAction } from "../src/types";
 
 const startedAt = Date.UTC(2026, 4, 20, 12, 0, 0);
@@ -96,24 +99,28 @@ function row(input: {
 test("fill-quality calibration buckets predictions and passes promotion when shadow gate removes bad attempts", () => {
   const rows: FillQualityCalibrationRow[] = [];
   for (let index = 0; index < 100; index += 1) {
-    rows.push(row({
-      id: index + 1,
-      probability: 0.22,
-      xev: index < 10 ? 0.02 : index < 90 ? 0.004 : 0.02,
-      action: index < 10 ? "filled" : "failed",
-      realized: index < 10 ? 0.03 : -0.15,
-      status: index < 10 ? "filled" : "failed",
-    }));
+    rows.push(
+      row({
+        id: index + 1,
+        probability: 0.22,
+        xev: index < 10 ? 0.02 : index < 90 ? 0.004 : 0.02,
+        action: index < 10 ? "filled" : "failed",
+        realized: index < 10 ? 0.03 : -0.15,
+        status: index < 10 ? "filled" : "failed",
+      }),
+    );
   }
   for (let index = 0; index < 100; index += 1) {
-    rows.push(row({
-      id: index + 101,
-      probability: 0.82,
-      xev: 0.025,
-      action: index < 60 ? "filled" : "failed",
-      realized: index < 60 ? 0.04 : -0.08,
-      status: index < 60 ? "filled" : "failed",
-    }));
+    rows.push(
+      row({
+        id: index + 101,
+        probability: 0.82,
+        xev: 0.025,
+        action: index < 60 ? "filled" : "failed",
+        realized: index < 60 ? 0.04 : -0.08,
+        status: index < 60 ? "filled" : "failed",
+      }),
+    );
   }
 
   const report = buildFillQualityCalibrationReport(rows, undefined, new Date(startedAt));
@@ -131,13 +138,15 @@ test("fill-quality calibration buckets predictions and passes promotion when sha
 });
 
 test("fill-quality calibration blocks promotion on insufficient samples and weak directionality", () => {
-  const rows = Array.from({ length: 20 }, (_, index) => row({
-    id: index + 1,
-    probability: index % 2 === 0 ? 0.8 : 0.2,
-    xev: 0.02,
-    action: "filled",
-    realized: 0.02,
-  }));
+  const rows = Array.from({ length: 20 }, (_, index) =>
+    row({
+      id: index + 1,
+      probability: index % 2 === 0 ? 0.8 : 0.2,
+      xev: 0.02,
+      action: "filled",
+      realized: 0.02,
+    }),
+  );
 
   const report = buildFillQualityCalibrationReport(rows, { minSamples: 200 }, new Date(startedAt));
 

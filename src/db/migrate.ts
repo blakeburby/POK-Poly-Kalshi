@@ -18,7 +18,10 @@ export async function runMigrations(pool: Pool, migrationsDir = path.join(__dirn
 
     const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
     for (const file of files) {
-      const existing = await client.query<{ version: string }>("SELECT version FROM schema_migrations WHERE version = $1", [file]);
+      const existing = await client.query<{ version: string }>(
+        "SELECT version FROM schema_migrations WHERE version = $1",
+        [file],
+      );
       if (existing.rows.length > 0) continue;
       const sql = await readFile(path.join(migrationsDir, file), "utf8");
       await client.query("BEGIN");

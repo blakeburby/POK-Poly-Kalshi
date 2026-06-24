@@ -65,13 +65,30 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
     <ViewScroll>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
         <StatTile label="Fill Rate" value={fmtPct(ea.fillRate)} tone={(ea.fillRate ?? 0) >= 0.6 ? "up" : "amber"} />
-        <StatTile label="Exact-Pair" value={fmtPct(ea.exactPairRate)} tone={(ea.exactPairRate ?? 0) >= 0.6 ? "up" : "amber"} sub="hedge complete" />
+        <StatTile
+          label="Exact-Pair"
+          value={fmtPct(ea.exactPairRate)}
+          tone={(ea.exactPairRate ?? 0) >= 0.6 ? "up" : "amber"}
+          sub="hedge complete"
+        />
         <StatTile label="Partial Fill" value={fmtPct(ea.partialRate)} tone="amber" />
-        <StatTile label="Failed/Reject" value={fmtPct(ea.rejectionRate)} tone={(ea.rejectionRate ?? 0) > 0.1 ? "down" : "neutral"} />
-        <StatTile label="Avg Slippage" value={fmtCents(ea.avgSlippage, true)} tone={(ea.avgSlippage ?? 0) > 0.01 ? "amber" : "up"} />
+        <StatTile
+          label="Failed/Reject"
+          value={fmtPct(ea.rejectionRate)}
+          tone={(ea.rejectionRate ?? 0) > 0.1 ? "down" : "neutral"}
+        />
+        <StatTile
+          label="Avg Slippage"
+          value={fmtCents(ea.avgSlippage, true)}
+          tone={(ea.avgSlippage ?? 0) > 0.01 ? "amber" : "up"}
+        />
         <StatTile label="Time-to-Fill" value={fmtMs(ea.avgTimeToFillMs)} tone="neutral" />
         <StatTile label="Kalshi RTT" value={fmtMs(ea.avgKalshiRtt)} tone="neutral" />
-        <StatTile label="Polymkt RTT" value={fmtMs(ea.avgPolyRtt)} tone={(ea.avgPolyRtt ?? 0) > 300 ? "amber" : "neutral"} />
+        <StatTile
+          label="Polymkt RTT"
+          value={fmtMs(ea.avgPolyRtt)}
+          tone={(ea.avgPolyRtt ?? 0) > 300 ? "amber" : "neutral"}
+        />
       </div>
 
       <Grid>
@@ -89,14 +106,33 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
           dot="live"
           span={4}
           bodyClassName="h-[280px] p-2"
-          right={<span className="font-mono text-[10px] tabular-nums text-cyan">{cap.retention != null ? `${(cap.retention * 100).toFixed(0)}% retained` : "–"}</span>}
+          right={
+            <span className="font-mono text-[10px] tabular-nums text-cyan">
+              {cap.retention != null ? `${(cap.retention * 100).toFixed(0)}% retained` : "–"}
+            </span>
+          }
         >
           <EChart option={waterfallOption(wf, (v) => fmtCents(v, true))} />
         </GridPanel>
         <GridPanel title="Venue Latency Profile" dot="info" span={3} bodyClassName="flex flex-col justify-center gap-3">
-          <LatencyRow label="Kalshi RTT" p50={firstFeature(sigs, "kalshiRttP50Ms")} p95={firstFeature(sigs, "kalshiRttP95Ms")} tone="kalshi" />
-          <LatencyRow label="Polymkt RTT" p50={firstFeature(sigs, "polymarketRttP50Ms")} p95={firstFeature(sigs, "polymarketRttP95Ms")} tone="poly" />
-          <LatencyRow label="P Confirm" p50={firstFeature(sigs, "polymarketConfirmationP95Ms")} p95={firstFeature(sigs, "polymarketConfirmationP95Ms")} tone="poly" />
+          <LatencyRow
+            label="Kalshi RTT"
+            p50={firstFeature(sigs, "kalshiRttP50Ms")}
+            p95={firstFeature(sigs, "kalshiRttP95Ms")}
+            tone="kalshi"
+          />
+          <LatencyRow
+            label="Polymkt RTT"
+            p50={firstFeature(sigs, "polymarketRttP50Ms")}
+            p95={firstFeature(sigs, "polymarketRttP95Ms")}
+            tone="poly"
+          />
+          <LatencyRow
+            label="P Confirm"
+            p50={firstFeature(sigs, "polymarketConfirmationP95Ms")}
+            p95={firstFeature(sigs, "polymarketConfirmationP95Ms")}
+            tone="poly"
+          />
           <div className="mt-1 flex items-center justify-between border-t border-line/60 pt-2">
             <span className="font-mono text-[10px] uppercase tracking-wide text-fg-muted">Submit Skew</span>
             <span className="font-mono text-[12px] tabular-nums text-fg">{fmtMs(ea.avgSubmitSkew)}</span>
@@ -105,14 +141,21 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
       </Grid>
 
       <Grid>
-        <GridPanel title="Realized Slippage vs Time · by Outcome" dot="stale" span={8} bodyClassName="h-[240px] p-2" right={<Legend />}>
+        <GridPanel
+          title="Realized Slippage vs Time · by Outcome"
+          dot="stale"
+          span={8}
+          bodyClassName="h-[240px] p-2"
+          right={<Legend />}
+        >
           {scatter.length ? (
             <EChart
               option={scatterOption({
                 points: scatter,
                 xName: "time",
                 yName: "slippage",
-                xFmt: (v) => new Date(v).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
+                xFmt: (v) =>
+                  new Date(v).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
                 yFmt: (v) => fmtCents(v, true),
                 markLineY: 0,
               })}
@@ -130,14 +173,44 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
         <GridPanel title="Lead-Lag · Adverse Selection" dot="info" span={6} bodyClassName="p-0">
           <LeadLagTable snap={snap} />
         </GridPanel>
-        <GridPanel title="Execution-Quality Gate (recent window)" dot="live" span={6} bodyClassName="flex flex-col gap-2.5">
-          <GateRow label="Exact-Pair Fill Rate" value={fmtPct(snap.execution?.executionQuality?.exactPairFillRate)} bar={snap.execution?.executionQuality?.exactPairFillRate ?? 0} good />
-          <GateRow label="Mismatch Rate" value={fmtPct(snap.execution?.executionQuality?.mismatchRate)} bar={snap.execution?.executionQuality?.mismatchRate ?? 0} />
-          <GateRow label="PM Timeout Rate" value={fmtPct(snap.execution?.executionQuality?.polymarketTimeoutRate)} bar={snap.execution?.executionQuality?.polymarketTimeoutRate ?? 0} />
+        <GridPanel
+          title="Execution-Quality Gate (recent window)"
+          dot="live"
+          span={6}
+          bodyClassName="flex flex-col gap-2.5"
+        >
+          <GateRow
+            label="Exact-Pair Fill Rate"
+            value={fmtPct(snap.execution?.executionQuality?.exactPairFillRate)}
+            bar={snap.execution?.executionQuality?.exactPairFillRate ?? 0}
+            good
+          />
+          <GateRow
+            label="Mismatch Rate"
+            value={fmtPct(snap.execution?.executionQuality?.mismatchRate)}
+            bar={snap.execution?.executionQuality?.mismatchRate ?? 0}
+          />
+          <GateRow
+            label="PM Timeout Rate"
+            value={fmtPct(snap.execution?.executionQuality?.polymarketTimeoutRate)}
+            bar={snap.execution?.executionQuality?.polymarketTimeoutRate ?? 0}
+          />
           <div className="grid grid-cols-3 gap-2 border-t border-line/60 pt-2.5">
-            <StatTile label="Est. Edge" value={fmtCents(snap.execution?.executionQuality?.estimatedExecutableEdge)} tone="up" />
-            <StatTile label="Avg PM RTT" value={fmtMs(snap.execution?.executionQuality?.avgPolymarketRttMs)} tone="neutral" />
-            <StatTile label="Mismatch $" value={fmtUsd(snap.execution?.executionQuality?.avgMismatchCostDollars ?? 0)} tone="amber" />
+            <StatTile
+              label="Est. Edge"
+              value={fmtCents(snap.execution?.executionQuality?.estimatedExecutableEdge)}
+              tone="up"
+            />
+            <StatTile
+              label="Avg PM RTT"
+              value={fmtMs(snap.execution?.executionQuality?.avgPolymarketRttMs)}
+              tone="neutral"
+            />
+            <StatTile
+              label="Mismatch $"
+              value={fmtUsd(snap.execution?.executionQuality?.avgMismatchCostDollars ?? 0)}
+              tone="amber"
+            />
           </div>
         </GridPanel>
       </Grid>
@@ -153,7 +226,17 @@ function firstFeature(sigs: DashboardSnapshot["recentSignals"], key: string): nu
   return null;
 }
 
-function LatencyRow({ label, p50, p95, tone }: { label: string; p50: number | null; p95: number | null; tone: "kalshi" | "poly" }) {
+function LatencyRow({
+  label,
+  p50,
+  p95,
+  tone,
+}: {
+  label: string;
+  p50: number | null;
+  p95: number | null;
+  tone: "kalshi" | "poly";
+}) {
   const max = 600;
   return (
     <div>
@@ -184,9 +267,15 @@ function GateRow({ label, value, bar, good }: { label: string; value: string; ba
 function Legend() {
   return (
     <div className="hidden items-center gap-2.5 font-mono text-[9px] uppercase tracking-wide text-fg-muted sm:flex">
-      <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-up" /> exact</span>
-      <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-amber" /> partial</span>
-      <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-down" /> fail</span>
+      <span className="flex items-center gap-1">
+        <span className="size-1.5 rounded-full bg-up" /> exact
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="size-1.5 rounded-full bg-amber" /> partial
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="size-1.5 rounded-full bg-down" /> fail
+      </span>
     </div>
   );
 }
@@ -211,13 +300,36 @@ function LeadLagTable({ snap }: { snap: DashboardSnapshot }) {
             const ll = s.leadLagSnapshot!;
             return (
               <tr key={s.id} className="border-b border-line/40 hover:bg-surface-2/40">
-                <td className="px-3 py-1.5 text-fg-muted">{new Date(s.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}</td>
+                <td className="px-3 py-1.5 text-fg-muted">
+                  {new Date(s.updatedAt).toLocaleTimeString("en-US", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                  })}
+                </td>
                 <td className="px-3 py-1.5">
-                  <span className={cn(ll.leaderVenue === "kalshi" ? "text-kalshi" : ll.leaderVenue === "polymarket" ? "text-poly" : "text-fg-muted")}>{ll.leaderVenue}</span>
+                  <span
+                    className={cn(
+                      ll.leaderVenue === "kalshi"
+                        ? "text-kalshi"
+                        : ll.leaderVenue === "polymarket"
+                          ? "text-poly"
+                          : "text-fg-muted",
+                    )}
+                  >
+                    {ll.leaderVenue}
+                  </span>
                 </td>
                 <td className="px-3 py-1.5 text-right text-fg-secondary">{fmtMs(ll.lagMsEstimate)}</td>
                 <td className="px-3 py-1.5 text-right text-fg">{fmtPct(ll.confidence)}</td>
-                <td className={cn("px-3 py-1.5 text-right", ll.adverseSelectionScore > 0.7 ? "text-down" : "text-fg-secondary")}>{fmtPct(ll.adverseSelectionScore)}</td>
+                <td
+                  className={cn(
+                    "px-3 py-1.5 text-right",
+                    ll.adverseSelectionScore > 0.7 ? "text-down" : "text-fg-secondary",
+                  )}
+                >
+                  {fmtPct(ll.adverseSelectionScore)}
+                </td>
               </tr>
             );
           })}

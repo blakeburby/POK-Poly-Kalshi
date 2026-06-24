@@ -1,4 +1,10 @@
-import type { LiveKalshiHedgeOrderMode, LiveKalshiHedgeTimeInForce, LiveKalshiPrearmPricePolicy, LiveOrderPlacementMode, LivePartialFillLockMode } from "./types";
+import type {
+  LiveKalshiHedgeOrderMode,
+  LiveKalshiHedgeTimeInForce,
+  LiveKalshiPrearmPricePolicy,
+  LiveOrderPlacementMode,
+  LivePartialFillLockMode,
+} from "./types";
 
 export interface AppConfig {
   port: number;
@@ -182,22 +188,26 @@ function envNumberList(env: NodeJS.ProcessEnv, key: string, fallback: number[]):
   const raw = envString(env, key);
   if (!raw) return fallback;
   const parsed = raw.split(",").map((part) => Number(part.trim()));
-  if (parsed.some((value) => !Number.isFinite(value))) throw new Error(`${key} must be a comma-separated list of numbers`);
+  if (parsed.some((value) => !Number.isFinite(value)))
+    throw new Error(`${key} must be a comma-separated list of numbers`);
   return parsed;
 }
 
 function envLiveOrderPlacementMode(env: NodeJS.ProcessEnv): LiveOrderPlacementMode {
   const value = envString(env, "LIVE_ORDER_PLACEMENT_MODE", "polymarket_first_exact").toLowerCase();
   if (
-    value === "parallel_market"
-    || value === "parallel_quick"
-    || value === "parallel_fok"
-    || value === "parallel_fak"
-    || value === "parallel_limit_rest"
-    || value === "polymarket_first_exact"
-    || value === "kalshi_first_exact"
-  ) return value;
-  throw new Error("LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_quick, parallel_fok, parallel_fak, parallel_limit_rest, polymarket_first_exact, or kalshi_first_exact");
+    value === "parallel_market" ||
+    value === "parallel_quick" ||
+    value === "parallel_fok" ||
+    value === "parallel_fak" ||
+    value === "parallel_limit_rest" ||
+    value === "polymarket_first_exact" ||
+    value === "kalshi_first_exact"
+  )
+    return value;
+  throw new Error(
+    "LIVE_ORDER_PLACEMENT_MODE must be parallel_market, parallel_quick, parallel_fok, parallel_fak, parallel_limit_rest, polymarket_first_exact, or kalshi_first_exact",
+  );
 }
 
 function envLiveKalshiHedgeOrderMode(env: NodeJS.ProcessEnv): LiveKalshiHedgeOrderMode {
@@ -252,8 +262,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // cross-execution size mix-up that would misclassify fills.
     throw new Error("LIVE_DYNAMIC_SIZING_ENABLED=true requires ARB_EXECUTION_CONCURRENCY=1");
   }
-  if (livePolymarketFirstMinFillShares <= 0 || livePolymarketFirstMaxFillShares <= 0 || livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares) {
-    throw new Error("LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES");
+  if (
+    livePolymarketFirstMinFillShares <= 0 ||
+    livePolymarketFirstMaxFillShares <= 0 ||
+    livePolymarketFirstMinFillShares > livePolymarketFirstMaxFillShares
+  ) {
+    throw new Error(
+      "LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES must be greater than 0 and less than or equal to LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES",
+    );
   }
   // Tick-aware hedge loss budget (per-contract price units, NOT total dollars). The hedge cap is
   // derived as `1 - firstFill - fee - feeBuffer + liveHedgeMaxLossDollars`, and the post-fill loss
@@ -302,7 +318,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     kalshiFixTargetCompId: envString(env, "KALSHI_FIX_TARGET_COMP_ID", "KalshiNR"),
     kalshiFixHeartbeatSeconds: envNumber(env, "KALSHI_FIX_HEARTBEAT_SECONDS", 10),
     kalshiFixConnectTimeoutMs: envNumber(env, "KALSHI_FIX_CONNECT_TIMEOUT_MS", 1_500),
-    kalshiFixOrderResponseTimeoutMs: envNumber(env, "KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS", envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500)),
+    kalshiFixOrderResponseTimeoutMs: envNumber(
+      env,
+      "KALSHI_FIX_ORDER_RESPONSE_TIMEOUT_MS",
+      envNumber(env, "LIVE_ORDER_TIMEOUT_MS", 2_500),
+    ),
     kalshiFixUseDollars: envBoolean(env, "KALSHI_FIX_USE_DOLLARS", true),
     kalshiFixEnableIocCancelReport: envBoolean(env, "KALSHI_FIX_ENABLE_IOC_CANCEL_REPORT", true),
     kalshiFixPreserveOriginalOrderQty: envBoolean(env, "KALSHI_FIX_PRESERVE_ORIGINAL_ORDER_QTY", true),
@@ -323,7 +343,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     polymarketLiveDataWsUrl: envString(env, "POLYMARKET_LIVE_DATA_WS_URL", "wss://ws-live-data.polymarket.com"),
     polymarketPriceToBeatSymbol: envString(env, "POLYMARKET_PRICE_TO_BEAT_SYMBOL", "btc/usd"),
-    polymarketDiscoveryWindowOffsets: envNumberList(env, "POLYMARKET_DISCOVERY_WINDOW_OFFSETS", [-1, 0, 1, 2, 3, 4, 5, 6]),
+    polymarketDiscoveryWindowOffsets: envNumberList(
+      env,
+      "POLYMARKET_DISCOVERY_WINDOW_OFFSETS",
+      [-1, 0, 1, 2, 3, 4, 5, 6],
+    ),
     polymarketPriceCaptureToleranceMs: envNumber(env, "POLYMARKET_PRICE_CAPTURE_TOLERANCE_MS", 5_000),
     polymarketMissedOpenBackfill: envBoolean(env, "POLYMARKET_MISSED_OPEN_BACKFILL", true),
     polymarketPrivateKey: envString(env, "POLYMARKET_PRIVATE_KEY"),
@@ -484,7 +508,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // reached the venue and found NO order/trade/open-order ("not_found") is treated as a DEFINITIVE no-fill
     // (a FAK cannot rest, so no evidence == no fill). This auto-resolves settled no-fill timeouts that would
     // otherwise hard-lock for manual reconciliation (the lock-24 gap). Default off = "unknown" stays locked.
-    livePolymarketTimeoutRecoveryResolvesNoFill: envBoolean(env, "LIVE_POLYMARKET_TIMEOUT_RECOVERY_RESOLVES_NO_FILL", false),
+    livePolymarketTimeoutRecoveryResolvesNoFill: envBoolean(
+      env,
+      "LIVE_POLYMARKET_TIMEOUT_RECOVERY_RESOLVES_NO_FILL",
+      false,
+    ),
     liveExactExposureRequired: envBoolean(env, "LIVE_EXACT_EXPOSURE_REQUIRED", false),
     liveExecutionQualityGateEnabled: envBoolean(env, "LIVE_EXECUTION_QUALITY_GATE_ENABLED", true),
     liveExecutionQualityLookbackMs: envNumber(env, "LIVE_EXECUTION_QUALITY_LOOKBACK_MS", 30 * 60 * 1_000),
@@ -522,7 +550,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveAutoUnwindEnabled: envBoolean(env, "LIVE_AUTO_UNWIND_ENABLED", false),
     liveAutoUnwindMaxLossDollars: Math.max(0, envNumber(env, "LIVE_AUTO_UNWIND_MAX_LOSS_DOLLARS", 0.05)),
     liveAutoUnwindTimeoutMs: Math.max(1, envNumber(env, "LIVE_AUTO_UNWIND_TIMEOUT_MS", 1_500)),
-    kalshiUserWsUrl: envString(env, "KALSHI_USER_WS_URL", envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2")),
+    kalshiUserWsUrl: envString(
+      env,
+      "KALSHI_USER_WS_URL",
+      envString(env, "KALSHI_WS_URL", "wss://api.elections.kalshi.com/trade-api/ws/v2"),
+    ),
     polymarketUserWsUrl: envString(env, "POLYMARKET_USER_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),
     dashboardApiToken: envString(env, "DASHBOARD_API_TOKEN"),
     dashboardRealtimeSecret: envString(env, "DASHBOARD_REALTIME_SECRET"),

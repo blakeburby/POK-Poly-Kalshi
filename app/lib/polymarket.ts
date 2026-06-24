@@ -1,4 +1,9 @@
-import type { TradingHistoryRow, TradingOpenOrder, TradingPortfolioSummary, TradingPosition } from "../../types/trading";
+import type {
+  TradingHistoryRow,
+  TradingOpenOrder,
+  TradingPortfolioSummary,
+  TradingPosition,
+} from "../../types/trading";
 import { fetchTradingActivity } from "./worker-api";
 
 async function polymarketActivity() {

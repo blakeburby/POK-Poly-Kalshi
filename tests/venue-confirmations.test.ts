@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VenueOrderEventHub, type VenueOrderEventInput, type VenueOrderEventWriter } from "../src/db/venue-order-events";
-import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator, type LiveSignalReconciliationStore } from "../src/execution/venue-confirmations";
+import {
+  VenueOrderEventHub,
+  type VenueOrderEventInput,
+  type VenueOrderEventWriter,
+} from "../src/db/venue-order-events";
+import {
+  buildUserStreamReadiness,
+  LiveVenueConfirmationCoordinator,
+  type LiveSignalReconciliationStore,
+} from "../src/execution/venue-confirmations";
 import type { VenueOrderResult } from "../src/execution/live-clients";
 import type { ArbCandidate, ArbLeg, LiveExecutionLock, UserStreamVenueState } from "../src/types";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
@@ -191,10 +199,22 @@ test("confirmation coordinator locks when a known Polymarket settlement later fa
     submittedAtMs: 1_800_000_000_000,
     timeoutMs: 500,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "confirmed");
 
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "failed",
+    fillCount: 5,
+  });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.match(locks.lock?.reason ?? "", /user stream reported failed/);
@@ -222,14 +242,29 @@ test("confirmation coordinator suppresses unsafe-event locks when auto-hardlocks
     submittedAtMs: 1_800_000_000_000,
     timeoutMs: 500,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "confirmed");
 
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "failed",
+    fillCount: 5,
+  });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(locks.lock, null);
-  assert.equal(store.events.some((event) => event.status === "failed"), true);
+  assert.equal(
+    store.events.some((event) => event.status === "failed"),
+    true,
+  );
 });
 
 test("confirmation coordinator does NOT lock on a ZERO-fill failure when flatMissNonBlocking is on (clean flat miss)", async () => {
@@ -255,7 +290,13 @@ test("confirmation coordinator does NOT lock on a ZERO-fill failure when flatMis
   });
   // A FAK that fails to match fills zero shares -> flat, no exposure. This must NOT engage the breaker
   // (the lock-16 / lock-14 false-positive that froze the bot for hours).
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 0 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "failed",
+    fillCount: 0,
+  });
   assert.equal((await pending).status, "failed");
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -282,7 +323,13 @@ test("confirmation coordinator STILL locks on a zero-fill failure when flatMissN
     submittedAtMs: 1_800_000_000_000,
     timeoutMs: 500,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 0 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "failed",
+    fillCount: 0,
+  });
   assert.equal((await pending).status, "failed");
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -311,14 +358,23 @@ test("confirmation coordinator STILL locks on a failure that moved shares (expos
     timeoutMs: 500,
   });
   // A failure that actually moved shares (fillCount 3 > 0) is genuine one-sided exposure -> must hard-lock.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 3 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "failed",
+    fillCount: 3,
+  });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.match(locks.lock?.reason ?? "", /user stream reported failed/);
   assert.equal(locks.lock?.executionGroupId, "group");
 });
 
-function overfillBandCoordinator(locks: MemoryLocks, opts: { flatMissNonBlocking?: boolean; overfillToleranceShares?: number }) {
+function overfillBandCoordinator(
+  locks: MemoryLocks,
+  opts: { flatMissNonBlocking?: boolean; overfillToleranceShares?: number },
+) {
   const hub = new VenueOrderEventHub(new MemoryEventStore());
   const coordinator = new LiveVenueConfirmationCoordinator({
     enabled: true,
@@ -346,7 +402,13 @@ test("confirmation coordinator does NOT lock on a fractional OVERFILL within the
   const { hub, pending } = overfillBandCoordinator(locks, { flatMissNonBlocking: true, overfillToleranceShares: 1 });
   // Polymarket FAK overfilled to 5.054944 (within [5, 6]); the executor floor-hedges 5 + quarantines the
   // ~0.05 residual under the cap. This must NOT freeze the bot after a (near-)complete fill.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.054944 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.054944,
+  });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -357,7 +419,13 @@ test("confirmation coordinator STILL locks on an overfill BEYOND the floor-hedge
   const locks = new MemoryLocks();
   const { hub, pending } = overfillBandCoordinator(locks, { flatMissNonBlocking: true, overfillToleranceShares: 1 });
   // 6.5 > size+tolerance (6) -> excessive, unexpected -> still lock-worthy.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 6.5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 6.5,
+  });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -371,7 +439,13 @@ test("confirmation coordinator does NOT lock on a PARTIAL stream fill at/below t
   // breaker. A genuine underfill (the REST fill itself short) is caught by the executor's own
   // resultFromVenueOrders venue-fill-mismatch lock + exposure-cap quarantine, not by this coordinator.
   const { hub, pending } = overfillBandCoordinator(locks, { flatMissNonBlocking: true, overfillToleranceShares: 1 });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 4.5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 4.5,
+  });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -404,37 +478,73 @@ function statusToleranceCoordinator(opts: { statusTolerant?: boolean; expectedSi
 
 test("C1: a Polymarket 'mined' lifecycle event with an EXACT fill CONFIRMS when statusTolerant is on (was a bogus mismatch -> quarantine)", async () => {
   const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "mined",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "confirmed");
 });
 
 test("C1: a Polymarket 'mined' event with an IN-BAND overfill CONFIRMS when statusTolerant is on", async () => {
   const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 5.16 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "mined",
+    fillCount: 5.16,
+  });
   assert.equal((await pending).status, "confirmed");
 });
 
 test("C1: the SAME 'mined' exact fill stays a 'mismatch' when statusTolerant is OFF (byte-identical default)", async () => {
   const { hub, pending } = statusToleranceCoordinator({ statusTolerant: false });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "mined",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "mismatch");
 });
 
 test("C1: statusTolerant does NOT confirm a genuine UNDERFILL (3/5) — the count check still governs", async () => {
   const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 3 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "mined",
+    fillCount: 3,
+  });
   assert.equal((await pending).status, "mismatch");
 });
 
 test("C1: statusTolerant does NOT confirm an overfill BEYOND the band (6.5/5)", async () => {
   const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "mined", fillCount: 6.5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "mined",
+    fillCount: 6.5,
+  });
   assert.equal((await pending).status, "mismatch");
 });
 
 test("C1: statusTolerant still reports a FAILED stream status as failed (never confirms a failure)", async () => {
   const { hub, pending } = statusToleranceCoordinator({ statusTolerant: true });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "failed", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "failed",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "failed");
 });
 
@@ -463,7 +573,13 @@ test("confirmation coordinator does NOT lock on a Kalshi intermediate partial-fi
     submittedAtMs: 1_800_000_000_000,
     timeoutMs: 500,
   });
-  await hub.recordEvent({ venue: "kalshi", venueOrderId: "kalshi-order", eventType: "user_order", status: "matched", fillCount: 1 });
+  await hub.recordEvent({
+    venue: "kalshi",
+    venueOrderId: "kalshi-order",
+    eventType: "user_order",
+    status: "matched",
+    fillCount: 1,
+  });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -489,14 +605,23 @@ test("confirmation coordinator LOCKS on a stream fill after a timeout/no-fill RE
   // then arrives on the user stream. Because accountedFill is 0 (not a positive reconciled fill), the
   // overfill tolerance must NOT apply, so this surprise fill on a timed-out order LOCKS -> it cannot escape
   // both the coordinator and the executor (which only saw the undefined REST). (lock-19 review hardening.)
-  const pending = coordinator.waitForVenueResult({ ...result("kalshi"), status: "unknown", fillCount: 0, error: null }, {
-    executionGroupId: "group",
-    expectedSize: 5,
-    leg,
-    submittedAtMs: 1_800_000_000_000,
-    timeoutMs: 500,
+  const pending = coordinator.waitForVenueResult(
+    { ...result("kalshi"), status: "unknown", fillCount: 0, error: null },
+    {
+      executionGroupId: "group",
+      expectedSize: 5,
+      leg,
+      submittedAtMs: 1_800_000_000_000,
+      timeoutMs: 500,
+    },
+  );
+  await hub.recordEvent({
+    venue: "kalshi",
+    venueOrderId: "kalshi-order",
+    eventType: "user_order",
+    status: "matched",
+    fillCount: 0.05,
   });
-  await hub.recordEvent({ venue: "kalshi", venueOrderId: "kalshi-order", eventType: "user_order", status: "matched", fillCount: 0.05 });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -506,7 +631,13 @@ test("confirmation coordinator LOCKS on a stream fill after a timeout/no-fill RE
 test("confirmation coordinator STILL locks on a within-band overfill when flatMissNonBlocking is off (legacy)", async () => {
   const locks = new MemoryLocks();
   const { hub, pending } = overfillBandCoordinator(locks, { overfillToleranceShares: 1 });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.054944 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.054944,
+  });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -536,7 +667,13 @@ test("confirmation coordinator does NOT lock on a LATE in-band overfill via the 
     timeoutMs: 500,
   });
   // First event resolves + remembers the order (exact 5, no lock, handled via the pending path only).
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "confirmed");
   assert.equal(locks.lock, null);
   // A LATE in-band overfill (5.054944, within reconciled 5 + tolerance 1) arrives for the same KNOWN order
@@ -544,7 +681,13 @@ test("confirmation coordinator does NOT lock on a LATE in-band overfill via the 
   // absorb — it is a property of the FILL, not of when the "trade" event arrives — so it must NOT lock.
   // (lock-21 production freeze: a 5.256/5 overfill surfacing only via a late stream event hard-locked the
   // bot for hours despite overfillToleranceShares=1.)
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.054944 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.054944,
+  });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(locks.lock, null);
@@ -566,22 +709,37 @@ test("confirmation coordinator does NOT re-lock on a LATE DUPLICATE of an alread
     now: () => 1_800_000_000_200,
   });
   // The REST order-response reported the FAK overfill (5.116278) — that is the executor's accounted fill.
-  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), fillCount: 5.116278 }, {
-    executionGroupId: "group",
-    expectedSize: 5,
-    leg,
-    submittedAtMs: 1_800_000_000_000,
-    timeoutMs: 500,
-  });
+  const pending = coordinator.waitForVenueResult(
+    { ...result("polymarket"), fillCount: 5.116278 },
+    {
+      executionGroupId: "group",
+      expectedSize: 5,
+      leg,
+      submittedAtMs: 1_800_000_000_000,
+      timeoutMs: 500,
+    },
+  );
   // First event is the in-band fractional OVERFILL the executor reconciles now (floor-hedge + cap-quarantine
   // of the residual). No lock on the pending path, and the reconciled magnitude (5.116278) is remembered.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.116278 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.116278,
+  });
   await pending;
   assert.equal(locks.lock, null);
   // A LATE DUPLICATE of that SAME governed fill (Polymarket user streams re-emit trade events) arrives with
   // no live pending. It is at/below the reconciled ceiling, so it must NOT re-trip the breaker. This is the
   // lock-18 production freeze: a benign 5.116278/5 overfill re-reported late hard-locked the bot for hours.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.116278 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.116278,
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(locks.lock, null);
 });
@@ -602,23 +760,44 @@ test("confirmation coordinator STILL locks on a LATE fill BEYOND accountedFill +
     now: () => 1_800_000_000_200,
   });
   // REST reported the 5.1 fill — the executor's reconciled amount for this order.
-  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), fillCount: 5.1 }, {
-    executionGroupId: "group",
-    expectedSize: 5,
-    leg,
-    submittedAtMs: 1_800_000_000_000,
-    timeoutMs: 500,
+  const pending = coordinator.waitForVenueResult(
+    { ...result("polymarket"), fillCount: 5.1 },
+    {
+      executionGroupId: "group",
+      expectedSize: 5,
+      leg,
+      submittedAtMs: 1_800_000_000_000,
+      timeoutMs: 500,
+    },
+  );
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.1,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.1 });
   await pending;
   assert.equal(locks.lock, null);
   // A late fill within the band (e.g. 5.6 <= reconciled 5.1 + 1) is a benign over-hedge and is tolerated.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.6 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.6,
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(locks.lock, null);
   // But a late fill BEYOND accountedFill + band (6.5 > 5.1 + 1) is a materially-too-large surprise the
   // finalized executor never booked -> it MUST lock (the coordinator is the sole detector on the late path).
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 6.5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 6.5,
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.match((locks.lock as LiveExecutionLock | null)?.reason ?? "", /fill mismatch 6.5\/5/);
 });
@@ -651,10 +830,22 @@ test("confirmation coordinator does NOT lock on the lock-21 production overfill 
     submittedAtMs: 1_800_000_000_000,
     timeoutMs: 500,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5,
+  });
   assert.equal((await pending).status, "confirmed");
   assert.equal(locks.lock, null);
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.256409 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.256409,
+  });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(locks.lock, null);
@@ -680,14 +871,23 @@ test("confirmation coordinator does NOT lock on the lock-22 polymarket-first ove
   // via the private user stream -> accountedFill = 0. The stream then reports the true FAK fill 5.172412 —
   // a FULL fill, slightly over the size-5 order, within the +1 band. The executor cap-quarantines the
   // ~$0.05 residual; the coordinator must NOT also hard-lock (the freeze that halted Montreal post-deploy).
-  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), status: "unknown", fillCount: 0, error: null }, {
-    executionGroupId: "group",
-    expectedSize: 5,
-    leg,
-    submittedAtMs: 1_800_000_000_000,
-    timeoutMs: 500,
+  const pending = coordinator.waitForVenueResult(
+    { ...result("polymarket"), status: "unknown", fillCount: 0, error: null },
+    {
+      executionGroupId: "group",
+      expectedSize: 5,
+      leg,
+      submittedAtMs: 1_800_000_000_000,
+      timeoutMs: 500,
+    },
+  );
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.172412,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.172412 });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -712,14 +912,23 @@ test("confirmation coordinator STILL locks on a stray sub-expected fill on an un
   // Guard for the lock-22 fix: a stray 0.05 fill on a size-5 order whose REST never accounted a fill is
   // NEITHER over-accounted (accountedFill 0) NOR filled-in-band (0.05 is far below expectedSize 5), so it
   // MUST still lock — it would otherwise escape both the coordinator and the executor.
-  const pending = coordinator.waitForVenueResult({ ...result("polymarket"), status: "unknown", fillCount: 0, error: null }, {
-    executionGroupId: "group",
-    expectedSize: 5,
-    leg,
-    submittedAtMs: 1_800_000_000_000,
-    timeoutMs: 500,
+  const pending = coordinator.waitForVenueResult(
+    { ...result("polymarket"), status: "unknown", fillCount: 0, error: null },
+    {
+      executionGroupId: "group",
+      expectedSize: 5,
+      leg,
+      submittedAtMs: 1_800_000_000_000,
+      timeoutMs: 500,
+    },
+  );
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 0.05,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 0.05 });
   await pending.catch(() => {});
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -743,7 +952,10 @@ function classificationCoordinator(opts: { confirmationOverfillTolerant?: boolea
 }
 
 test("P0: an in-band overfill CONFIRMS (not mismatch) when confirmationOverfillTolerant is on", async () => {
-  const { hub, coordinator } = classificationCoordinator({ confirmationOverfillTolerant: true, overfillToleranceShares: 1 });
+  const { hub, coordinator } = classificationCoordinator({
+    confirmationOverfillTolerant: true,
+    overfillToleranceShares: 1,
+  });
   const pending = coordinator.waitForVenueResult(result("polymarket"), {
     executionGroupId: "group",
     expectedSize: 5,
@@ -754,7 +966,13 @@ test("P0: an in-band overfill CONFIRMS (not mismatch) when confirmationOverfillT
   // Polymarket FAK over-hedged to 5.162 (within [5, 6]); the Kalshi integer floor-hedge already covers the
   // 5 whole shares. This is a near-complete two-sided fill, so it must CONFIRM — not report a mismatch the
   // executor then quarantines and books as a failure.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.162 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.162,
+  });
   const confirmation = await pending;
 
   assert.equal(confirmation.status, "confirmed");
@@ -771,7 +989,13 @@ test("P0: the SAME in-band overfill stays a mismatch when the flag is OFF (byte-
     submittedAtMs: 1_800_000_000_000,
     timeoutMs: 500,
   });
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 5.162 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 5.162,
+  });
   const confirmation = await pending;
 
   assert.equal(confirmation.status, "mismatch");
@@ -779,7 +1003,10 @@ test("P0: the SAME in-band overfill stays a mismatch when the flag is OFF (byte-
 });
 
 test("P0: an UNDERFILL still mismatches even when confirmationOverfillTolerant is on", async () => {
-  const { hub, coordinator } = classificationCoordinator({ confirmationOverfillTolerant: true, overfillToleranceShares: 1 });
+  const { hub, coordinator } = classificationCoordinator({
+    confirmationOverfillTolerant: true,
+    overfillToleranceShares: 1,
+  });
   const pending = coordinator.waitForVenueResult(result("polymarket"), {
     executionGroupId: "group",
     expectedSize: 5,
@@ -788,14 +1015,23 @@ test("P0: an UNDERFILL still mismatches even when confirmationOverfillTolerant i
     timeoutMs: 500,
   });
   // Below the expected size -> a genuine underfill, never tolerated by the overfill band.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 4 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 4,
+  });
   const confirmation = await pending;
 
   assert.equal(confirmation.status, "mismatch");
 });
 
 test("P0: an overfill BEYOND the band still mismatches even when confirmationOverfillTolerant is on", async () => {
-  const { hub, coordinator } = classificationCoordinator({ confirmationOverfillTolerant: true, overfillToleranceShares: 1 });
+  const { hub, coordinator } = classificationCoordinator({
+    confirmationOverfillTolerant: true,
+    overfillToleranceShares: 1,
+  });
   const pending = coordinator.waitForVenueResult(result("polymarket"), {
     executionGroupId: "group",
     expectedSize: 5,
@@ -804,7 +1040,13 @@ test("P0: an overfill BEYOND the band still mismatches even when confirmationOve
     timeoutMs: 500,
   });
   // 6.5 > size + band (6) -> materially too large -> still a mismatch on the classification path too.
-  await hub.recordEvent({ venue: "polymarket", venueOrderId: "polymarket-order", eventType: "trade", status: "matched", fillCount: 6.5 });
+  await hub.recordEvent({
+    venue: "polymarket",
+    venueOrderId: "polymarket-order",
+    eventType: "trade",
+    status: "matched",
+    fillCount: 6.5,
+  });
   const confirmation = await pending;
 
   assert.equal(confirmation.status, "mismatch");

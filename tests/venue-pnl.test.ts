@@ -7,11 +7,29 @@ const NOW = 1_781_700_000_000;
 test("kalshiLegFromRows computes realized take-home net of fees from BTC settlements only", () => {
   const settlements = [
     // BTC winner: 10 NO contracts settle to $10 (revenue is cents), cost $5.20, fee $0.1745.
-    { ticker: "KXBTC15M-26JUN171300-00", revenue: 1000, no_total_cost_dollars: "5.200000", yes_total_cost_dollars: "0", fee_cost: "0.174500" },
+    {
+      ticker: "KXBTC15M-26JUN171300-00",
+      revenue: 1000,
+      no_total_cost_dollars: "5.200000",
+      yes_total_cost_dollars: "0",
+      fee_cost: "0.174500",
+    },
     // BTC loser: 10 YES settle to $0, cost $4.80, fee $0.10.
-    { ticker: "KXBTC15M-26JUN171315-00", revenue: 0, yes_total_cost_dollars: "4.800000", no_total_cost_dollars: "0", fee_cost: "0.100000" },
+    {
+      ticker: "KXBTC15M-26JUN171315-00",
+      revenue: 0,
+      yes_total_cost_dollars: "4.800000",
+      no_total_cost_dollars: "0",
+      fee_cost: "0.100000",
+    },
     // Non-arb World Cup settlement must be excluded entirely.
-    { ticker: "KXMENWORLDCUP-26-US", revenue: 5000, yes_total_cost_dollars: "1.000000", no_total_cost_dollars: "0", fee_cost: "0.500000" },
+    {
+      ticker: "KXMENWORLDCUP-26-US",
+      revenue: 5000,
+      yes_total_cost_dollars: "1.000000",
+      no_total_cost_dollars: "0",
+      fee_cost: "0.500000",
+    },
   ];
   const positions = [
     // Open BTC leg (counts toward open exposure).
@@ -38,11 +56,33 @@ test("kalshiLegFromRows computes realized take-home net of fees from BTC settlem
 test("polymarketLegFromRows uses cashPnl for ended positions and currentValue for open, BTC only", () => {
   const positions = [
     // Ended (resolved, redeemable) BTC loser — realized via cashPnl.
-    { title: "Bitcoin Up or Down - June 17, 12:45PM-1:00PM ET", redeemable: true, curPrice: 0, size: 15.5658, cashPnl: -6.8999, initialValue: 6.8999 },
+    {
+      title: "Bitcoin Up or Down - June 17, 12:45PM-1:00PM ET",
+      redeemable: true,
+      curPrice: 0,
+      size: 15.5658,
+      cashPnl: -6.8999,
+      initialValue: 6.8999,
+    },
     // Ended BTC winner.
-    { title: "Bitcoin Up or Down - June 17, 1:00PM-1:15PM ET", redeemable: true, curPrice: 1, size: 10, cashPnl: 4.5, initialValue: 5.5 },
+    {
+      title: "Bitcoin Up or Down - June 17, 1:00PM-1:15PM ET",
+      redeemable: true,
+      curPrice: 1,
+      size: 10,
+      cashPnl: 4.5,
+      initialValue: 5.5,
+    },
     // Still-open BTC position — counts as open exposure, not realized.
-    { title: "Bitcoin Up or Down - June 17, 1:15PM-1:30PM ET", redeemable: false, curPrice: 0.46, size: 10, currentValue: 4.6, cashPnl: -0.4, initialValue: 5.0 },
+    {
+      title: "Bitcoin Up or Down - June 17, 1:15PM-1:30PM ET",
+      redeemable: false,
+      curPrice: 0.46,
+      size: 10,
+      currentValue: 4.6,
+      cashPnl: -0.4,
+      initialValue: 5.0,
+    },
     // Non-arb market excluded.
     { title: "Will it rain tomorrow?", redeemable: true, curPrice: 0, size: 3, cashPnl: -3, initialValue: 3 },
   ];

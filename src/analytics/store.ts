@@ -36,7 +36,7 @@ export class AnalyticsStore {
     this.prune(now);
     const staleAfterMs = options.staleAfterMs ?? 60_000;
     const realtime = {
-      mode: options.mode ?? "hot_cache" as const,
+      mode: options.mode ?? ("hot_cache" as const),
       lastUpdatedAt: this.lastUpdatedAt,
       lastDbReconciledAt: this.lastDbReconciledAt,
       computeMs: 0,

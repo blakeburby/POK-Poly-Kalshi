@@ -17,7 +17,11 @@ import type {
 } from "../types";
 import type { FilledAttempt } from "../scanner/reentry";
 import { buildSyntheticStructureRisk } from "../scanner/payoff";
-import { buildLiveExecutionQualityStatus, liveExecutionQualityBlockReason, type LiveExecutionQualityOptions } from "../execution/execution-quality";
+import {
+  buildLiveExecutionQualityStatus,
+  liveExecutionQualityBlockReason,
+  type LiveExecutionQualityOptions,
+} from "../execution/execution-quality";
 
 export interface QueryResult<T> {
   rows: T[];
@@ -228,14 +232,15 @@ function booleanFrom(value: boolean | string | null): boolean {
 
 function recoveryStatusFrom(value: string | null | undefined): LiveRecoveryStatus | null {
   if (
-    value === "none"
-    || value === "pretrade_retry"
-    || value === "finalizing"
-    || value === "auto_resolved_no_exposure"
-    || value === "auto_resolved_paired_fill"
-    || value === "risk_quarantined"
-    || value === "operator_required"
-  ) return value;
+    value === "none" ||
+    value === "pretrade_retry" ||
+    value === "finalizing" ||
+    value === "auto_resolved_no_exposure" ||
+    value === "auto_resolved_paired_fill" ||
+    value === "risk_quarantined" ||
+    value === "operator_required"
+  )
+    return value;
   return null;
 }
 
@@ -317,15 +322,24 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
     expectedExecutableEdge: numberFrom(row.expected_executable_edge),
     executionTimings: jsonFromRow<ExecutionTimings>(row.execution_timings),
     venueConfirmations: jsonFromRow<VenueConfirmations>(row.venue_confirmations),
-    executionStrategy: row.execution_strategy === "polymarket_first_exact" ? "polymarket_first_exact"
-      : row.execution_strategy === "parallel_limit_rest" ? "parallel_limit_rest"
-      : row.execution_strategy === "parallel_quick" ? "parallel_quick"
-      : row.execution_strategy === "parallel_fak" ? "parallel_fak"
-      : row.execution_strategy === "parallel_fok" ? "parallel_fok"
-      : row.execution_strategy === "parallel_market" ? "parallel_market"
-      : row.execution_strategy === "parallel_canary" ? "parallel_canary"
-      : row.execution_strategy === "sequential_hedge" ? "sequential_hedge"
-      : null,
+    executionStrategy:
+      row.execution_strategy === "polymarket_first_exact"
+        ? "polymarket_first_exact"
+        : row.execution_strategy === "parallel_limit_rest"
+          ? "parallel_limit_rest"
+          : row.execution_strategy === "parallel_quick"
+            ? "parallel_quick"
+            : row.execution_strategy === "parallel_fak"
+              ? "parallel_fak"
+              : row.execution_strategy === "parallel_fok"
+                ? "parallel_fok"
+                : row.execution_strategy === "parallel_market"
+                  ? "parallel_market"
+                  : row.execution_strategy === "parallel_canary"
+                    ? "parallel_canary"
+                    : row.execution_strategy === "sequential_hedge"
+                      ? "sequential_hedge"
+                      : null,
     riskHedge: booleanFrom(row.risk_hedge),
     realizedGuaranteedProfit: numberFrom(row.realized_guaranteed_profit),
     hedgeCapPrice: numberFrom(row.hedge_cap_price),
@@ -348,11 +362,15 @@ export class SignalStore {
   // H3: when > 0, the unresolved-exposure cap query excludes quarantines whose market settled more than this
   // many ms ago (realized P&L, not live risk), so settled-but-unreconciled tails cannot silently accumulate
   // to the cap and halt trading. 0 = count all unresolved quarantines (byte-identical).
-  constructor(private readonly db: Queryable, private readonly quarantineCapSettleGraceMs = 0) {}
+  constructor(
+    private readonly db: Queryable,
+    private readonly quarantineCapSettleGraceMs = 0,
+  ) {}
 
   async insertSignal(input: SignalInsert): Promise<number> {
     const { candidate } = input;
-    const result = await this.db.query<{ id: string | number }>(`
+    const result = await this.db.query<{ id: string | number }>(
+      `
       INSERT INTO cross_venue_arb_signals (
         pair_key, expiry_ms, kalshi_contract_id, polymarket_contract_id,
         lower_venue, lower_contract_id, lower_strike, lower_direction, lower_ask,
@@ -365,35 +383,38 @@ export class SignalStore {
         $15, $16, $17, $18, $19, $20
       )
       RETURNING id
-    `, [
-      candidate.pairKey,
-      candidate.expiryMs,
-      candidate.kalshiContractId,
-      candidate.polymarketContractId,
-      candidate.lower.venue,
-      candidate.lower.contractId,
-      candidate.lower.strike,
-      candidate.lower.direction,
-      candidate.lower.ask,
-      candidate.higher.venue,
-      candidate.higher.contractId,
-      candidate.higher.strike,
-      candidate.higher.direction,
-      candidate.higher.ask,
-      candidate.premium,
-      candidate.guaranteedProfit,
-      candidate.overlapProfit,
-      candidate.threshold,
-      input.action,
-      input.failureReason ?? null,
-    ]);
+    `,
+      [
+        candidate.pairKey,
+        candidate.expiryMs,
+        candidate.kalshiContractId,
+        candidate.polymarketContractId,
+        candidate.lower.venue,
+        candidate.lower.contractId,
+        candidate.lower.strike,
+        candidate.lower.direction,
+        candidate.lower.ask,
+        candidate.higher.venue,
+        candidate.higher.contractId,
+        candidate.higher.strike,
+        candidate.higher.direction,
+        candidate.higher.ask,
+        candidate.premium,
+        candidate.guaranteedProfit,
+        candidate.overlapProfit,
+        candidate.threshold,
+        input.action,
+        input.failureReason ?? null,
+      ],
+    );
     const id = Number(result.rows[0]?.id);
     if (!Number.isFinite(id)) throw new Error("Signal insert did not return an id");
     return id;
   }
 
   async updateSignal(id: number, update: SignalUpdate): Promise<DashboardSignal | null> {
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       UPDATE cross_venue_arb_signals
       SET action = $2,
           failure_reason = $3,
@@ -441,52 +462,54 @@ export class SignalStore {
           updated_at = NOW()
       WHERE id = $1
       RETURNING ${SIGNAL_COLUMNS}
-    `, [
-      id,
-      update.action,
-      update.failureReason ?? null,
-      update.kalshiFillId ?? null,
-      update.polymarketFillId ?? null,
-      update.kalshiFillPrice ?? null,
-      update.polymarketFillPrice ?? null,
-      update.executionGroupId ?? null,
-      update.kalshiClientOrderId ?? null,
-      update.polymarketClientOrderId ?? null,
-      update.kalshiStatus ?? null,
-      update.polymarketStatus ?? null,
-      update.kalshiFillCount ?? null,
-      update.polymarketFillCount ?? null,
-      update.kalshiRequestedAt ?? null,
-      update.kalshiRespondedAt ?? null,
-      update.polymarketRequestedAt ?? null,
-      update.polymarketRespondedAt ?? null,
-      update.kalshiError ?? null,
-      update.polymarketError ?? null,
-      update.partialFill ?? false,
-      update.quoteSnapshot == null ? null : JSON.stringify(update.quoteSnapshot),
-      update.depthVwap ?? null,
-      update.projectedEdgeAfterFees ?? null,
-      update.fillQualitySnapshot == null ? null : JSON.stringify(update.fillQualitySnapshot),
-      update.expectedExecutableEdge ?? update.fillQualitySnapshot?.expectedExecutableEdge ?? null,
-      update.executionTimings == null ? null : JSON.stringify(update.executionTimings),
-      update.venueConfirmations == null ? null : JSON.stringify(update.venueConfirmations),
-      update.executionStrategy ?? null,
-      update.riskHedge ?? false,
-      update.realizedGuaranteedProfit ?? null,
-      update.hedgeCapPrice ?? null,
-      update.reconciliationResolvedAt ?? null,
-      update.reconciliationResolutionReason ?? null,
-      update.reconciliationResolution == null ? null : JSON.stringify(update.reconciliationResolution),
-      update.recoveryStatus ?? null,
-      update.recoveryAttempts ?? null,
-      update.recoveryEvidence == null ? null : JSON.stringify(update.recoveryEvidence),
-      update.finalizationMs ?? null,
-      update.riskQuarantinedAt ?? null,
-      update.riskQuarantineReason ?? null,
-      update.riskQuarantineExposureDollars ?? null,
-      update.riskQuarantineEvidence == null ? null : JSON.stringify(update.riskQuarantineEvidence),
-      update.leadLagSnapshot == null ? null : JSON.stringify(update.leadLagSnapshot),
-    ]);
+    `,
+      [
+        id,
+        update.action,
+        update.failureReason ?? null,
+        update.kalshiFillId ?? null,
+        update.polymarketFillId ?? null,
+        update.kalshiFillPrice ?? null,
+        update.polymarketFillPrice ?? null,
+        update.executionGroupId ?? null,
+        update.kalshiClientOrderId ?? null,
+        update.polymarketClientOrderId ?? null,
+        update.kalshiStatus ?? null,
+        update.polymarketStatus ?? null,
+        update.kalshiFillCount ?? null,
+        update.polymarketFillCount ?? null,
+        update.kalshiRequestedAt ?? null,
+        update.kalshiRespondedAt ?? null,
+        update.polymarketRequestedAt ?? null,
+        update.polymarketRespondedAt ?? null,
+        update.kalshiError ?? null,
+        update.polymarketError ?? null,
+        update.partialFill ?? false,
+        update.quoteSnapshot == null ? null : JSON.stringify(update.quoteSnapshot),
+        update.depthVwap ?? null,
+        update.projectedEdgeAfterFees ?? null,
+        update.fillQualitySnapshot == null ? null : JSON.stringify(update.fillQualitySnapshot),
+        update.expectedExecutableEdge ?? update.fillQualitySnapshot?.expectedExecutableEdge ?? null,
+        update.executionTimings == null ? null : JSON.stringify(update.executionTimings),
+        update.venueConfirmations == null ? null : JSON.stringify(update.venueConfirmations),
+        update.executionStrategy ?? null,
+        update.riskHedge ?? false,
+        update.realizedGuaranteedProfit ?? null,
+        update.hedgeCapPrice ?? null,
+        update.reconciliationResolvedAt ?? null,
+        update.reconciliationResolutionReason ?? null,
+        update.reconciliationResolution == null ? null : JSON.stringify(update.reconciliationResolution),
+        update.recoveryStatus ?? null,
+        update.recoveryAttempts ?? null,
+        update.recoveryEvidence == null ? null : JSON.stringify(update.recoveryEvidence),
+        update.finalizationMs ?? null,
+        update.riskQuarantinedAt ?? null,
+        update.riskQuarantineReason ?? null,
+        update.riskQuarantineExposureDollars ?? null,
+        update.riskQuarantineEvidence == null ? null : JSON.stringify(update.riskQuarantineEvidence),
+        update.leadLagSnapshot == null ? null : JSON.stringify(update.leadLagSnapshot),
+      ],
+    );
     return result.rows[0] ? signalFromRow(result.rows[0]) : null;
   }
 
@@ -510,7 +533,8 @@ export class SignalStore {
 
   async liveRiskQuarantineStatus(): Promise<{ total: number; count: number }> {
     const grace = Math.max(0, this.quarantineCapSettleGraceMs);
-    const result = await this.db.query<QuarantineExposureRow>(`
+    const result = await this.db.query<QuarantineExposureRow>(
+      `
       SELECT COALESCE(SUM(risk_quarantine_exposure_dollars), 0) AS total,
              COUNT(*) AS count
       FROM cross_venue_arb_signals
@@ -518,7 +542,9 @@ export class SignalStore {
         AND risk_quarantined_at IS NOT NULL
         AND ($1::BIGINT = 0 OR expiry_ms IS NULL
              OR expiry_ms::BIGINT > (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT - $1::BIGINT)
-    `, [grace]);
+    `,
+      [grace],
+    );
     return {
       total: numberFrom(result.rows[0]?.total ?? null) ?? 0,
       count: numberFrom(result.rows[0]?.count ?? null) ?? 0,
@@ -543,7 +569,8 @@ export class SignalStore {
     const quarantineReason = await this.liveQuarantineBlockReason(maxUnresolvedExposureDollars);
     if (quarantineReason) return quarantineReason;
 
-    const result = await this.db.query<LiveExposureRow>(`
+    const result = await this.db.query<LiveExposureRow>(
+      `
       SELECT id, pair_key, expiry_ms, kalshi_contract_id, polymarket_contract_id,
              lower_venue, lower_contract_id, lower_direction,
              higher_venue, higher_contract_id, higher_direction,
@@ -563,7 +590,9 @@ export class SignalStore {
         )
       ORDER BY updated_at DESC
       LIMIT 50
-    `, [candidate.expiryMs, now]);
+    `,
+      [candidate.expiryMs, now],
+    );
 
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
     if (result.rows.length >= maxTrades) {
@@ -583,12 +612,16 @@ export class SignalStore {
         { venue: row.lower_venue, contractId: row.lower_contract_id, direction: row.lower_direction },
         { venue: row.higher_venue, contractId: row.higher_contract_id, direction: row.higher_direction },
       ];
-      const candidateLegs = [
-        candidate.lower,
-        candidate.higher,
-      ];
+      const candidateLegs = [candidate.lower, candidate.higher];
       for (const exposed of exposedLegs) {
-        if (candidateLegs.some((leg) => leg.venue === exposed.venue && leg.contractId === exposed.contractId && leg.direction === exposed.direction)) {
+        if (
+          candidateLegs.some(
+            (leg) =>
+              leg.venue === exposed.venue &&
+              leg.contractId === exposed.contractId &&
+              leg.direction === exposed.direction,
+          )
+        ) {
           return `live ${exposed.venue} ${exposed.direction} leg ${exposed.contractId} already has exposure in signal #${row.id}`;
         }
       }
@@ -603,14 +636,17 @@ export class SignalStore {
     maxTradesPerWindow: number,
   ): Promise<string | null> {
     const maxTrades = Math.max(0, Math.floor(maxTradesPerWindow));
-    const result = await this.db.query<LiveSubmittedAttemptCountRow>(`
+    const result = await this.db.query<LiveSubmittedAttemptCountRow>(
+      `
       SELECT COUNT(*) AS attempt_count
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
         AND expiry_ms = $1
         AND expiry_ms > $2
         AND action IN ('filled', 'failed')
-    `, [candidate.expiryMs, now]);
+    `,
+      [candidate.expiryMs, now],
+    );
     const attemptCount = numberFrom(result.rows[0]?.attempt_count ?? null) ?? 0;
     if (attemptCount >= maxTrades) {
       return `live submitted attempt limit reached for expiry ${candidate.expiryMs}: ${attemptCount}/${maxTrades}`;
@@ -619,7 +655,8 @@ export class SignalStore {
   }
 
   async listLiveExposureSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
@@ -635,12 +672,15 @@ export class SignalStore {
         )
       ORDER BY updated_at DESC
       LIMIT $2
-    `, [now, limit]);
+    `,
+      [now, limit],
+    );
     return result.rows.map(signalFromRow);
   }
 
   async listLiveSubmittedAttemptSignals(now: number, limit = 500): Promise<DashboardSignal[]> {
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
@@ -648,12 +688,15 @@ export class SignalStore {
         AND action IN ('filled', 'failed')
       ORDER BY updated_at DESC
       LIMIT $2
-    `, [now, limit]);
+    `,
+      [now, limit],
+    );
     return result.rows.map(signalFromRow);
   }
 
   async listLiveExactExposureSignals(limit = 500): Promise<DashboardSignal[]> {
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
@@ -667,7 +710,9 @@ export class SignalStore {
         )
       ORDER BY updated_at DESC
       LIMIT $1
-    `, [limit]);
+    `,
+      [limit],
+    );
     return result.rows.map(signalFromRow);
   }
 
@@ -689,7 +734,8 @@ export class SignalStore {
 
   async listLiveExecutionQualitySignals(now: number, lookbackMs: number, limit = 50): Promise<DashboardSignal[]> {
     const sinceMs = Math.max(0, now - Math.max(0, lookbackMs));
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       SELECT ${LIVE_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
@@ -697,7 +743,9 @@ export class SignalStore {
         AND created_at >= to_timestamp($1 / 1000.0)
       ORDER BY created_at DESC, id DESC
       LIMIT $2
-    `, [sinceMs, limit]);
+    `,
+      [sinceMs, limit],
+    );
     return result.rows.map(signalFromRow);
   }
 
@@ -706,7 +754,11 @@ export class SignalStore {
     return buildLiveExecutionQualityStatus(signals, null, options);
   }
 
-  async liveExecutionQualityBlockReason(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null> {
+  async liveExecutionQualityBlockReason(
+    candidate: ArbCandidate,
+    now: number,
+    options: LiveExecutionQualityOptions,
+  ): Promise<string | null> {
     const signals = await this.listLiveExecutionQualitySignals(now, options.lookbackMs, options.sampleLimit);
     return liveExecutionQualityBlockReason(buildLiveExecutionQualityStatus(signals, candidate, options));
   }
@@ -727,7 +779,8 @@ export class SignalStore {
     const quarantineReason = await this.liveQuarantineBlockReason(maxUnresolvedExposureDollars);
     if (quarantineReason) return quarantineReason;
 
-    const result = await this.db.query<LiveReconciliationRow>(`
+    const result = await this.db.query<LiveReconciliationRow>(
+      `
       SELECT id, action, partial_fill, kalshi_status, polymarket_status,
              kalshi_fill_count, polymarket_fill_count, venue_confirmations, reconciliation_resolved_at,
              risk_quarantined_at
@@ -746,7 +799,9 @@ export class SignalStore {
         )
       ORDER BY updated_at DESC
       LIMIT 50
-    `, [candidate.expiryMs, now]);
+    `,
+      [candidate.expiryMs, now],
+    );
 
     for (const row of result.rows) {
       if (row.reconciliation_resolved_at != null) continue;
@@ -758,10 +813,16 @@ export class SignalStore {
       if (hasAnyFill && Math.abs(kalshiFillCount - polymarketFillCount) > 0.000001) {
         return `live reconciliation blocked: signal #${row.id} fill mismatch kalshi=${kalshiFillCount} polymarket=${polymarketFillCount}`;
       }
-      if (hasAnyFill && (!confirmedByUserStream(confirmations, "kalshi") || !confirmedByUserStream(confirmations, "polymarket"))) {
+      if (
+        hasAnyFill &&
+        (!confirmedByUserStream(confirmations, "kalshi") || !confirmedByUserStream(confirmations, "polymarket"))
+      ) {
         return `live reconciliation blocked: signal #${row.id} has venue fills without private-stream confirmations`;
       }
-      if (["unknown", "unexpected_fill_count"].includes(row.kalshi_status ?? "") || ["unknown", "unexpected_fill_count"].includes(row.polymarket_status ?? "")) {
+      if (
+        ["unknown", "unexpected_fill_count"].includes(row.kalshi_status ?? "") ||
+        ["unknown", "unexpected_fill_count"].includes(row.polymarket_status ?? "")
+      ) {
         return `live reconciliation blocked: signal #${row.id} has unresolved venue status`;
       }
     }
@@ -771,19 +832,23 @@ export class SignalStore {
 
   async listRecentSignals(limit = 100): Promise<DashboardSignal[]> {
     const values: unknown[] = [limit];
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       SELECT ${DASHBOARD_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
       ORDER BY created_at DESC
       LIMIT $1
-    `, values);
+    `,
+      values,
+    );
     return result.rows.map(signalFromRow);
   }
 
   async listFilledSignalsSince(sinceMs: number, limit = 10_000): Promise<DashboardSignal[]> {
     const values: unknown[] = [sinceMs, limit];
-    const result = await this.db.query<DashboardSignalRow>(`
+    const result = await this.db.query<DashboardSignalRow>(
+      `
       SELECT ${DASHBOARD_SIGNAL_COLUMNS}
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
@@ -791,7 +856,9 @@ export class SignalStore {
         AND updated_at >= to_timestamp($1 / 1000.0)
       ORDER BY updated_at ASC
       LIMIT $2
-    `, values);
+    `,
+      values,
+    );
     return result.rows.map(signalFromRow);
   }
 }

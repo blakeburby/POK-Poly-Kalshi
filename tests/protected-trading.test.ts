@@ -34,9 +34,24 @@ test("protected trading guard rejects malformed or below-threshold candidates", 
   const candidate = protectedCandidate();
 
   assert.equal(protectedCandidateBlockReason({ ...candidate, risk: undefined }, 0.05), "non_protected_structure");
-  assert.equal(protectedCandidateBlockReason({ ...candidate, lower: { ...candidate.lower, direction: "no" } }, 0.05), "lower_leg_not_yes");
-  assert.equal(protectedCandidateBlockReason({ ...candidate, higher: { ...candidate.higher, direction: "yes" } }, 0.05), "higher_leg_not_no");
-  assert.equal(protectedCandidateBlockReason({ ...candidate, higher: { ...candidate.higher, strike: candidate.lower.strike } }, 0.05), "lower_strike_not_below_higher");
+  assert.equal(
+    protectedCandidateBlockReason({ ...candidate, lower: { ...candidate.lower, direction: "no" } }, 0.05),
+    "lower_leg_not_yes",
+  );
+  assert.equal(
+    protectedCandidateBlockReason({ ...candidate, higher: { ...candidate.higher, direction: "yes" } }, 0.05),
+    "higher_leg_not_no",
+  );
+  assert.equal(
+    protectedCandidateBlockReason(
+      { ...candidate, higher: { ...candidate.higher, strike: candidate.lower.strike } },
+      0.05,
+    ),
+    "lower_strike_not_below_higher",
+  );
   assert.equal(protectedCandidateBlockReason({ ...candidate, executable: false }, 0.05), "candidate_not_executable");
-  assert.equal(protectedCandidateBlockReason({ ...candidate, guaranteedProfit: 0.0499 }, 0.05), "guaranteed_profit_below_threshold");
+  assert.equal(
+    protectedCandidateBlockReason({ ...candidate, guaranteedProfit: 0.0499 }, 0.05),
+    "guaranteed_profit_below_threshold",
+  );
 });

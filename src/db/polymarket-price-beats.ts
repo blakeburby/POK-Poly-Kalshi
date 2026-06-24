@@ -55,7 +55,8 @@ export class PolymarketPriceBeatStore implements PolymarketPriceBeatRepository {
   constructor(private readonly db: Queryable) {}
 
   async upsert(record: PolymarketPriceBeatRecord): Promise<void> {
-    await this.db.query(`
+    await this.db.query(
+      `
       INSERT INTO polymarket_price_beats (
         market_slug, condition_id, event_start_ms, expiry_ms, price_to_beat, source, source_timestamp_ms
       ) VALUES (
@@ -69,33 +70,41 @@ export class PolymarketPriceBeatStore implements PolymarketPriceBeatRepository {
           source = EXCLUDED.source,
           source_timestamp_ms = EXCLUDED.source_timestamp_ms,
           updated_at = NOW()
-    `, [
-      record.marketSlug,
-      record.conditionId,
-      record.eventStartMs,
-      record.expiryMs,
-      record.priceToBeat,
-      record.source,
-      record.sourceTimestampMs,
-    ]);
+    `,
+      [
+        record.marketSlug,
+        record.conditionId,
+        record.eventStartMs,
+        record.expiryMs,
+        record.priceToBeat,
+        record.source,
+        record.sourceTimestampMs,
+      ],
+    );
   }
 
   async getBySlug(marketSlug: string): Promise<PolymarketPriceBeatRecord | null> {
-    const result = await this.db.query<PolymarketPriceBeatRow>(`
+    const result = await this.db.query<PolymarketPriceBeatRow>(
+      `
       SELECT market_slug, condition_id, event_start_ms, expiry_ms, price_to_beat, source, source_timestamp_ms, created_at, updated_at
       FROM polymarket_price_beats
       WHERE market_slug = $1
-    `, [marketSlug]);
+    `,
+      [marketSlug],
+    );
     return result.rows[0] ? recordFromRow(result.rows[0]) : null;
   }
 
   async getBySlugs(marketSlugs: string[]): Promise<Map<string, PolymarketPriceBeatRecord>> {
     if (marketSlugs.length === 0) return new Map();
-    const result = await this.db.query<PolymarketPriceBeatRow>(`
+    const result = await this.db.query<PolymarketPriceBeatRow>(
+      `
       SELECT market_slug, condition_id, event_start_ms, expiry_ms, price_to_beat, source, source_timestamp_ms, created_at, updated_at
       FROM polymarket_price_beats
       WHERE market_slug = ANY($1::text[])
-    `, [marketSlugs]);
+    `,
+      [marketSlugs],
+    );
     return new Map(result.rows.map((row) => [row.market_slug, recordFromRow(row)]));
   }
 }

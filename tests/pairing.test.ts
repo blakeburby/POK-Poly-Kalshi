@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { enumerateCandidates, enumerateExecutableCandidates, enumerateSyntheticStructures } from "../src/scanner/pairing";
+import {
+  enumerateCandidates,
+  enumerateExecutableCandidates,
+  enumerateSyntheticStructures,
+} from "../src/scanner/pairing";
 import { contract } from "./helpers";
 
 test("premium at 0.95 passes the five-cent boundary", () => {
@@ -30,9 +34,7 @@ test("pairing requires same expiry and is venue-order independent", () => {
       contract({ venue: "polymarket", contractId: "poly-high", strike: 1502, noAsk: 0.5, expiryMs: expiry }),
       contract({ venue: "polymarket", contractId: "poly-later", strike: 1500, yesAsk: 0.4, expiryMs: later }),
     ],
-    kalshi: [
-      contract({ venue: "kalshi", contractId: "kalshi-low", strike: 1500, yesAsk: 0.4, expiryMs: expiry }),
-    ],
+    kalshi: [contract({ venue: "kalshi", contractId: "kalshi-low", strike: 1500, yesAsk: 0.4, expiryMs: expiry })],
     threshold: 0.05,
   });
   assert.equal(candidates.length, 1);

@@ -18,7 +18,10 @@ export function MobileNav() {
   }, [view]);
 
   return (
-    <nav className="shrink-0 border-t border-line bg-surface/95 backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+    <nav
+      className="shrink-0 border-t border-line bg-surface/95 backdrop-blur lg:hidden"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
       <div
         ref={ref}
         className="flex items-stretch gap-1 overflow-x-auto px-1.5 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,transparent,black_3%,black_92%,transparent)]"
@@ -37,7 +40,9 @@ export function MobileNav() {
               )}
             >
               <Icon className={cn("size-[18px]", active && "text-cyan")} strokeWidth={1.75} />
-              <span className={cn("text-[9.5px] font-medium tracking-tight", active ? "text-fg" : "text-fg-muted")}>{n.short}</span>
+              <span className={cn("text-[9.5px] font-medium tracking-tight", active ? "text-fg" : "text-fg-muted")}>
+                {n.short}
+              </span>
             </button>
           );
         })}

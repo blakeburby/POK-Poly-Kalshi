@@ -18,7 +18,10 @@ export function binaryLegPayoff(direction: "yes" | "no", strike: number, settlem
 }
 
 export function spreadPayoff(lower: ArbLeg, higher: ArbLeg, settlementPrice: number): number {
-  return binaryLegPayoff(lower.direction, lower.strike, settlementPrice) + binaryLegPayoff(higher.direction, higher.strike, settlementPrice);
+  return (
+    binaryLegPayoff(lower.direction, lower.strike, settlementPrice) +
+    binaryLegPayoff(higher.direction, higher.strike, settlementPrice)
+  );
 }
 
 export function spreadProfit(lower: ArbLeg, higher: ArbLeg, settlementPrice: number): number {
@@ -46,12 +49,7 @@ function regionLabel(region: PayoffRegionKey, lowerStrike: number, higherStrike:
   return `>= ${higherStrike}`;
 }
 
-function payoffRegion(
-  region: PayoffRegionKey,
-  lower: ArbLeg,
-  higher: ArbLeg,
-  premium: number,
-): SyntheticPayoffRegion {
+function payoffRegion(region: PayoffRegionKey, lower: ArbLeg, higher: ArbLeg, premium: number): SyntheticPayoffRegion {
   const lowerStrike = Math.min(lower.strike, higher.strike);
   const higherStrike = Math.max(lower.strike, higher.strike);
   const settlementPrice = regionSettlementPrice(region, lowerStrike, higherStrike);
@@ -85,10 +83,15 @@ export function buildSyntheticStructureRisk(
   const higherStrike = Math.max(lower.strike, higher.strike);
   const strikeGap = roundDollars(higherStrike - lowerStrike);
   const midStrike = roundDollars((higherStrike + lowerStrike) / 2);
-  const payoffProfile = (["below_lower", "between_strikes", "above_higher"] as const).map((region) => payoffRegion(region, lower, higher, premium));
+  const payoffProfile = (["below_lower", "between_strikes", "above_higher"] as const).map((region) =>
+    payoffRegion(region, lower, higher, premium),
+  );
   const worstCaseProfit = roundDollars(Math.min(...payoffProfile.map((region) => region.profit)));
   const bestCaseProfit = roundDollars(Math.max(...payoffProfile.map((region) => region.profit)));
-  const maxLossRegion = payoffProfile.find((region) => region.width != null && region.width > 0 && region.profit === worstCaseProfit && region.profit < 0) ?? null;
+  const maxLossRegion =
+    payoffProfile.find(
+      (region) => region.width != null && region.width > 0 && region.profit === worstCaseProfit && region.profit < 0,
+    ) ?? null;
 
   for (const region of payoffProfile) {
     region.isMaxLoss = Boolean(maxLossRegion && region.region === maxLossRegion.region);
@@ -176,7 +179,11 @@ function candidateFromLegs(
   };
 }
 
-export function guaranteedSpreadCandidate(lowerContract: BinaryContract, higherContract: BinaryContract, threshold: number): ArbCandidate | null {
+export function guaranteedSpreadCandidate(
+  lowerContract: BinaryContract,
+  higherContract: BinaryContract,
+  threshold: number,
+): ArbCandidate | null {
   if (lowerContract.yesAsk == null || higherContract.noAsk == null) return null;
   const lower = leg(lowerContract, "yes", lowerContract.yesAsk);
   const higher = leg(higherContract, "no", higherContract.noAsk);
@@ -195,7 +202,11 @@ export function guaranteedSpreadCandidate(lowerContract: BinaryContract, higherC
   );
 }
 
-export function deadZoneCandidate(lowerContract: BinaryContract, higherContract: BinaryContract, threshold: number): ArbCandidate | null {
+export function deadZoneCandidate(
+  lowerContract: BinaryContract,
+  higherContract: BinaryContract,
+  threshold: number,
+): ArbCandidate | null {
   if (lowerContract.noAsk == null || higherContract.yesAsk == null) return null;
   return candidateFromLegs(
     leg(lowerContract, "no", lowerContract.noAsk),

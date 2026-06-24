@@ -55,8 +55,7 @@ export function venueAccountValue(activity: TradingPlatformActivity | null | und
     // portfolioValue is already the full account total (cash + positions) — never add cash again.
     return reported != null ? reported : cashNum + summedPositions;
   }
-  const positionsValue =
-    reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
+  const positionsValue = reported != null && Math.abs(reported - cashNum) > 0.005 ? reported : summedPositions;
   return cashNum + positionsValue;
 }
 
@@ -127,16 +126,25 @@ export function equitySeriesForRange(
   let series = base;
   if (current != null) {
     const last = base[base.length - 1];
-    series = !last || now - last.t > 1_000 ? [...base, { t: now, v: current }] : [...base.slice(0, -1), { t: now, v: current }];
+    series =
+      !last || now - last.t > 1_000
+        ? [...base, { t: now, v: current }]
+        : [...base.slice(0, -1), { t: now, v: current }];
   }
   if (series.length > 1) return series;
   if (current == null) return series;
   const span = rangeMs ?? 24 * 60 * 60_000;
-  return [{ t: now - span, v: current }, { t: now, v: current }];
+  return [
+    { t: now - span, v: current },
+    { t: now, v: current },
+  ];
 }
 
 /** Absolute and percent change between the first and last points of a series. */
-export function equityRangeChange(points: { t: number; v: number }[]): { absolute: number | null; percent: number | null } {
+export function equityRangeChange(points: { t: number; v: number }[]): {
+  absolute: number | null;
+  percent: number | null;
+} {
   if (points.length < 2) return { absolute: null, percent: null };
   const first = points[0].v;
   const last = points[points.length - 1].v;
@@ -157,7 +165,9 @@ export function equityPnlOverMs(snap: DashboardSnapshot, ms: number, now: number
 }
 
 export function openPositionCount(snap: DashboardSnapshot): number {
-  return (snap.tradingActivity?.kalshi.positions.length ?? 0) + (snap.tradingActivity?.polymarket.positions.length ?? 0);
+  return (
+    (snap.tradingActivity?.kalshi.positions.length ?? 0) + (snap.tradingActivity?.polymarket.positions.length ?? 0)
+  );
 }
 
 export function tradeableNow(snap: DashboardSnapshot): boolean {
@@ -183,16 +193,31 @@ export function operationalStatus(snap: DashboardSnapshot): {
 } {
   const e = snap.execution;
   if (!e) return { state: "halted", tone: "idle", label: "NO EXEC STATE", reason: "execution readiness unavailable" };
-  if (e.circuitBreakerLocked) return { state: "blocked", tone: "halt", label: "CIRCUIT BREAKER", reason: e.circuitBreakerReason };
-  if (e.riskState === "hard_locked") return { state: "blocked", tone: "halt", label: "HARD LOCKED", reason: e.riskStateReason };
+  if (e.circuitBreakerLocked)
+    return { state: "blocked", tone: "halt", label: "CIRCUIT BREAKER", reason: e.circuitBreakerReason };
+  if (e.riskState === "hard_locked")
+    return { state: "blocked", tone: "halt", label: "HARD LOCKED", reason: e.riskStateReason };
   if (e.riskState === "quarantined" || (e.reconciliation.quarantinedExposureDollars ?? 0) > 0)
-    return { state: "quarantined", tone: "stale", label: "QUARANTINED", reason: e.riskStateReason ?? "unhedged exposure" };
-  if (e.partialFillLocked) return { state: "blocked", tone: "halt", label: "PARTIAL-FILL LOCK", reason: "partial fill lock active" };
-  if (e.riskState === "recovering") return { state: "degraded", tone: "stale", label: "RECOVERING", reason: e.riskStateReason };
+    return {
+      state: "quarantined",
+      tone: "stale",
+      label: "QUARANTINED",
+      reason: e.riskStateReason ?? "unhedged exposure",
+    };
+  if (e.partialFillLocked)
+    return { state: "blocked", tone: "halt", label: "PARTIAL-FILL LOCK", reason: "partial fill lock active" };
+  if (e.riskState === "recovering")
+    return { state: "degraded", tone: "stale", label: "RECOVERING", reason: e.riskStateReason };
   if (e.riskState === "blocked") return { state: "blocked", tone: "halt", label: "BLOCKED", reason: e.riskStateReason };
   if (!e.kalshi.ready || !e.polymarket.ready)
-    return { state: "degraded", tone: "stale", label: "VENUE NOT READY", reason: !e.kalshi.ready ? e.kalshi.reason : e.polymarket.reason };
-  if (!e.liveTrading) return { state: "degraded", tone: "stale", label: "TRADING DISABLED", reason: "live trading off" };
+    return {
+      state: "degraded",
+      tone: "stale",
+      label: "VENUE NOT READY",
+      reason: !e.kalshi.ready ? e.kalshi.reason : e.polymarket.reason,
+    };
+  if (!e.liveTrading)
+    return { state: "degraded", tone: "stale", label: "TRADING DISABLED", reason: "live trading off" };
   return { state: "armed", tone: "live", label: "ARMED", reason: null };
 }
 
@@ -402,7 +427,7 @@ export function executionAggregates(snap: DashboardSnapshot): {
   };
   const eq = snap.execution?.executionQuality;
   return {
-    fillRate: snap.analytics?.daily.fillRate ?? (filled.length / n),
+    fillRate: snap.analytics?.daily.fillRate ?? filled.length / n,
     partialRate: partial.length / n,
     failedHedgeRate: failed.length / n,
     rejectionRate: (failed.length + skipped.length) / n,
@@ -410,7 +435,9 @@ export function executionAggregates(snap: DashboardSnapshot): {
     mismatchRate: eq?.mismatchRate ?? partial.length / n,
     timeoutRate: eq?.polymarketTimeoutRate ?? null,
     avgSlippage: snap.analytics?.daily.avgSlippage ?? avg(filled.map((s) => (s.depthVwap ?? s.premium) - s.premium)),
-    avgTimeToFillMs: snap.analytics?.daily.avgFillLatencyMs ?? avg(filled.map((s) => new Date(s.updatedAt).getTime() - new Date(s.createdAt).getTime())),
+    avgTimeToFillMs:
+      snap.analytics?.daily.avgFillLatencyMs ??
+      avg(filled.map((s) => new Date(s.updatedAt).getTime() - new Date(s.createdAt).getTime())),
     avgKalshiRtt: avg(sigs.map((s) => s.executionTimings?.kalshiRttMs)),
     avgPolyRtt: eq?.avgPolymarketRttMs ?? avg(sigs.map((s) => s.executionTimings?.polymarketRttMs)),
     avgPolyConfirmation: avg(sigs.map((s) => s.executionTimings?.polymarketConfirmationMs)),
@@ -420,7 +447,10 @@ export function executionAggregates(snap: DashboardSnapshot): {
 }
 
 /** Edge capture: expected risk-adjusted edge vs realized, with retention. */
-export function edgeCapture(win: DashboardAnalyticsWindow | undefined, snap: DashboardSnapshot): {
+export function edgeCapture(
+  win: DashboardAnalyticsWindow | undefined,
+  snap: DashboardSnapshot,
+): {
   expected: number | null;
   realized: number | null;
   retention: number | null;
@@ -429,9 +459,7 @@ export function edgeCapture(win: DashboardAnalyticsWindow | undefined, snap: Das
   const expected = sigs.length
     ? sigs.reduce((a, s) => a + (s.expectedExecutableEdge ?? s.guaranteedProfit), 0) / sigs.length
     : (snap.execution?.executionQuality?.estimatedExecutableEdge ?? null);
-  const realized = sigs.length
-    ? sigs.reduce((a, s) => a + (s.realizedGuaranteedProfit ?? 0), 0) / sigs.length
-    : null;
+  const realized = sigs.length ? sigs.reduce((a, s) => a + (s.realizedGuaranteedProfit ?? 0), 0) / sigs.length : null;
   const retention = expected && realized != null && Math.abs(expected) > 1e-9 ? realized / expected : null;
   return { expected, realized, retention };
 }

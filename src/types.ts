@@ -3,7 +3,14 @@ import type { TradingActivitySnapshot, VenuePnlSnapshot, EquityCurveSnapshot } f
 export type Venue = "kalshi" | "polymarket";
 export type LegDirection = "yes" | "no";
 export type SignalAction = "filled" | "skipped" | "failed";
-export type LiveOrderPlacementMode = "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact" | "kalshi_first_exact";
+export type LiveOrderPlacementMode =
+  | "parallel_market"
+  | "parallel_quick"
+  | "parallel_fok"
+  | "parallel_fak"
+  | "parallel_limit_rest"
+  | "polymarket_first_exact"
+  | "kalshi_first_exact";
 export type LiveKalshiHedgeOrderMode = "public_v2" | "ui_quick_order" | "fix_ioc";
 export type LiveKalshiHedgeTimeInForce = "immediate_or_cancel" | "fill_or_kill";
 export type LiveKalshiPrearmPricePolicy = "patch_after_fill";
@@ -16,7 +23,13 @@ export type LiveRecoveryStatus =
   | "auto_resolved_paired_fill"
   | "risk_quarantined"
   | "operator_required";
-export type LiveRiskState = "trading" | "recovering" | "blocked" | "hard_locked" | "quarantined" | "auto_hardlocks_disabled";
+export type LiveRiskState =
+  | "trading"
+  | "recovering"
+  | "blocked"
+  | "hard_locked"
+  | "quarantined"
+  | "auto_hardlocks_disabled";
 
 export interface BookLevel {
   price: number;
@@ -273,7 +286,16 @@ export interface ReconciliationResolution {
   notes?: string | null;
 }
 
-export type ExecutionStrategy = "sequential_hedge" | "parallel_canary" | "parallel_market" | "parallel_quick" | "parallel_fok" | "parallel_fak" | "parallel_limit_rest" | "polymarket_first_exact" | "kalshi_first_exact";
+export type ExecutionStrategy =
+  | "sequential_hedge"
+  | "parallel_canary"
+  | "parallel_market"
+  | "parallel_quick"
+  | "parallel_fok"
+  | "parallel_fak"
+  | "parallel_limit_rest"
+  | "polymarket_first_exact"
+  | "kalshi_first_exact";
 
 export interface UserStreamVenueState {
   enabled: boolean;

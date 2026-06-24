@@ -72,13 +72,15 @@ function matchingPositiveFillCounts(signal: DashboardSignal): boolean {
 }
 
 export function isExactLiveFilledSignal(signal: DashboardSignal): boolean {
-  return signal.action === "filled"
-    && typeof signal.executionGroupId === "string"
-    && signal.executionGroupId.length > 0
-    && hasRealVenueFillId(signal.kalshiFillId)
-    && hasRealVenueFillId(signal.polymarketFillId)
-    && matchingPositiveFillCounts(signal)
-    && signal.partialFill !== true;
+  return (
+    signal.action === "filled" &&
+    typeof signal.executionGroupId === "string" &&
+    signal.executionGroupId.length > 0 &&
+    hasRealVenueFillId(signal.kalshiFillId) &&
+    hasRealVenueFillId(signal.polymarketFillId) &&
+    matchingPositiveFillCounts(signal) &&
+    signal.partialFill !== true
+  );
 }
 
 function roundMetric(value: number): number {
@@ -114,9 +116,8 @@ export function estimatedGuaranteedPnl(signal: DashboardSignal): number | null {
   if (!isExactLiveFilledSignal(signal)) return null;
   const kalshiFillPrice = economicFillPriceForSignalVenue(signal, "kalshi", signal.kalshiFillPrice);
   const polymarketFillPrice = economicFillPriceForSignalVenue(signal, "polymarket", signal.polymarketFillPrice);
-  const fillPremium = kalshiFillPrice != null && polymarketFillPrice != null
-    ? kalshiFillPrice + polymarketFillPrice
-    : signal.premium;
+  const fillPremium =
+    kalshiFillPrice != null && polymarketFillPrice != null ? kalshiFillPrice + polymarketFillPrice : signal.premium;
   if (!Number.isFinite(fillPremium)) return null;
   return roundMetric(1 - fillPremium);
 }
@@ -126,16 +127,24 @@ function signalTrade(signal: DashboardSignal): AnalyticsTrade | null {
   const timestampMs = new Date(signal.updatedAt).getTime();
   const createdAtMs = new Date(signal.createdAt).getTime();
   if (!Number.isFinite(timestampMs)) return null;
-  const kalshiFillPrice = signal.kalshiFillPrice == null
-    ? null
-    : economicFillPriceForSignalVenue(signal, "kalshi", signal.kalshiFillPrice) ?? signal.kalshiFillPrice;
-  const polymarketFillPrice = signal.polymarketFillPrice == null
-    ? null
-    : economicFillPriceForSignalVenue(signal, "polymarket", signal.polymarketFillPrice) ?? signal.polymarketFillPrice;
-  const fillPremium = kalshiFillPrice != null && polymarketFillPrice != null
-    ? roundMetric(kalshiFillPrice + polymarketFillPrice)
-    : signal.action === "filled" ? signal.premium : null;
-  const askPremium = Number.isFinite(signal.lower.ask + signal.higher.ask) ? roundMetric(signal.lower.ask + signal.higher.ask) : signal.premium;
+  const kalshiFillPrice =
+    signal.kalshiFillPrice == null
+      ? null
+      : (economicFillPriceForSignalVenue(signal, "kalshi", signal.kalshiFillPrice) ?? signal.kalshiFillPrice);
+  const polymarketFillPrice =
+    signal.polymarketFillPrice == null
+      ? null
+      : (economicFillPriceForSignalVenue(signal, "polymarket", signal.polymarketFillPrice) ??
+        signal.polymarketFillPrice);
+  const fillPremium =
+    kalshiFillPrice != null && polymarketFillPrice != null
+      ? roundMetric(kalshiFillPrice + polymarketFillPrice)
+      : signal.action === "filled"
+        ? signal.premium
+        : null;
+  const askPremium = Number.isFinite(signal.lower.ask + signal.higher.ask)
+    ? roundMetric(signal.lower.ask + signal.higher.ask)
+    : signal.premium;
   return {
     timestampMs,
     createdAtMs,
@@ -143,7 +152,8 @@ function signalTrade(signal: DashboardSignal): AnalyticsTrade | null {
     pnl: estimatedGuaranteedPnl(signal),
     premium: fillPremium,
     slippage: fillPremium == null ? null : roundMetric(fillPremium - askPremium),
-    fillLatencyMs: signal.action === "filled" && Number.isFinite(createdAtMs) ? Math.max(0, timestampMs - createdAtMs) : null,
+    fillLatencyMs:
+      signal.action === "filled" && Number.isFinite(createdAtMs) ? Math.max(0, timestampMs - createdAtMs) : null,
   };
 }
 
@@ -197,7 +207,13 @@ function average(values: Array<number | null>): number | null {
   return roundMetric(numeric.reduce((sum, value) => sum + value, 0) / numeric.length);
 }
 
-function distributionBucket(label: string, values: number[], predicate: (value: number) => boolean, min: number | null, max: number | null): DashboardAnalyticsDistributionBucket {
+function distributionBucket(
+  label: string,
+  values: number[],
+  predicate: (value: number) => boolean,
+  min: number | null,
+  max: number | null,
+): DashboardAnalyticsDistributionBucket {
   return {
     label,
     min,
@@ -237,7 +253,9 @@ export function buildAnalyticsWindow(
   const endMs = sinceMs + definition.bucketCount * definition.bucketMs;
   const trades = signals
     .map(signalTrade)
-    .filter((trade): trade is AnalyticsTrade => trade != null && trade.timestampMs >= sinceMs && trade.timestampMs < endMs);
+    .filter(
+      (trade): trade is AnalyticsTrade => trade != null && trade.timestampMs >= sinceMs && trade.timestampMs < endMs,
+    );
   const filledTradesForWindow = trades.filter((trade) => trade.action === "filled" && trade.pnl != null);
 
   for (const trade of trades) {
@@ -268,7 +286,9 @@ export function buildAnalyticsWindow(
     bucket.drawdown = roundMetric(Math.max(0, peakPnl - cumulativePnl));
     maxDrawdown = Math.max(maxDrawdown, bucket.drawdown);
     bucket.avgPnl = bucket.tradeCount === 0 ? null : roundMetric(bucket.netPnl / bucket.tradeCount);
-    const bucketTrades = filledTradesForWindow.filter((trade) => trade.timestampMs >= bucket.startMs && trade.timestampMs < bucket.endMs);
+    const bucketTrades = filledTradesForWindow.filter(
+      (trade) => trade.timestampMs >= bucket.startMs && trade.timestampMs < bucket.endMs,
+    );
     bucket.avgSlippage = average(bucketTrades.map((trade) => trade.slippage));
     bucket.avgFillLatencyMs = average(bucketTrades.map((trade) => trade.fillLatencyMs));
   }
@@ -333,14 +353,20 @@ export function buildAnalyticsWindow(
     opportunityCount,
     fillRate: opportunityCount === 0 ? 0 : roundMetric(filledTrades / opportunityCount),
     pnlDistribution: pnlDistribution(pnls),
-    slippageDistribution: slippageDistribution(filledTradesForWindow.map((trade) => trade.slippage).filter((value): value is number => value != null)),
+    slippageDistribution: slippageDistribution(
+      filledTradesForWindow.map((trade) => trade.slippage).filter((value): value is number => value != null),
+    ),
     fillLatencySeries,
     heatmap,
     buckets,
   };
 }
 
-export function buildDashboardAnalytics(signals: DashboardSignal[], now = Date.now(), realtime?: DashboardAnalyticsRealtime): DashboardAnalytics {
+export function buildDashboardAnalytics(
+  signals: DashboardSignal[],
+  now = Date.now(),
+  realtime?: DashboardAnalyticsRealtime,
+): DashboardAnalytics {
   return {
     hourly: buildAnalyticsWindow(signals, "hourly", now),
     daily: buildAnalyticsWindow(signals, "daily", now),

@@ -4,7 +4,13 @@ import * as React from "react";
 import type { DashboardSnapshot, AnalyticsWindow } from "@/lib/types";
 import { ViewScroll, Grid, GridPanel, StatTile } from "./_layout";
 import { EChart } from "@/components/charts/echart";
-import { equityAreaOption, pnlBarsDrawdownOption, drawdownAreaOption, histogramOption, waterfallOption } from "@/components/charts/options";
+import {
+  equityAreaOption,
+  pnlBarsDrawdownOption,
+  drawdownAreaOption,
+  histogramOption,
+  waterfallOption,
+} from "@/components/charts/options";
 import { Empty } from "@/components/ui/stat";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { edgeCapture, orderSize } from "@/lib/selectors";
@@ -71,21 +77,65 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
         <StatTile label="Net PnL" value={fmt$(net)} tone={net >= 0 ? "up" : "down"} />
         <StatTile label="Win Rate" value={fmtPct(a.winRate)} tone="cyan" sub={`${a.tradesWon}W / ${a.tradesLost}L`} />
-        <StatTile label="Profit Factor" value={a.profitFactor != null ? a.profitFactor.toFixed(2) : "–"} tone="neutral" />
-        <StatTile label="Sharpe*" value={a.sharpeRatio != null ? a.sharpeRatio.toFixed(2) : "–"} tone="neutral" sub="per-trade" />
-        <StatTile label="Avg / Trade" value={fmtUsd(usd(a.averagePnl ?? 0), { sign: true })} tone={(a.averagePnl ?? 0) >= 0 ? "up" : "down"} />
-        <StatTile label="Best / Worst" value={`${fmtCents(a.bestTradePnl)} / ${fmtCents(a.worstTradePnl)}`} tone="neutral" />
+        <StatTile
+          label="Profit Factor"
+          value={a.profitFactor != null ? a.profitFactor.toFixed(2) : "–"}
+          tone="neutral"
+        />
+        <StatTile
+          label="Sharpe*"
+          value={a.sharpeRatio != null ? a.sharpeRatio.toFixed(2) : "–"}
+          tone="neutral"
+          sub="per-trade"
+        />
+        <StatTile
+          label="Avg / Trade"
+          value={fmtUsd(usd(a.averagePnl ?? 0), { sign: true })}
+          tone={(a.averagePnl ?? 0) >= 0 ? "up" : "down"}
+        />
+        <StatTile
+          label="Best / Worst"
+          value={`${fmtCents(a.bestTradePnl)} / ${fmtCents(a.worstTradePnl)}`}
+          tone="neutral"
+        />
         <StatTile label="Max Drawdown" value={fmtUsd(usd(a.maxDrawdown))} tone="amber" />
-        <StatTile label="Opportunities" value={fmtNum(a.opportunityCount)} tone="neutral" sub={`fill ${fmtPct(a.fillRate)}`} />
+        <StatTile
+          label="Opportunities"
+          value={fmtNum(a.opportunityCount)}
+          tone="neutral"
+          sub={`fill ${fmtPct(a.fillRate)}`}
+        />
       </div>
 
       <Grid>
-        <GridPanel title={`Equity Curve · Cumulative PnL`} dot="live" span={8} bodyClassName="h-[280px] p-2"
-          right={<span className={`font-mono text-[11px] tabular-nums ${net >= 0 ? "text-up" : "text-down"}`}>{fmt$(net)}</span>}>
-          {equityPts.length > 1 ? <EChart option={equityAreaOption(equityPts, { positive: net >= 0, fmt: fmt$ })} /> : <Empty />}
+        <GridPanel
+          title={`Equity Curve · Cumulative PnL`}
+          dot="live"
+          span={8}
+          bodyClassName="h-[280px] p-2"
+          right={
+            <span className={`font-mono text-[11px] tabular-nums ${net >= 0 ? "text-up" : "text-down"}`}>
+              {fmt$(net)}
+            </span>
+          }
+        >
+          {equityPts.length > 1 ? (
+            <EChart option={equityAreaOption(equityPts, { positive: net >= 0, fmt: fmt$ })} />
+          ) : (
+            <Empty />
+          )}
         </GridPanel>
-        <GridPanel title="Edge Capture · Expected → Realized" dot="info" span={4} bodyClassName="h-[280px] p-2"
-          right={<span className="font-mono text-[11px] tabular-nums text-cyan">{cap.retention != null ? `${fmtPctRaw(cap.retention * 100)} ret` : "–"}</span>}>
+        <GridPanel
+          title="Edge Capture · Expected → Realized"
+          dot="info"
+          span={4}
+          bodyClassName="h-[280px] p-2"
+          right={
+            <span className="font-mono text-[11px] tabular-nums text-cyan">
+              {cap.retention != null ? `${fmtPctRaw(cap.retention * 100)} ret` : "–"}
+            </span>
+          }
+        >
           <EChart option={waterfallOption(waterfall, (v) => fmtUsd(v, { sign: true }))} />
         </GridPanel>
       </Grid>
@@ -94,8 +144,15 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
         <GridPanel title="Per-Bucket Net PnL + Drawdown" dot="live" span={7} bodyClassName="h-[240px] p-2">
           <EChart option={pnlBarsDrawdownOption(bars, fmt$)} />
         </GridPanel>
-        <GridPanel title="Rolling Drawdown" dot="stale" span={5} bodyClassName="h-[240px] p-2"
-          right={<span className="font-mono text-[11px] tabular-nums text-amber">max {fmtUsd(usd(a.maxDrawdown))}</span>}>
+        <GridPanel
+          title="Rolling Drawdown"
+          dot="stale"
+          span={5}
+          bodyClassName="h-[240px] p-2"
+          right={
+            <span className="font-mono text-[11px] tabular-nums text-amber">max {fmtUsd(usd(a.maxDrawdown))}</span>
+          }
+        >
           <EChart option={drawdownAreaOption(ddPts, fmt$)} />
         </GridPanel>
       </Grid>
@@ -127,7 +184,10 @@ function HeatmapStrip({ buckets: b, usd: u }: { buckets: HeatCell[]; usd: (v: nu
       <div className="flex flex-wrap gap-1">
         {b.map((cell) => {
           const intensity = Math.min(1, Math.abs(cell.netPnl) / maxAbs);
-          const color = cell.netPnl >= 0 ? `rgba(38,214,124,${0.12 + intensity * 0.7})` : `rgba(255,92,92,${0.12 + intensity * 0.7})`;
+          const color =
+            cell.netPnl >= 0
+              ? `rgba(38,214,124,${0.12 + intensity * 0.7})`
+              : `rgba(255,92,92,${0.12 + intensity * 0.7})`;
           return (
             <div
               key={cell.label}
@@ -142,8 +202,12 @@ function HeatmapStrip({ buckets: b, usd: u }: { buckets: HeatCell[]; usd: (v: nu
         })}
       </div>
       <div className="flex items-center justify-center gap-4 font-mono text-[9px] uppercase tracking-wide text-fg-muted">
-        <span className="flex items-center gap-1"><span className="size-2 rounded-sm bg-up/70" /> profit</span>
-        <span className="flex items-center gap-1"><span className="size-2 rounded-sm bg-down/70" /> loss</span>
+        <span className="flex items-center gap-1">
+          <span className="size-2 rounded-sm bg-up/70" /> profit
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="size-2 rounded-sm bg-down/70" /> loss
+        </span>
         <span>cell = bucket · number = trades · hover for detail</span>
       </div>
     </div>

@@ -12,15 +12,7 @@ const toneColor: Record<StatusTone, string> = {
   info: "bg-cyan",
 };
 
-export function StatusDot({
-  tone,
-  pulse,
-  className,
-}: {
-  tone: StatusTone;
-  pulse?: boolean;
-  className?: string;
-}) {
+export function StatusDot({ tone, pulse, className }: { tone: StatusTone; pulse?: boolean; className?: string }) {
   return (
     <span
       className={cn(
@@ -34,22 +26,9 @@ export function StatusDot({
 }
 
 /** Section micro-label. */
-export function Label({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
+export function Label({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <span
-      className={cn(
-        "font-mono text-[10px] uppercase tracking-[0.12em] text-fg-muted",
-        className,
-      )}
-    >
-      {children}
-    </span>
+    <span className={cn("font-mono text-[10px] uppercase tracking-[0.12em] text-fg-muted", className)}>{children}</span>
   );
 }
 
@@ -158,7 +137,13 @@ export function Sparkline({
   const area = `${line} L${width},${height} L0,${height} Z`;
   const gid = React.useId();
   return (
-    <svg width={width} height={height} className={className} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+    <svg
+      width={width}
+      height={height}
+      className={className}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+    >
       {fill ? (
         <>
           <defs>
@@ -175,13 +160,7 @@ export function Sparkline({
   );
 }
 
-export function Empty({
-  children = "No data",
-  className,
-}: {
-  children?: React.ReactNode;
-  className?: string;
-}) {
+export function Empty({ children = "No data", className }: { children?: React.ReactNode; className?: string }) {
   return (
     <div
       className={cn(

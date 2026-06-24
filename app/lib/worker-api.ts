@@ -40,7 +40,9 @@ export async function fetchWorkerStream(): Promise<Response> {
 
 export async function fetchTradingActivity(platform: TradingPlatform): Promise<TradingPlatformActivity>;
 export async function fetchTradingActivity(platform?: undefined): Promise<TradingActivitySnapshot>;
-export async function fetchTradingActivity(platform?: TradingPlatform): Promise<TradingActivitySnapshot | TradingPlatformActivity> {
+export async function fetchTradingActivity(
+  platform?: TradingPlatform,
+): Promise<TradingActivitySnapshot | TradingPlatformActivity> {
   const suffix = platform ? `?platform=${encodeURIComponent(platform)}` : "";
   const response = await fetch(`${workerBase()}/trading/activity${suffix}`, {
     headers: { Authorization: `Bearer ${workerToken()}` },

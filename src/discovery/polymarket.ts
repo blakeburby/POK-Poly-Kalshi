@@ -1,8 +1,17 @@
 import type { AppConfig } from "../config";
 import { loadConfig } from "../config";
-import type { PolymarketPriceBeatRecord, PolymarketPriceBeatRepository, PolymarketPriceBeatSource } from "../db/polymarket-price-beats";
+import type {
+  PolymarketPriceBeatRecord,
+  PolymarketPriceBeatRepository,
+  PolymarketPriceBeatSource,
+} from "../db/polymarket-price-beats";
 import { logEvent } from "../logger";
-import type { BinaryContract, PolymarketDiagnostics, PolymarketMarketDiagnostic, PolymarketStrikeStatus } from "../types";
+import type {
+  BinaryContract,
+  PolymarketDiagnostics,
+  PolymarketMarketDiagnostic,
+  PolymarketStrikeStatus,
+} from "../types";
 import type { PolymarketPriceBeatWindow } from "../polymarket/price-to-beat";
 
 interface PolymarketMarket {
@@ -50,7 +59,10 @@ function arrayFrom(value: unknown): string[] {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed.map(String) : [];
   } catch {
-    return value.split(",").map((part) => part.trim()).filter(Boolean);
+    return value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
   }
 }
 
@@ -65,7 +77,8 @@ function timeFrom(...values: unknown[]): number | null {
     if (typeof value === "number" && Number.isFinite(value)) return value > 1_000_000_000_000 ? value : value * 1000;
     if (typeof value === "string" && value.trim()) {
       const numeric = numberFrom(value);
-      if (numeric != null && /^\d+(\.\d+)?$/.test(value.trim())) return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+      if (numeric != null && /^\d+(\.\d+)?$/.test(value.trim()))
+        return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
       const parsed = Date.parse(value);
       if (Number.isFinite(parsed)) return parsed;
     }
@@ -91,11 +104,17 @@ function slugStartMs(slug: string | undefined): number | null {
 }
 
 function eventStartMsForMarket(market: PolymarketMarket): number | null {
-  return slugStartMs(market.slug) ?? timeFrom(market.startDate, market.start_date, market.eventStartTime, market.event_start_time);
+  return (
+    slugStartMs(market.slug) ??
+    timeFrom(market.startDate, market.start_date, market.eventStartTime, market.event_start_time)
+  );
 }
 
 function expiryMsForMarket(market: PolymarketMarket, eventStartMs: number | null): number | null {
-  return timeFrom(market.endDate, market.end_date, market.game_start_time) ?? (eventStartMs == null ? null : eventStartMs + 15 * 60_000);
+  return (
+    timeFrom(market.endDate, market.end_date, market.game_start_time) ??
+    (eventStartMs == null ? null : eventStartMs + 15 * 60_000)
+  );
 }
 
 function conditionId(market: PolymarketMarket): string | null {
@@ -121,7 +140,7 @@ function parseMetadata(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }
@@ -198,27 +217,45 @@ export function emptyPolymarketDiagnostics(): PolymarketDiagnostics {
 async function fetchMarkets(url: string, fetchFn: typeof fetch): Promise<PolymarketMarket[]> {
   const response = await fetchFn(url);
   if (!response.ok) throw new Error(`Polymarket discovery failed ${response.status}: ${await response.text()}`);
-  const payload = await response.json() as PolymarketMarket[] | { data?: PolymarketMarket[]; markets?: PolymarketMarket[] };
-  return Array.isArray(payload) ? payload : payload.data ?? payload.markets ?? [];
+  const payload = (await response.json()) as
+    | PolymarketMarket[]
+    | { data?: PolymarketMarket[]; markets?: PolymarketMarket[] };
+  return Array.isArray(payload) ? payload : (payload.data ?? payload.markets ?? []);
 }
 
-async function discoverPolymarketBtc15mBySlug(config: AppConfig, now: number, fetchFn: typeof fetch): Promise<{ markets: PolymarketMarket[]; errors: string[] }> {
+async function discoverPolymarketBtc15mBySlug(
+  config: AppConfig,
+  now: number,
+  fetchFn: typeof fetch,
+): Promise<{ markets: PolymarketMarket[]; errors: string[] }> {
   const starts = discoveryStarts(config, now);
   const batches = await Promise.allSettled(
-    starts.map((startMs) => fetchMarkets(`https://gamma-api.polymarket.com/markets?slug=btc-updown-15m-${Math.floor(startMs / 1000)}&active=true&closed=false`, fetchFn)),
+    starts.map((startMs) =>
+      fetchMarkets(
+        `https://gamma-api.polymarket.com/markets?slug=btc-updown-15m-${Math.floor(startMs / 1000)}&active=true&closed=false`,
+        fetchFn,
+      ),
+    ),
   );
   const markets = batches.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
   const errors = batches
     .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-    .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason));
+    .map((result) => (result.reason instanceof Error ? result.reason.message : String(result.reason)));
   if (markets.length > 0) {
-    logEvent({ category: "DISCOVERY", message: "Polymarket BTC 15m slug fallback discovered markets", context: { count: markets.length } });
+    logEvent({
+      category: "DISCOVERY",
+      message: "Polymarket BTC 15m slug fallback discovered markets",
+      context: { count: markets.length },
+    });
   }
   return { markets, errors };
 }
 
 function findEventMetadataPriceToBeat(value: unknown): number | null {
-  const fromMetadata = eventMetadataPriceToBeat((value as { eventMetadata?: unknown; event_metadata?: unknown })?.eventMetadata ?? (value as { event_metadata?: unknown })?.event_metadata);
+  const fromMetadata = eventMetadataPriceToBeat(
+    (value as { eventMetadata?: unknown; event_metadata?: unknown })?.eventMetadata ??
+      (value as { event_metadata?: unknown })?.event_metadata,
+  );
   if (fromMetadata != null) return fromMetadata;
   if (Array.isArray(value)) {
     for (const item of value) {
@@ -262,7 +299,11 @@ export function extractPolymarketPagePriceToBeat(html: string, marketSlug: strin
   return null;
 }
 
-async function backfillPagePriceToBeat(marketSlug: string, fetchFn: typeof fetch, pageBaseUrl: string): Promise<number | null> {
+async function backfillPagePriceToBeat(
+  marketSlug: string,
+  fetchFn: typeof fetch,
+  pageBaseUrl: string,
+): Promise<number | null> {
   const response = await fetchFn(`${pageBaseUrl.replace(/\/$/, "")}/event/${marketSlug}`);
   if (!response.ok) return null;
   return extractPolymarketPagePriceToBeat(await response.text(), marketSlug);
@@ -295,8 +336,13 @@ async function evaluateMarket(
   storeRecord: PolymarketPriceBeatRecord | null,
   config: AppConfig,
   now: number,
-  deps: Required<Pick<PolymarketDiscoveryDependencies, "fetchFn" | "pageBaseUrl">> & Pick<PolymarketDiscoveryDependencies, "priceBeatStore">,
-): Promise<{ contract: BinaryContract | null; captureWindow: PolymarketPriceBeatWindow | null; diagnostic: PolymarketMarketDiagnostic }> {
+  deps: Required<Pick<PolymarketDiscoveryDependencies, "fetchFn" | "pageBaseUrl">> &
+    Pick<PolymarketDiscoveryDependencies, "priceBeatStore">,
+): Promise<{
+  contract: BinaryContract | null;
+  captureWindow: PolymarketPriceBeatWindow | null;
+  diagnostic: PolymarketMarketDiagnostic;
+}> {
   const marketSlug = market.slug;
   const marketConditionId = conditionId(market);
   const eventStartMs = eventStartMsForMarket(market);
@@ -307,7 +353,13 @@ async function evaluateMarket(
     return {
       contract: null,
       captureWindow: null,
-      diagnostic: diagnostic(market, "invalid_market", "missing slug, condition id, expiry, event start, or token ids", null, null),
+      diagnostic: diagnostic(
+        market,
+        "invalid_market",
+        "missing slug, condition id, expiry, event start, or token ids",
+        null,
+        null,
+      ),
     };
   }
 
@@ -320,7 +372,11 @@ async function evaluateMarket(
     await persistPriceBeat(deps.priceBeatStore, market, direct, "gamma", eventStartMs);
   }
 
-  if (priceToBeat == null && config.polymarketMissedOpenBackfill && now > eventStartMs + config.polymarketPriceCaptureToleranceMs) {
+  if (
+    priceToBeat == null &&
+    config.polymarketMissedOpenBackfill &&
+    now > eventStartMs + config.polymarketPriceCaptureToleranceMs
+  ) {
     const pageStrike = await backfillPagePriceToBeat(marketSlug, deps.fetchFn, deps.pageBaseUrl);
     if (pageStrike != null) {
       priceToBeat = pageStrike;
@@ -353,10 +409,12 @@ async function evaluateMarket(
   }
 
   const captureWindow = expiryMs > now ? { marketSlug, conditionId: marketConditionId, eventStartMs, expiryMs } : null;
-  const status: PolymarketStrikeStatus = now <= eventStartMs + config.polymarketPriceCaptureToleranceMs ? "pending_strike" : "missing_strike";
-  const reason = status === "pending_strike"
-    ? "waiting for first Polymarket Chainlink tick at window open"
-    : "no exact price-to-beat in store or page metadata";
+  const status: PolymarketStrikeStatus =
+    now <= eventStartMs + config.polymarketPriceCaptureToleranceMs ? "pending_strike" : "missing_strike";
+  const reason =
+    status === "pending_strike"
+      ? "waiting for first Polymarket Chainlink tick at window open"
+      : "no exact price-to-beat in store or page metadata";
   return {
     contract: null,
     captureWindow,
@@ -382,21 +440,30 @@ export async function discoverPolymarketBtcContractsWithDiagnostics(
   const slugDiscovery = await discoverPolymarketBtc15mBySlug(config, now, fetchFn);
   for (const error of slugDiscovery.errors) skippedReasons.add(error);
 
-  const markets = uniqueMarkets([...baseMarkets, ...slugDiscovery.markets])
-    .filter((market) => market.active !== false && market.closed !== true && isBtc15MinuteMarket(market));
+  const markets = uniqueMarkets([...baseMarkets, ...slugDiscovery.markets]).filter(
+    (market) => market.active !== false && market.closed !== true && isBtc15MinuteMarket(market),
+  );
   const marketSlugs = markets.map((market) => market.slug).filter((slug): slug is string => Boolean(slug));
-  const stored = dependencies.priceBeatStore ? await dependencies.priceBeatStore.getBySlugs(marketSlugs) : new Map<string, PolymarketPriceBeatRecord>();
+  const stored = dependencies.priceBeatStore
+    ? await dependencies.priceBeatStore.getBySlugs(marketSlugs)
+    : new Map<string, PolymarketPriceBeatRecord>();
 
   const contracts: BinaryContract[] = [];
   const captureWindows: PolymarketPriceBeatWindow[] = [];
   const diagnostics: PolymarketMarketDiagnostic[] = [];
 
   for (const market of markets) {
-    const evaluated = await evaluateMarket(market, market.slug ? stored.get(market.slug) ?? null : null, config, now, {
-      fetchFn,
-      pageBaseUrl,
-      priceBeatStore: dependencies.priceBeatStore,
-    });
+    const evaluated = await evaluateMarket(
+      market,
+      market.slug ? (stored.get(market.slug) ?? null) : null,
+      config,
+      now,
+      {
+        fetchFn,
+        pageBaseUrl,
+        priceBeatStore: dependencies.priceBeatStore,
+      },
+    );
     if (evaluated.contract) contracts.push(evaluated.contract);
     if (evaluated.captureWindow) captureWindows.push(evaluated.captureWindow);
     diagnostics.push(evaluated.diagnostic);
@@ -430,12 +497,19 @@ export async function discoverPolymarketBtcContractsWithDiagnostics(
   logEvent({
     category: "DISCOVERY",
     message: "Polymarket contracts discovered",
-    context: { count: contracts.length, marketsFound: markets.length, pendingStrikeCount: resultDiagnostics.pendingStrikeCount },
+    context: {
+      count: contracts.length,
+      marketsFound: markets.length,
+      pendingStrikeCount: resultDiagnostics.pendingStrikeCount,
+    },
   });
 
   return { contracts, captureWindows, diagnostics: resultDiagnostics };
 }
 
-export async function discoverPolymarketBtcContracts(config: AppConfig = loadConfig(), now = Date.now()): Promise<BinaryContract[]> {
+export async function discoverPolymarketBtcContracts(
+  config: AppConfig = loadConfig(),
+  now = Date.now(),
+): Promise<BinaryContract[]> {
   return (await discoverPolymarketBtcContractsWithDiagnostics(config, now)).contracts;
 }

@@ -45,12 +45,21 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
   return (
     <ViewScroll>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">
-        <StatTile label="Live Candidates" value={fmtNum(live.length)} tone="cyan" sub={`scan ${snap.scanner.lastCandidateCount}`} />
+        <StatTile
+          label="Live Candidates"
+          value={fmtNum(live.length)}
+          tone="cyan"
+          sub={`scan ${snap.scanner.lastCandidateCount}`}
+        />
         <StatTile label="True Arbitrage" value={fmtNum(counts.true_arbitrage)} tone="up" />
         <StatTile label="Sub-Threshold" value={fmtNum(counts.guaranteed_below_threshold)} tone="amber" />
         <StatTile label="Probabilistic" value={fmtNum(counts.probabilistic_bet)} tone="down" />
         <StatTile label="Min Edge (Thr)" value={fmtCents(threshold)} tone="neutral" />
-        <StatTile label="Opportunity / Fill" value={`${fmtNum(a?.opportunityCount ?? 0)} · ${fmtPct(a?.fillRate)}`} tone="neutral" />
+        <StatTile
+          label="Opportunity / Fill"
+          value={`${fmtNum(a?.opportunityCount ?? 0)} · ${fmtPct(a?.fillRate)}`}
+          tone="neutral"
+        />
       </div>
 
       <Grid>
@@ -61,9 +70,15 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
           bodyClassName="h-[300px] p-2"
           right={
             <div className="hidden items-center gap-2.5 font-mono text-[9px] uppercase tracking-wide text-fg-muted sm:flex">
-              <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-up" /> arb</span>
-              <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-amber" /> sub-thr</span>
-              <span className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-down" /> prob</span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-up" /> arb
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-amber" /> sub-thr
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-down" /> prob
+              </span>
             </div>
           }
         >
@@ -89,7 +104,12 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
       </Grid>
 
       <GridPanel title="Live Opportunity Blotter" dot={live.length ? "live" : "idle"} span={12} bodyClassName="p-0">
-        <CandidateTable candidates={structures} threshold={threshold} selected={selectedCand?.pairKey ?? null} onSelect={setSelected} />
+        <CandidateTable
+          candidates={structures}
+          threshold={threshold}
+          selected={selectedCand?.pairKey ?? null}
+          onSelect={setSelected}
+        />
       </GridPanel>
 
       <GridPanel title="Polymarket Strike Discovery" dot="info" span={12} bodyClassName="p-0">
@@ -108,8 +128,18 @@ function PayoffProfile({ cand }: { cand: ArbCandidate }) {
     <>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[13px] text-fg">BTC {lo.toLocaleString()} / {hi.toLocaleString()}</span>
-          <Badge variant={r.classification === "true_arbitrage" ? "up" : r.classification === "guaranteed_below_threshold" ? "amber" : "down"}>
+          <span className="font-mono text-[13px] text-fg">
+            BTC {lo.toLocaleString()} / {hi.toLocaleString()}
+          </span>
+          <Badge
+            variant={
+              r.classification === "true_arbitrage"
+                ? "up"
+                : r.classification === "guaranteed_below_threshold"
+                  ? "amber"
+                  : "down"
+            }
+          >
             {r.classification.replace(/_/g, " ")}
           </Badge>
         </div>
@@ -128,14 +158,25 @@ function PayoffProfile({ cand }: { cand: ArbCandidate }) {
                 />
                 <div className="absolute left-1/2 top-0 h-full w-px bg-line-strong" />
               </div>
-              <span className={cn("w-16 shrink-0 text-right font-mono text-[11px] tabular-nums", pos ? "text-up" : "text-down")}>{fmtCents(p.profit, true)}</span>
+              <span
+                className={cn(
+                  "w-16 shrink-0 text-right font-mono text-[11px] tabular-nums",
+                  pos ? "text-up" : "text-down",
+                )}
+              >
+                {fmtCents(p.profit, true)}
+              </span>
             </div>
           );
         })}
       </div>
       <div className="grid grid-cols-3 gap-2 border-t border-line/60 pt-2.5">
         <Mini label="Premium" value={fmtCents(r.premium)} />
-        <Mini label="Worst Case" value={fmtCents(r.worstCaseProfit, true)} tone={r.worstCaseProfit >= 0 ? "up" : "down"} />
+        <Mini
+          label="Worst Case"
+          value={fmtCents(r.worstCaseProfit, true)}
+          tone={r.worstCaseProfit >= 0 ? "up" : "down"}
+        />
         <Mini label="Best Case" value={fmtCents(r.bestCaseProfit, true)} tone="up" />
       </div>
     </>
@@ -146,7 +187,14 @@ function Mini({ label, value, tone }: { label: string; value: string; tone?: "up
   return (
     <div className="rounded-sm border border-line/60 bg-surface-2/40 px-2 py-1.5">
       <div className="font-mono text-[9px] uppercase tracking-wide text-fg-muted">{label}</div>
-      <div className={cn("font-mono text-[12px] tabular-nums", tone === "up" ? "text-up" : tone === "down" ? "text-down" : "text-fg")}>{value}</div>
+      <div
+        className={cn(
+          "font-mono text-[12px] tabular-nums",
+          tone === "up" ? "text-up" : tone === "down" ? "text-down" : "text-fg",
+        )}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -192,7 +240,9 @@ function CandidateTable({
                   selected === c.pairKey && "bg-cyan/5 ring-1 ring-inset ring-cyan/20",
                 )}
               >
-                <td className="px-3 py-1.5 text-fg">{lo.toLocaleString()}/{hi.toLocaleString()}</td>
+                <td className="px-3 py-1.5 text-fg">
+                  {lo.toLocaleString()}/{hi.toLocaleString()}
+                </td>
                 <td className="px-3 py-1.5">
                   <span className={cn("text-[10px]", c.lower.venue === "kalshi" ? "text-kalshi" : "text-poly")}>
                     {c.lower.venue.slice(0, 3)} {c.lower.direction.toUpperCase()} {fmtCents(c.lower.ask)}
@@ -206,14 +256,23 @@ function CandidateTable({
                 <td className="px-3 py-1.5 text-right text-fg-secondary">{fmtCents(c.premium)}</td>
                 <td className="px-3 py-1.5 text-right">
                   <div className="flex items-center justify-end gap-2">
-                    <MiniBar value={c.guaranteedProfit / maxEdge} tone={c.executable ? "live" : "stale"} className="w-10" />
+                    <MiniBar
+                      value={c.guaranteedProfit / maxEdge}
+                      tone={c.executable ? "live" : "stale"}
+                      className="w-10"
+                    />
                     <span className="text-up">{fmtCents(c.guaranteedProfit)}</span>
                   </div>
                 </td>
-                <td className={cn("px-3 py-1.5 text-right", over >= 0 ? "text-up" : "text-down")}>{fmtCents(over, true)}</td>
+                <td className={cn("px-3 py-1.5 text-right", over >= 0 ? "text-up" : "text-down")}>
+                  {fmtCents(over, true)}
+                </td>
                 <td className="px-3 py-1.5">
                   {c.executable ? (
-                    <span className="flex items-center gap-1.5"><StatusDot tone="live" className="size-1.5" /><span className="text-[10px] text-up">EXECUTABLE</span></span>
+                    <span className="flex items-center gap-1.5">
+                      <StatusDot tone="live" className="size-1.5" />
+                      <span className="text-[10px] text-up">EXECUTABLE</span>
+                    </span>
                   ) : (
                     <span className="text-[10px] text-fg-muted">{c.reason ?? "rejected"}</span>
                   )}
@@ -242,12 +301,21 @@ function DiscoveryStrip({ snap }: { snap: DashboardSnapshot }) {
       {items.map(([k, v, tone]) => (
         <div key={k} className="flex min-w-[130px] flex-1 flex-col gap-1 border-r border-line/60 px-3.5 py-2.5">
           <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">{k}</span>
-          <span className={cn("font-mono text-[16px] tabular-nums", tone === "up" ? "text-up" : tone === "amber" ? "text-amber" : tone === "down" ? "text-down" : "text-fg")}>{v}</span>
+          <span
+            className={cn(
+              "font-mono text-[16px] tabular-nums",
+              tone === "up" ? "text-up" : tone === "amber" ? "text-amber" : tone === "down" ? "text-down" : "text-fg",
+            )}
+          >
+            {v}
+          </span>
         </div>
       ))}
       <div className="flex min-w-[160px] flex-1 flex-col gap-1 px-3.5 py-2.5">
         <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">Last Chainlink Tick</span>
-        <span className="font-mono text-[16px] tabular-nums text-fg">{d.lastChainlinkTickAgeMs != null ? `${Math.round(d.lastChainlinkTickAgeMs / 1000)}s` : "–"}</span>
+        <span className="font-mono text-[16px] tabular-nums text-fg">
+          {d.lastChainlinkTickAgeMs != null ? `${Math.round(d.lastChainlinkTickAgeMs / 1000)}s` : "–"}
+        </span>
       </div>
     </div>
   );

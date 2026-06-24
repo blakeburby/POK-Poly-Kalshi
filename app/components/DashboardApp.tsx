@@ -47,7 +47,9 @@ function FeedDown({ name }: { name?: string }) {
         <p className="mt-1 font-mono text-[11px] text-fg-muted">
           {name ?? "POK Capital Terminal"} · awaiting snapshot stream
         </p>
-        <p className="mt-3 font-mono text-[10px] text-fg-faint">append <span className="text-cyan">?demo=1</span> to load the demo feed</p>
+        <p className="mt-3 font-mono text-[10px] text-fg-faint">
+          append <span className="text-cyan">?demo=1</span> to load the demo feed
+        </p>
       </div>
     </div>
   );

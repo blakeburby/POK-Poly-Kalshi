@@ -57,7 +57,10 @@ function marketStrike(market: KalshiMarket): number | null {
 }
 
 function marketExpiry(market: KalshiMarket): number | null {
-  return expiryFromTicker(market.ticker ?? market.market_ticker) ?? timeFrom(market.expiration_time, market.expected_expiration_time, market.close_time);
+  return (
+    expiryFromTicker(market.ticker ?? market.market_ticker) ??
+    timeFrom(market.expiration_time, market.expected_expiration_time, market.close_time)
+  );
 }
 
 const monthIndexes: Record<string, number> = {
@@ -75,7 +78,14 @@ const monthIndexes: Record<string, number> = {
   DEC: 11,
 };
 
-function zonedTimeToUtcMs(year: number, monthIndex: number, day: number, hour: number, minute: number, timeZone: string): number {
+function zonedTimeToUtcMs(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): number {
   const utcGuess = Date.UTC(year, monthIndex, day, hour, minute);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -97,7 +107,14 @@ function expiryFromTicker(ticker: string | undefined): number | null {
   const [, yearText, monthText, dayText, hourText, minuteText] = match;
   const monthIndex = monthIndexes[monthText];
   if (monthIndex == null) return null;
-  return zonedTimeToUtcMs(2000 + Number(yearText), monthIndex, Number(dayText), Number(hourText), Number(minuteText), "America/New_York");
+  return zonedTimeToUtcMs(
+    2000 + Number(yearText),
+    monthIndex,
+    Number(dayText),
+    Number(hourText),
+    Number(minuteText),
+    "America/New_York",
+  );
 }
 
 function marketsPath(config: AppConfig): { url: URL; signPath: string } {
@@ -109,11 +126,14 @@ function marketsPath(config: AppConfig): { url: URL; signPath: string } {
   return { url: base, signPath: `${base.pathname}${base.search}` };
 }
 
-export async function discoverKalshiBtcContracts(config: AppConfig = loadConfig(), now = Date.now()): Promise<BinaryContract[]> {
+export async function discoverKalshiBtcContracts(
+  config: AppConfig = loadConfig(),
+  now = Date.now(),
+): Promise<BinaryContract[]> {
   const { url, signPath } = marketsPath(config);
   const response = await fetch(url, { headers: getKalshiHeaders("GET", signPath) });
   if (!response.ok) throw new Error(`Kalshi discovery failed ${response.status}: ${await response.text()}`);
-  const payload = await response.json() as { markets?: KalshiMarket[] };
+  const payload = (await response.json()) as { markets?: KalshiMarket[] };
   const markets = Array.isArray(payload.markets) ? payload.markets : [];
   const contracts: BinaryContract[] = [];
 

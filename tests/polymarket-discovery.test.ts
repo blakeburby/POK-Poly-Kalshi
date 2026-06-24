@@ -19,10 +19,12 @@ class MemoryPriceBeatStore implements PolymarketPriceBeatRepository {
   }
 
   async getBySlugs(marketSlugs: string[]): Promise<Map<string, PolymarketPriceBeatRecord>> {
-    return new Map(marketSlugs.flatMap((slug) => {
-      const record = this.records.get(slug);
-      return record ? [[slug, record] as const] : [];
-    }));
+    return new Map(
+      marketSlugs.flatMap((slug) => {
+        const record = this.records.get(slug);
+        return record ? [[slug, record] as const] : [];
+      }),
+    );
   }
 }
 

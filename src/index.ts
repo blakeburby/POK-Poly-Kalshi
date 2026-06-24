@@ -52,7 +52,14 @@ async function main(): Promise<void> {
   const books = new BookStore(config.liveOrderSize, config.liveQuoteFreshnessFromWsOnly);
   const signals = new SignalStore(pool, config.liveQuarantineCapSettleGraceMs);
   const baseLiveLocks = new LiveExecutionLockStore(pool);
-  const cachedLiveLocks = config.liveHotPathEnabled ? new CachedLiveExecutionLockStore(baseLiveLocks, config.liveHotPathCacheMaxAgeMs, Date.now, config.liveHotPathLockCacheGraceMs) : null;
+  const cachedLiveLocks = config.liveHotPathEnabled
+    ? new CachedLiveExecutionLockStore(
+        baseLiveLocks,
+        config.liveHotPathCacheMaxAgeMs,
+        Date.now,
+        config.liveHotPathLockCacheGraceMs,
+      )
+    : null;
   const liveLocks = cachedLiveLocks ?? baseLiveLocks;
   const liveExposureCache = config.liveHotPathEnabled
     ? new LiveExposureCache(signals, config.liveHotPathCacheMaxAgeMs, config.liveMaxUnresolvedExposureDollars)
@@ -74,21 +81,43 @@ async function main(): Promise<void> {
         if ((await portfolioEquity.count()) > 0) return;
         const now = Date.now();
         const activity = await tradingActivity.getSnapshot({ now });
-        const current = (activity.kalshi.portfolio.portfolioValue ?? 0) + (activity.polymarket.portfolio.portfolioValue ?? 0);
+        const current =
+          (activity.kalshi.portfolio.portfolioValue ?? 0) + (activity.polymarket.portfolio.portfolioValue ?? 0);
         const fills = (await signals.listFilledSignalsSince(0, 50_000))
-          .map((s) => ({ t: new Date(s.updatedAt).getTime(), pnl: (s.realizedGuaranteedProfit ?? 0) * config.liveOrderSize }))
+          .map((s) => ({
+            t: new Date(s.updatedAt).getTime(),
+            pnl: (s.realizedGuaranteedProfit ?? 0) * config.liveOrderSize,
+          }))
           .filter((f) => Number.isFinite(f.t))
           .sort((a, b) => a.t - b.t);
         const total = fills.reduce((acc, f) => acc + f.pnl, 0);
         let cum = 0;
         const points = fills.map((f) => {
           cum += f.pnl;
-          return { sampledAtMs: f.t, kalshiValue: null, polymarketValue: null, combinedValue: current - (total - cum), kalshiCash: null, polymarketCash: null, source: "reconstructed" as const };
+          return {
+            sampledAtMs: f.t,
+            kalshiValue: null,
+            polymarketValue: null,
+            combinedValue: current - (total - cum),
+            kalshiCash: null,
+            polymarketCash: null,
+            source: "reconstructed" as const,
+          };
         });
         if (points.length) await portfolioEquity.recordMany(points);
-        logEvent({ severity: "INFO", category: "DB", message: "equity curve backfilled", context: { points: points.length } });
+        logEvent({
+          severity: "INFO",
+          category: "DB",
+          message: "equity curve backfilled",
+          context: { points: points.length },
+        });
       } catch (error) {
-        logEvent({ severity: "WARN", category: "DB", message: "equity backfill failed", context: { error: error instanceof Error ? error.message : String(error) } });
+        logEvent({
+          severity: "WARN",
+          category: "DB",
+          message: "equity backfill failed",
+          context: { error: error instanceof Error ? error.message : String(error) },
+        });
       }
     })();
   }
@@ -104,20 +133,25 @@ async function main(): Promise<void> {
     liveAnalytics.reconcileFilledSignals(liveSignals, now);
   }
   await reconcileAnalytics();
-  const kalshiUserStream = config.liveUserStreamsEnabled ? new KalshiUserStreamClient(config.kalshiUserWsUrl, orderEvents) : null;
-  const polymarketUserStream = config.liveUserStreamsEnabled ? PolymarketUserStreamClient.fromConfig(config, orderEvents) : null;
+  const kalshiUserStream = config.liveUserStreamsEnabled
+    ? new KalshiUserStreamClient(config.kalshiUserWsUrl, orderEvents)
+    : null;
+  const polymarketUserStream = config.liveUserStreamsEnabled
+    ? PolymarketUserStreamClient.fromConfig(config, orderEvents)
+    : null;
   const confirmationMonitor = new LiveVenueConfirmationCoordinator({
     enabled: config.liveUserStreamsEnabled,
     confirmTimeoutMs: config.liveUserStreamConfirmTimeoutMs,
     reconcileBeforeTrade: config.liveReconcileBeforeTrade,
     eventSource: orderEvents,
-    streamReadiness: (now) => buildUserStreamReadiness(
-      config.liveUserStreamsEnabled,
-      config.liveUserStreamConfirmTimeoutMs,
-      kalshiUserStream?.status(),
-      polymarketUserStream?.status(),
-      now,
-    ),
+    streamReadiness: (now) =>
+      buildUserStreamReadiness(
+        config.liveUserStreamsEnabled,
+        config.liveUserStreamConfirmTimeoutMs,
+        kalshiUserStream?.status(),
+        polymarketUserStream?.status(),
+        now,
+      ),
     reconciliationStore: liveExposure,
     maxUnresolvedExposureDollars: config.liveMaxUnresolvedExposureDollars,
     autoHardlocksEnabled: config.liveAutoHardlocksEnabled,
@@ -135,7 +169,17 @@ async function main(): Promise<void> {
     liveLocks,
     now: Date.now,
   });
-  const liveReadinessProbe = new LiveExecutor(config, books, undefined, undefined, Date.now, liveLocks, orderEvents, confirmationMonitor, liveExposure);
+  const liveReadinessProbe = new LiveExecutor(
+    config,
+    books,
+    undefined,
+    undefined,
+    Date.now,
+    liveLocks,
+    orderEvents,
+    confirmationMonitor,
+    liveExposure,
+  );
   // One shared notifier: the scanner fires it after each real-attempt persist; open dashboard realtime
   // streams subscribe and push the new ledger row within ~network RTT (instead of the TTL-bounded poll).
   const signalsNotifier = new DashboardSignalsNotifier();
@@ -229,18 +273,31 @@ async function main(): Promise<void> {
         }
         if (config.liveHotPathEnabled) {
           void warmHotPath().catch((error) => {
-            logEvent({ severity: "WARN", category: "DISCOVERY", message: "hot-path warmup after discovery failed", context: { error: error instanceof Error ? error.message : String(error) } });
+            logEvent({
+              severity: "WARN",
+              category: "DISCOVERY",
+              message: "hot-path warmup after discovery failed",
+              context: { error: error instanceof Error ? error.message : String(error) },
+            });
           });
         }
         lastDiscoveryAt = Date.now();
         lastDiscoveryError = null;
       } catch (error) {
         lastDiscoveryError = error instanceof Error ? error.message : String(error);
-        logEvent({ severity: "ERROR", category: "DISCOVERY", message: "discovery refresh failed", context: { error: lastDiscoveryError } });
+        logEvent({
+          severity: "ERROR",
+          category: "DISCOVERY",
+          message: "discovery refresh failed",
+          context: { error: lastDiscoveryError },
+        });
         // The steady interval is a 5-min backstop, so retry a FAILED discovery sooner — otherwise a transient
         // fetch error could leave the worker without fresh contracts for minutes. One in-flight retry at a time.
         if (!discoveryRetryTimer) {
-          discoveryRetryTimer = setTimeout(() => { discoveryRetryTimer = null; void refreshDiscovery(); }, 30_000);
+          discoveryRetryTimer = setTimeout(() => {
+            discoveryRetryTimer = null;
+            void refreshDiscovery();
+          }, 30_000);
         }
       } finally {
         discoveryInFlight = null;
@@ -289,23 +346,45 @@ async function main(): Promise<void> {
     ]);
   }
   await warmHotPath().catch((error) => {
-    logEvent({ severity: "WARN", category: "BOOT", message: "initial hot-path warmup failed", context: { error: error instanceof Error ? error.message : String(error) } });
+    logEvent({
+      severity: "WARN",
+      category: "BOOT",
+      message: "initial hot-path warmup failed",
+      context: { error: error instanceof Error ? error.message : String(error) },
+    });
   });
   const discoveryTimer = setInterval(() => void refreshDiscovery(), config.marketDiscoveryIntervalMs);
-  const hotPathWarmTimer = setInterval(() => {
-    void warmHotPath().catch((error) => {
-      logEvent({ severity: "WARN", category: "BOOT", message: "hot-path warmup failed", context: { error: error instanceof Error ? error.message : String(error) } });
-    });
-  }, Math.max(250, config.liveHotPathWarmIntervalMs));
+  const hotPathWarmTimer = setInterval(
+    () => {
+      void warmHotPath().catch((error) => {
+        logEvent({
+          severity: "WARN",
+          category: "BOOT",
+          message: "hot-path warmup failed",
+          context: { error: error instanceof Error ? error.message : String(error) },
+        });
+      });
+    },
+    Math.max(250, config.liveHotPathWarmIntervalMs),
+  );
   const scanHeartbeatTimer = createScanHeartbeat({
     enabled: config.arbEnabled,
     intervalMs: config.arbScanHeartbeatMs,
     getLastScanAt: () => scanner.status().lastScanAt,
     requestScan: (now) => scanScheduler.requestScan(now),
   });
-  const analyticsTimer = setInterval(() => void reconcileAnalytics().catch((error) => {
-    logEvent({ severity: "ERROR", category: "DB", message: "analytics reconciliation failed", context: { error: error instanceof Error ? error.message : String(error) } });
-  }), Math.max(1_000, config.dashboardAnalyticsRefreshMs));
+  const analyticsTimer = setInterval(
+    () =>
+      void reconcileAnalytics().catch((error) => {
+        logEvent({
+          severity: "ERROR",
+          category: "DB",
+          message: "analytics reconciliation failed",
+          context: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }),
+    Math.max(1_000, config.dashboardAnalyticsRefreshMs),
+  );
   // Runtime-health watchdog: surface event-loop stall / CPU steal (burst-credit throttle) immediately instead
   // of letting it silently halt trading. Single sampler so the /proc/stat steal delta stays consistent.
   startRuntimeHealthMonitor();
@@ -316,7 +395,11 @@ async function main(): Promise<void> {
         severity: "WARN",
         category: "BOOT",
         message: "runtime health degraded: event-loop stall / CPU throttle",
-        context: { eventLoopLagMeanMs: h.eventLoopLagMeanMs, eventLoopLagP99Ms: h.eventLoopLagP99Ms, cpuStealPercent: h.cpuStealPercent },
+        context: {
+          eventLoopLagMeanMs: h.eventLoopLagMeanMs,
+          eventLoopLagP99Ms: h.eventLoopLagP99Ms,
+          cpuStealPercent: h.cpuStealPercent,
+        },
       });
     }
   }, 10_000);
@@ -328,7 +411,8 @@ async function main(): Promise<void> {
         config,
         books,
         signals,
-        getAnalytics: (now) => liveAnalytics.snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
+        getAnalytics: (now) =>
+          liveAnalytics.snapshot(now, { staleAfterMs: Math.max(30_000, config.dashboardAnalyticsRefreshMs * 3) }),
         getScannerStatus: () => scanner.status(),
         getDiscoveryState: () => ({ lastDiscoveryAt, lastDiscoveryError }),
         getPolymarketDiagnostics: livePolymarketDiagnostics,
@@ -348,10 +432,12 @@ async function main(): Promise<void> {
           };
         },
         recordEquitySample: (activity, now) => equitySampler.maybeSample(activity, now),
-        getTradingPlatformActivity: (platform, now, readiness) => tradingActivity.getPlatformActivity(platform, { now, readiness }),
-        subscribeTradingActivityEvents: (listener) => orderEvents.onEvent((event) => {
-          listener(tradingActivityEventFromVenueEvent(event));
-        }),
+        getTradingPlatformActivity: (platform, now, readiness) =>
+          tradingActivity.getPlatformActivity(platform, { now, readiness }),
+        subscribeTradingActivityEvents: (listener) =>
+          orderEvents.onEvent((event) => {
+            listener(tradingActivityEventFromVenueEvent(event));
+          }),
         signalsNotifier,
         getLogs: getRecentLogs,
       });
@@ -396,7 +482,12 @@ async function main(): Promise<void> {
       }
       sendJson(response, 404, { error: "not_found" });
     })().catch((error) => {
-      logEvent({ severity: "ERROR", category: "BOOT", message: "request failed", context: { error: error instanceof Error ? error.message : String(error) } });
+      logEvent({
+        severity: "ERROR",
+        category: "BOOT",
+        message: "request failed",
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
       if (!response.headersSent) sendJson(response, 500, { error: "internal_error" });
       else response.end();
     });
@@ -442,6 +533,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  logEvent({ severity: "ERROR", category: "BOOT", message: "worker failed", context: { error: error instanceof Error ? error.message : String(error) } });
+  logEvent({
+    severity: "ERROR",
+    category: "BOOT",
+    message: "worker failed",
+    context: { error: error instanceof Error ? error.message : String(error) },
+  });
   process.exitCode = 1;
 });

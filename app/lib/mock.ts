@@ -87,11 +87,7 @@ function leg(venue: Venue, contractId: string, direction: "yes" | "no", strike: 
   return { venue, contractId, direction, strike, ask, tokenId: `${contractId}-${direction}` };
 }
 
-function buildCandidate(
-  lowerC: BinaryContract,
-  higherC: BinaryContract,
-  threshold: number,
-): ArbCandidate {
+function buildCandidate(lowerC: BinaryContract, higherC: BinaryContract, threshold: number): ArbCandidate {
   const lower = leg(lowerC.venue, lowerC.contractId, "yes", lowerC.strike, lowerC.yesAsk ?? 0.5);
   const higher = leg(higherC.venue, higherC.contractId, "no", higherC.strike, higherC.noAsk ?? 0.5);
   const premium = round(lower.ask + higher.ask);
@@ -101,7 +97,11 @@ function buildCandidate(
   const midStrike = round((higherC.strike + lowerC.strike) / 2);
   const worstCaseProfit = guaranteedProfit;
   const classification =
-    worstCaseProfit >= threshold ? "true_arbitrage" : worstCaseProfit >= 0 ? "guaranteed_below_threshold" : "probabilistic_bet";
+    worstCaseProfit >= threshold
+      ? "true_arbitrage"
+      : worstCaseProfit >= 0
+        ? "guaranteed_below_threshold"
+        : "probabilistic_bet";
   return {
     pairKey: `${lowerC.expiryMs}:${lower.venue}:${lower.contractId}:yes:${higher.venue}:${higher.contractId}:no`,
     expiryMs: lowerC.expiryMs,
@@ -133,9 +133,36 @@ function buildCandidate(
       conditionalEdge: overlapProfit,
       maxLossRegion: null,
       payoffProfile: [
-        { region: "below_lower", label: `< ${lowerC.strike}`, fromStrike: null, toStrike: lowerC.strike, width: null, payoff: 1, profit: guaranteedProfit, isMaxLoss: false },
-        { region: "between_strikes", label: `${lowerC.strike} - ${higherC.strike}`, fromStrike: lowerC.strike, toStrike: higherC.strike, width: strikeGap, payoff: 2, profit: overlapProfit, isMaxLoss: false },
-        { region: "above_higher", label: `>= ${higherC.strike}`, fromStrike: higherC.strike, toStrike: null, width: null, payoff: 1, profit: guaranteedProfit, isMaxLoss: false },
+        {
+          region: "below_lower",
+          label: `< ${lowerC.strike}`,
+          fromStrike: null,
+          toStrike: lowerC.strike,
+          width: null,
+          payoff: 1,
+          profit: guaranteedProfit,
+          isMaxLoss: false,
+        },
+        {
+          region: "between_strikes",
+          label: `${lowerC.strike} - ${higherC.strike}`,
+          fromStrike: lowerC.strike,
+          toStrike: higherC.strike,
+          width: strikeGap,
+          payoff: 2,
+          profit: overlapProfit,
+          isMaxLoss: false,
+        },
+        {
+          region: "above_higher",
+          label: `>= ${higherC.strike}`,
+          fromStrike: higherC.strike,
+          toStrike: null,
+          width: null,
+          payoff: 1,
+          profit: guaranteedProfit,
+          isMaxLoss: false,
+        },
       ],
     },
   };
@@ -164,13 +191,30 @@ function buildSignal(
   const filled = r < 0.74;
   const partial = !filled && r < 0.86;
   const failed = !filled && !partial;
-  const action: DashboardSignal["action"] = filled ? "filled" : failed ? (rng() > 0.5 ? "skipped" : "failed") : "filled";
+  const action: DashboardSignal["action"] = filled
+    ? "filled"
+    : failed
+      ? rng() > 0.5
+        ? "skipped"
+        : "failed"
+      : "filled";
 
   // Mostly small positive slippage; ~9% of fills suffer adverse slippage that erodes the edge.
   const slip = rng() < 0.09 ? round(askGuaranteed + 0.004 + rng() * 0.02, 4) : round(rng() * 0.022, 4);
-  const kalshiFillPrice = filled ? (lowerVenue === "kalshi" ? round(lowerAsk + slip / 2, 4) : round(higherAsk + slip / 2, 4)) : null;
-  const polymarketFillPrice = filled ? (lowerVenue === "polymarket" ? round(lowerAsk + slip / 2, 4) : round(higherAsk + slip / 2, 4)) : null;
-  const realizedPremium = filled && kalshiFillPrice != null && polymarketFillPrice != null ? round(kalshiFillPrice + polymarketFillPrice) : premium;
+  const kalshiFillPrice = filled
+    ? lowerVenue === "kalshi"
+      ? round(lowerAsk + slip / 2, 4)
+      : round(higherAsk + slip / 2, 4)
+    : null;
+  const polymarketFillPrice = filled
+    ? lowerVenue === "polymarket"
+      ? round(lowerAsk + slip / 2, 4)
+      : round(higherAsk + slip / 2, 4)
+    : null;
+  const realizedPremium =
+    filled && kalshiFillPrice != null && polymarketFillPrice != null
+      ? round(kalshiFillPrice + polymarketFillPrice)
+      : premium;
   const realized = filled ? round(1 - realizedPremium) : null;
 
   const fillLatency = 120 + Math.round(rng() * 900);
@@ -180,8 +224,22 @@ function buildSignal(
   const pairedFillProb = round(0.6 + rng() * 0.39, 3);
 
   const cand = buildCandidate(
-    { ...({} as BinaryContract), venue: lowerVenue, contractId: `${lowerVenue.slice(0, 3).toUpperCase()}-BTC-${lowerStrike}`, strike: lowerStrike, yesAsk: lowerAsk, expiryMs: createdAt + 9 * 60_000 } as BinaryContract,
-    { ...({} as BinaryContract), venue: higherVenue, contractId: `${higherVenue.slice(0, 3).toUpperCase()}-BTC-${higherStrike}`, strike: higherStrike, noAsk: higherAsk, expiryMs: createdAt + 9 * 60_000 } as BinaryContract,
+    {
+      ...({} as BinaryContract),
+      venue: lowerVenue,
+      contractId: `${lowerVenue.slice(0, 3).toUpperCase()}-BTC-${lowerStrike}`,
+      strike: lowerStrike,
+      yesAsk: lowerAsk,
+      expiryMs: createdAt + 9 * 60_000,
+    } as BinaryContract,
+    {
+      ...({} as BinaryContract),
+      venue: higherVenue,
+      contractId: `${higherVenue.slice(0, 3).toUpperCase()}-BTC-${higherStrike}`,
+      strike: higherStrike,
+      noAsk: higherAsk,
+      expiryMs: createdAt + 9 * 60_000,
+    } as BinaryContract,
     threshold,
   );
 
@@ -202,7 +260,13 @@ function buildSignal(
     overlapProfit: round(2 - premium),
     threshold,
     action,
-    failureReason: failed ? (rng() > 0.5 ? "fill_quality_gate" : "polymarket_timeout") : partial ? "leg_mismatch" : null,
+    failureReason: failed
+      ? rng() > 0.5
+        ? "fill_quality_gate"
+        : "polymarket_timeout"
+      : partial
+        ? "leg_mismatch"
+        : null,
     kalshiFillId: filled ? `kal_${id}` : null,
     polymarketFillId: filled ? `pol_${id}` : partial && rng() > 0.5 ? `pol_${id}` : null,
     kalshiFillPrice,
@@ -426,7 +490,12 @@ function buildWindow(
     bestTradePnl: filled ? round(Math.max(...allPnls)) : null,
     worstTradePnl: filled ? round(Math.min(...allPnls)) : null,
     maxDrawdown: round(maxDd),
-    avgPremium: filled ? round(signals.filter((s) => s.action === "filled").reduce((a, s) => a + s.premium, 0) / Math.max(1, signals.filter((s) => s.action === "filled").length)) : null,
+    avgPremium: filled
+      ? round(
+          signals.filter((s) => s.action === "filled").reduce((a, s) => a + s.premium, 0) /
+            Math.max(1, signals.filter((s) => s.action === "filled").length),
+        )
+      : null,
     avgSlippage: allSlips.length ? round(allSlips.reduce((a, b) => a + b, 0) / allSlips.length) : null,
     avgFillLatencyMs: allLat.length ? Math.round(allLat.reduce((a, b) => a + b, 0) / allLat.length) : null,
     opportunityCount,
@@ -445,8 +514,20 @@ function buildWindow(
       slipBucket("2-3c", (v) => v >= 0.02 && v < 0.03),
       slipBucket("3c+", (v) => v >= 0.03),
     ],
-    fillLatencySeries: buckets.map((b) => ({ label: b.label, startMs: b.startMs, tradeCount: b.tradeCount, netPnl: b.avgFillLatencyMs ?? 0, winRate: b.avgFillLatencyMs ?? 0 })),
-    heatmap: buckets.map((b) => ({ label: b.label, startMs: b.startMs, tradeCount: b.tradeCount, netPnl: b.netPnl, winRate: b.tradeCount ? round(b.wins / b.tradeCount) : 0 })),
+    fillLatencySeries: buckets.map((b) => ({
+      label: b.label,
+      startMs: b.startMs,
+      tradeCount: b.tradeCount,
+      netPnl: b.avgFillLatencyMs ?? 0,
+      winRate: b.avgFillLatencyMs ?? 0,
+    })),
+    heatmap: buckets.map((b) => ({
+      label: b.label,
+      startMs: b.startMs,
+      tradeCount: b.tradeCount,
+      netPnl: b.netPnl,
+      winRate: b.tradeCount ? round(b.wins / b.tradeCount) : 0,
+    })),
     buckets,
   };
 }
@@ -456,7 +537,14 @@ function buildAnalytics(signals: DashboardSignal[], now: number): DashboardAnaly
     hourly: buildWindow("hourly", signals, now, 3_600_000, 24),
     daily: buildWindow("daily", signals, now, 86_400_000, 7),
     weekly: buildWindow("weekly", signals, now, 604_800_000, 8),
-    realtime: { mode: "hot_cache", lastUpdatedAt: now - 1200, lastDbReconciledAt: now - 8000, computeMs: 12, sourceSignalCount: signals.length, stale: false },
+    realtime: {
+      mode: "hot_cache",
+      lastUpdatedAt: now - 1200,
+      lastDbReconciledAt: now - 8000,
+      computeMs: 12,
+      sourceSignalCount: signals.length,
+      stale: false,
+    },
   };
 }
 
@@ -567,10 +655,18 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
     2,
   );
   const exactRecent = recentSignals.slice(0, 40);
-  const exactPairFillRate = round(exactRecent.filter((s) => s.action === "filled" && !s.partialFill).length / Math.max(1, exactRecent.length), 3);
+  const exactPairFillRate = round(
+    exactRecent.filter((s) => s.action === "filled" && !s.partialFill).length / Math.max(1, exactRecent.length),
+    3,
+  );
   const mismatchRate = round(exactRecent.filter((s) => s.partialFill).length / Math.max(1, exactRecent.length), 3);
 
-  const lat = (latest: number) => ({ latestMs: latest, p50Ms: round(latest * 0.9), p95Ms: round(latest * 1.6), sampleCount: 500 });
+  const lat = (latest: number) => ({
+    latestMs: latest,
+    p50Ms: round(latest * 0.9),
+    p95Ms: round(latest * 1.6),
+    sampleCount: 500,
+  });
 
   return {
     generatedAt: now,
@@ -657,7 +753,13 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
       },
       persistence: { insertMs: lat(5), updateMs: lat(6), preSubmitDbMs: lat(3) },
       execution: { durationMs: lat(420), hotGateMs: lat(3) },
-      dashboard: { snapshotBuildMs: lat(8), streamIntervalMs: 1000, signalRefreshMs: 2000, analyticsRefreshMs: 5000, snapshotAgeMs: 300 },
+      dashboard: {
+        snapshotBuildMs: lat(8),
+        streamIntervalMs: 1000,
+        signalRefreshMs: 2000,
+        analyticsRefreshMs: 5000,
+        snapshotAgeMs: 300,
+      },
     },
     discovery: { lastDiscoveryAt: now - 4200, lastDiscoveryError: null },
     scanner: {
@@ -743,8 +845,24 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
         ready: true,
         reason: null,
         confirmTimeoutMs: 2500,
-        kalshi: { enabled: true, connected: true, subscribed: true, reason: null, lastConnectedAt: now - 600000, lastEventAt: now - 1200, lastError: null },
-        polymarket: { enabled: true, connected: true, subscribed: true, reason: null, lastConnectedAt: now - 600000, lastEventAt: now - 2400, lastError: null },
+        kalshi: {
+          enabled: true,
+          connected: true,
+          subscribed: true,
+          reason: null,
+          lastConnectedAt: now - 600000,
+          lastEventAt: now - 1200,
+          lastError: null,
+        },
+        polymarket: {
+          enabled: true,
+          connected: true,
+          subscribed: true,
+          reason: null,
+          lastConnectedAt: now - 600000,
+          lastEventAt: now - 2400,
+          lastError: null,
+        },
         lastUserStreamEventAt: now - 1200,
         confirmationLagMs: 180,
       },

@@ -74,4 +74,3 @@ The executable v1 structure is:
 - Entry gate: `guaranteedProfit >= ARB_MIN_PROFIT_DOLLARS`, default `$0.05`.
 
 The flipped configuration, buy NO on the lower strike and YES on the higher strike, is classified as non-executable because it has a dead zone between strikes.
-

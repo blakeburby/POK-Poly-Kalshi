@@ -29,7 +29,13 @@ function Points({ points, axes }: { points: Point3[]; axes: { x: AxisDef; y: Axi
         return (
           <mesh key={i} position={[x, y, z]}>
             <sphereGeometry args={[r, 16, 16]} />
-            <meshStandardMaterial color={p.color} emissive={p.color} emissiveIntensity={0.5} roughness={0.35} metalness={0.1} />
+            <meshStandardMaterial
+              color={p.color}
+              emissive={p.color}
+              emissiveIntensity={0.5}
+              roughness={0.35}
+              metalness={0.1}
+            />
           </mesh>
         );
       })}
@@ -82,11 +88,7 @@ function Ticks({ axis, plane }: { axis: AxisDef; plane: "x" | "y" | "z" }) {
       {ends.map(({ t, val }) => {
         const s = toScene(t);
         const pos: [number, number, number] =
-          plane === "x"
-            ? [s, -H - 0.42, H]
-            : plane === "y"
-              ? [-H - 0.5, s, H]
-              : [-H - 0.02, -H - 0.18, s];
+          plane === "x" ? [s, -H - 0.42, H] : plane === "y" ? [-H - 0.5, s, H] : [-H - 0.02, -H - 0.18, s];
         return (
           <AxisLabel key={`${plane}-${t}`} position={pos} color="#828c9b">
             {axis.fmt(val)}

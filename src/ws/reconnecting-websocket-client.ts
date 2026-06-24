@@ -73,7 +73,8 @@ export abstract class ReconnectingWebSocketClient {
       this.close();
       return;
     }
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING))
+      return;
 
     const socket = this.createSocket();
     if (!socket) return;
@@ -85,7 +86,11 @@ export abstract class ReconnectingWebSocketClient {
       this.lastMessageAt = this.now();
       this.onOpen(socket);
       this.startHeartbeat(socket);
-      logEvent({ category: this.category, message: "websocket subscribed", context: { subscriptions: this.desired.size } });
+      logEvent({
+        category: this.category,
+        message: "websocket subscribed",
+        context: { subscriptions: this.desired.size },
+      });
     });
 
     socket.on("message", (raw: WebSocket.RawData) => {
@@ -103,7 +108,12 @@ export abstract class ReconnectingWebSocketClient {
 
     socket.on("error", (error: Error) => {
       this.onSocketError(error);
-      logEvent({ severity: "ERROR", category: this.category, message: "websocket error", context: { error: error.message } });
+      logEvent({
+        severity: "ERROR",
+        category: this.category,
+        message: "websocket error",
+        context: { error: error.message },
+      });
     });
 
     socket.on("close", (_code: number, reason: Buffer) => {
@@ -129,18 +139,24 @@ export abstract class ReconnectingWebSocketClient {
       // Feed-liveness watchdog: a socket can stay open while the server stops sending book deltas — the
       // close-driven reconnect never fires, so detect the silence here and force a reconnect
       // (close -> scheduleReconnect -> fresh full subscribe).
-      if (shouldForceFeedReconnect({
-        now: this.now(),
-        lastMessageAt: this.lastMessageAt,
-        feedSilenceMs: this.feedSilenceMs,
-        desiredSubscriptions: this.desired.size,
-        socketOpen: socket.readyState === WebSocket.OPEN,
-      })) {
+      if (
+        shouldForceFeedReconnect({
+          now: this.now(),
+          lastMessageAt: this.lastMessageAt,
+          feedSilenceMs: this.feedSilenceMs,
+          desiredSubscriptions: this.desired.size,
+          socketOpen: socket.readyState === WebSocket.OPEN,
+        })
+      ) {
         logThrottle(`${this.logKeyPrefix}-feed-silent`, 30_000, {
           severity: "WARN",
           category: this.category,
           message: "websocket feed silent, forcing reconnect",
-          context: { silenceMs: this.now() - this.lastMessageAt, feedSilenceMs: this.feedSilenceMs, subscriptions: this.desired.size },
+          context: {
+            silenceMs: this.now() - this.lastMessageAt,
+            feedSilenceMs: this.feedSilenceMs,
+            subscriptions: this.desired.size,
+          },
         });
         socket.close();
         return;

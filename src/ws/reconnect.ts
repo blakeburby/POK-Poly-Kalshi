@@ -39,4 +39,3 @@ export function shouldForceFeedReconnect(input: {
   if (input.desiredSubscriptions <= 0) return false;
   return input.now - input.lastMessageAt > input.feedSilenceMs;
 }
-

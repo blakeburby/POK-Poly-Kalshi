@@ -41,12 +41,16 @@ export function NavRail() {
             title={n.label}
             className={cn(
               "group flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-left transition-colors",
-              active ? "bg-surface-2 text-fg ring-1 ring-cyan/25" : "text-fg-muted hover:bg-surface-2/50 hover:text-fg-secondary",
+              active
+                ? "bg-surface-2 text-fg ring-1 ring-cyan/25"
+                : "text-fg-muted hover:bg-surface-2/50 hover:text-fg-secondary",
             )}
           >
             <Icon className={cn("size-4 shrink-0", active && "text-cyan")} strokeWidth={1.75} />
             {!collapsed && <span className="flex-1 truncate text-[12px] font-medium tracking-tight">{n.label}</span>}
-            {!collapsed && <span className="font-mono text-[9px] text-fg-faint group-hover:text-fg-muted">{n.hot}</span>}
+            {!collapsed && (
+              <span className="font-mono text-[9px] text-fg-faint group-hover:text-fg-muted">{n.hot}</span>
+            )}
           </button>
         );
       })}
@@ -55,7 +59,11 @@ export function NavRail() {
         className="mt-auto flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-fg-faint transition-colors hover:bg-surface-2/50 hover:text-fg-muted"
         title={collapsed ? "Expand" : "Collapse"}
       >
-        {collapsed ? <PanelLeftOpen className="size-4" strokeWidth={1.75} /> : <PanelLeftClose className="size-4" strokeWidth={1.75} />}
+        {collapsed ? (
+          <PanelLeftOpen className="size-4" strokeWidth={1.75} />
+        ) : (
+          <PanelLeftClose className="size-4" strokeWidth={1.75} />
+        )}
         {!collapsed && <span className="text-[11px]">Collapse</span>}
       </button>
     </nav>

@@ -15,7 +15,9 @@ export function LoginPortal({ error, missing }: { error?: boolean; missing?: boo
           </div>
           <div className="flex flex-col leading-none">
             <span className="text-[14px] font-semibold tracking-tight text-fg">POK CAPITAL · TERMINAL</span>
-            <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-fg-faint">Authorized Access Only</span>
+            <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.18em] text-fg-faint">
+              Authorized Access Only
+            </span>
           </div>
         </div>
 

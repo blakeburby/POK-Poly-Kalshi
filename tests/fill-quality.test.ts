@@ -132,19 +132,21 @@ function exactSamples(count = 40): DashboardSignal[] {
 }
 
 function poorPolymarketSamples(count = 40): DashboardSignal[] {
-  return Array.from({ length: count }, (_, index) => signal({
-    id: index + 1,
-    action: "failed",
-    failureReason: "risk quarantined: Polymarket mismatch",
-    kalshiStatus: "filled",
-    polymarketStatus: index % 2 === 0 ? "unknown" : "unexpected_fill_count",
-    kalshiFillCount: 5,
-    polymarketFillCount: index % 3 === 0 ? 0 : 5.3,
-    partialFill: true,
-    polymarketError: index % 2 === 0 ? "order response timeout after 2500ms" : null,
-    executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: index % 2 === 0 ? 2500 : 1800 },
-    riskQuarantineExposureDollars: 2.6,
-  }));
+  return Array.from({ length: count }, (_, index) =>
+    signal({
+      id: index + 1,
+      action: "failed",
+      failureReason: "risk quarantined: Polymarket mismatch",
+      kalshiStatus: "filled",
+      polymarketStatus: index % 2 === 0 ? "unknown" : "unexpected_fill_count",
+      kalshiFillCount: 5,
+      polymarketFillCount: index % 3 === 0 ? 0 : 5.3,
+      partialFill: true,
+      polymarketError: index % 2 === 0 ? "order response timeout after 2500ms" : null,
+      executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: index % 2 === 0 ? 2500 : 1800 },
+      riskQuarantineExposureDollars: 2.6,
+    }),
+  );
 }
 
 test("fill quality passes a strong candidate with deep fresh books and exact-fill history", () => {
@@ -206,8 +208,13 @@ test("fill quality deterministically penalizes thin stale skewed high-latency bo
   });
 
   assert.ok(weak.pairedFillProbability < strong.pairedFillProbability);
-  assert.ok((weak.pairedFillConfidence?.kalshiEffectiveDepth ?? 0) < (weak.pairedFillConfidence?.kalshiDisplayedDepth ?? 0));
-  assert.ok((weak.pairedFillConfidence?.polymarketEffectiveDepth ?? 0) < (weak.pairedFillConfidence?.polymarketDisplayedDepth ?? 0));
+  assert.ok(
+    (weak.pairedFillConfidence?.kalshiEffectiveDepth ?? 0) < (weak.pairedFillConfidence?.kalshiDisplayedDepth ?? 0),
+  );
+  assert.ok(
+    (weak.pairedFillConfidence?.polymarketEffectiveDepth ?? 0) <
+      (weak.pairedFillConfidence?.polymarketDisplayedDepth ?? 0),
+  );
   assert.ok(weak.penaltyReasons.some((reason) => reason.includes("thin")));
   assert.ok(weak.penaltyReasons.some((reason) => reason.includes("RTT")));
 });

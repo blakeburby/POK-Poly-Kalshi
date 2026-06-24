@@ -38,7 +38,10 @@ function readCpuStealPercent(): number | null {
     // "cpu  user nice system idle iowait irq softirq steal guest guest_nice"
     const fields = firstLine.trim().split(/\s+/);
     if (fields[0] !== "cpu") return null;
-    const nums = fields.slice(1).map((v) => Number(v)).filter((n) => Number.isFinite(n));
+    const nums = fields
+      .slice(1)
+      .map((v) => Number(v))
+      .filter((n) => Number.isFinite(n));
     if (nums.length < 8) return null;
     const steal = nums[7] ?? 0;
     const total = nums.reduce((a, b) => a + b, 0);

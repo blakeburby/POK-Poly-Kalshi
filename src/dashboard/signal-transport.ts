@@ -5,10 +5,18 @@ import type { DashboardSignal } from "../types";
 // renders. executionTimings is ~30 fields (UI reads 5); fillQualitySnapshot.features is ~1KB/row that
 // ExecutionView reads 5 percentile keys from (and only from the first row that has them).
 const KEEP_TIMING_KEYS = new Set([
-  "totalMs", "kalshiRttMs", "polymarketRttMs", "polymarketConfirmationMs", "venueSubmitSkewMs",
+  "totalMs",
+  "kalshiRttMs",
+  "polymarketRttMs",
+  "polymarketConfirmationMs",
+  "venueSubmitSkewMs",
 ]);
 const KEEP_FEATURE_KEYS = new Set([
-  "kalshiRttP50Ms", "kalshiRttP95Ms", "polymarketRttP50Ms", "polymarketRttP95Ms", "polymarketConfirmationP95Ms",
+  "kalshiRttP50Ms",
+  "kalshiRttP95Ms",
+  "polymarketRttP50Ms",
+  "polymarketRttP95Ms",
+  "polymarketConfirmationP95Ms",
 ]);
 
 function pickKeys<T extends object>(obj: T, keep: Set<string>): T {

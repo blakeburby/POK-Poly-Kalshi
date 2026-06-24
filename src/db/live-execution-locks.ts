@@ -83,20 +83,23 @@ export class LiveExecutionLockStore implements LiveExecutionLockWriter {
     const existing = await this.getActiveLock();
     if (existing) return existing;
 
-    const result = await this.db.query<LiveExecutionLockRow>(`
+    const result = await this.db.query<LiveExecutionLockRow>(
+      `
       INSERT INTO live_execution_locks (
         reason, severity, source_signal_id, execution_group_id, details
       ) VALUES (
         $1, $2, $3, $4, $5::jsonb
       )
       RETURNING ${LOCK_COLUMNS}
-    `, [
-      input.reason,
-      input.severity ?? "critical",
-      input.sourceSignalId ?? null,
-      input.executionGroupId ?? null,
-      JSON.stringify(input.details ?? {}),
-    ]);
+    `,
+      [
+        input.reason,
+        input.severity ?? "critical",
+        input.sourceSignalId ?? null,
+        input.executionGroupId ?? null,
+        JSON.stringify(input.details ?? {}),
+      ],
+    );
     if (!result.rows[0]) throw new Error("live execution lock insert did not return a row");
     return lockFromRow(result.rows[0]);
   }

@@ -16,11 +16,14 @@ const now = 1_800_000_000_000;
 function sessionFile(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pok-kalshi-ui-session-"));
   const file = path.join(dir, "session.json");
-  fs.writeFileSync(file, JSON.stringify({
-    userId: "user-secret-123",
-    csrfToken: "csrf-secret-456",
-    cookie: "kalshi-session-secret=abc",
-  }));
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      userId: "user-secret-123",
+      csrfToken: "csrf-secret-456",
+      cookie: "kalshi-session-secret=abc",
+    }),
+  );
   fs.chmodSync(file, 0o600);
   return file;
 }
@@ -108,18 +111,20 @@ function snapshot(input: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
     discovery: { lastDiscoveryAt: now - 1000, lastDiscoveryError: null },
     scanner: { scanning: true, lastScanAt: now - 500, lastCandidateCount: 1 },
     books: {
-      kalshi: [{
-        venue: "kalshi",
-        asset: "BTC",
-        contractId: "KXBTC15M-26JUN140300-00",
-        expiryMs: now + 60_000,
-        strike: 1500,
-        yesAsk: 0.61,
-        noAsk: 0.42,
-        yesBid: 0.6,
-        noBid: 0.41,
-        updatedAt: now - 100,
-      }],
+      kalshi: [
+        {
+          venue: "kalshi",
+          asset: "BTC",
+          contractId: "KXBTC15M-26JUN140300-00",
+          expiryMs: now + 60_000,
+          strike: 1500,
+          yesAsk: 0.61,
+          noAsk: 0.42,
+          yesBid: 0.6,
+          noBid: 0.41,
+          updatedAt: now - 100,
+        },
+      ],
       polymarket: [],
     },
     diagnostics: { polymarket: {} as never },
@@ -147,22 +152,24 @@ function env(file = sessionFile(), extra: NodeJS.ProcessEnv = {}): NodeJS.Proces
   };
 }
 
-function mockFetch(input: {
-  health?: Record<string, unknown>;
-  snapshot?: DashboardSnapshot;
-  postStatus?: number;
-  postBody?: Record<string, unknown>;
-  finalBody?: Record<string, unknown>;
-  rejectText?: string;
-  calls?: Array<{ method: string; path: string; body: Record<string, unknown> | null }>;
-} = {}): typeof fetch {
+function mockFetch(
+  input: {
+    health?: Record<string, unknown>;
+    snapshot?: DashboardSnapshot;
+    postStatus?: number;
+    postBody?: Record<string, unknown>;
+    finalBody?: Record<string, unknown>;
+    rejectText?: string;
+    calls?: Array<{ method: string; path: string; body: Record<string, unknown> | null }>;
+  } = {},
+): typeof fetch {
   const healthBody = input.health ?? health();
   const snapshotBody = input.snapshot ?? snapshot();
   const calls = input.calls;
   return (async (urlInput: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = new URL(String(urlInput));
     const method = init?.method ?? "GET";
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
+    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
     calls?.push({ method, path: url.pathname, body });
     if (url.hostname === "worker.test" && url.pathname === "/health") {
       return new Response(JSON.stringify(healthBody), { status: 200 });
@@ -171,30 +178,43 @@ function mockFetch(input: {
       return new Response(JSON.stringify(snapshotBody), { status: 200 });
     }
     if (url.pathname.endsWith("/event_positions/KXBTC15M-26JUN140300")) {
-      return new Response(JSON.stringify({
-        event_position: {
-          market_positions: [{ market_ticker: "KXBTC15M-26JUN140300-00", market_id: "private-market-id" }],
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          event_position: {
+            market_positions: [{ market_ticker: "KXBTC15M-26JUN140300-00", market_id: "private-market-id" }],
+          },
+        }),
+        { status: 200 },
+      );
     }
     if (method === "POST" && url.pathname.endsWith("/orders")) {
       if (input.postStatus && input.postStatus >= 400) {
         return new Response(input.rejectText ?? "insufficient liquidity below max_cost", { status: input.postStatus });
       }
-      return new Response(JSON.stringify(input.postBody ?? {
-        order: { order_id: "private-order-id", status: "accepted", fill_count_fp: "0" },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify(
+          input.postBody ?? {
+            order: { order_id: "private-order-id", status: "accepted", fill_count_fp: "0" },
+          },
+        ),
+        { status: 200 },
+      );
     }
     if (method === "GET" && url.pathname.endsWith("/orders/private-order-id")) {
-      return new Response(JSON.stringify(input.finalBody ?? {
-        order: {
-          order_id: "private-order-id",
-          status: "canceled",
-          fill_count_fp: "0",
-          remaining_count_fp: "0",
-          order_type: "market",
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify(
+          input.finalBody ?? {
+            order: {
+              order_id: "private-order-id",
+              status: "canceled",
+              fill_count_fp: "0",
+              remaining_count_fp: "0",
+              order_type: "market",
+            },
+          },
+        ),
+        { status: 200 },
+      );
     }
     throw new Error(`unexpected fetch ${method} ${url.toString()}`);
   }) as typeof fetch;
@@ -203,7 +223,11 @@ function mockFetch(input: {
 test("Kalshi UI cap validation staged guard refuses enabled entries and wrong mode", () => {
   assert.deepEqual(stagedModeFailures(health()), []);
   assert.ok(stagedModeFailures(health({ arbEnabled: true })).includes("health.arbEnabled=false"));
-  assert.ok(stagedModeFailures(health({ liveOrderPlacementMode: "polymarket_first_exact" })).includes("health.liveOrderPlacementMode=parallel_quick"));
+  assert.ok(
+    stagedModeFailures(health({ liveOrderPlacementMode: "polymarket_first_exact" })).includes(
+      "health.liveOrderPlacementMode=parallel_quick",
+    ),
+  );
 });
 
 test("Kalshi UI cap validation selects the nearest BTC15M side above the one-cent cap", () => {
@@ -222,7 +246,10 @@ test("Kalshi UI cap validation refuses when worker entries are enabled", async (
   });
   assert.equal(report.passed, false);
   assert.match(report.reason, /health\.arbEnabled=false/);
-  assert.equal(calls.some((call) => call.method === "POST"), false);
+  assert.equal(
+    calls.some((call) => call.method === "POST"),
+    false,
+  );
 });
 
 test("Kalshi UI cap validation refuses when UI session is missing", async () => {

@@ -30,11 +30,12 @@ function snapshot(input: {
     cheapLegVenue: input.cheapLegIsLagging == null ? null : input.cheapLegIsLagging ? input.lagging : "polymarket",
     cheapLegIsLagging: input.cheapLegIsLagging,
     windows: [],
-    reasons: input.leader === "polymarket"
-      ? ["Polymarket appears to lead recent book movement"]
-      : input.leader === "kalshi"
-        ? ["Polymarket leg looks stale/lagging"]
-        : ["Book history is thin"],
+    reasons:
+      input.leader === "polymarket"
+        ? ["Polymarket appears to lead recent book movement"]
+        : input.leader === "kalshi"
+          ? ["Polymarket leg looks stale/lagging"]
+          : ["Book history is thin"],
   };
 }
 
@@ -71,35 +72,67 @@ function row(input: {
 test("lead-lag calibration buckets adverse Polymarket-leading attempts and passes promotion when gate removes bad tails", () => {
   const rows: LeadLagCalibrationRow[] = [];
   for (let index = 0; index < 100; index += 1) {
-    rows.push(row({
-      id: index + 1,
-      action: index < 60 ? "filled" : "failed",
-      status: index < 60 ? "filled" : "failed",
-      realized: index < 60 ? 0.05 : -0.05,
-      leadLagSnapshot: index < 60
-        ? snapshot({ confidence: 0.7, adverse: 0.2, stale: 0.8, leader: "kalshi", lagging: "polymarket", cheapLegIsLagging: true })
-        : snapshot({ confidence: 0.25, adverse: 0.3, stale: 0.1, leader: "none", lagging: null, cheapLegIsLagging: null }),
-    }));
+    rows.push(
+      row({
+        id: index + 1,
+        action: index < 60 ? "filled" : "failed",
+        status: index < 60 ? "filled" : "failed",
+        realized: index < 60 ? 0.05 : -0.05,
+        leadLagSnapshot:
+          index < 60
+            ? snapshot({
+                confidence: 0.7,
+                adverse: 0.2,
+                stale: 0.8,
+                leader: "kalshi",
+                lagging: "polymarket",
+                cheapLegIsLagging: true,
+              })
+            : snapshot({
+                confidence: 0.25,
+                adverse: 0.3,
+                stale: 0.1,
+                leader: "none",
+                lagging: null,
+                cheapLegIsLagging: null,
+              }),
+      }),
+    );
   }
   for (let index = 0; index < 100; index += 1) {
     const partial = index >= 10 && index < 40;
     const timeout = index >= 70;
-    rows.push(row({
-      id: index + 101,
-      action: index < 10 || partial ? "filled" : "failed",
-      partial,
-      status: index < 10 || partial ? "filled" : timeout ? "timeout" : "failed",
-      realized: index < 10 ? 0.04 : -0.2,
-      leadLagSnapshot: snapshot({ confidence: 0.86, adverse: 0.86, stale: 0.05, leader: "polymarket", lagging: "kalshi", cheapLegIsLagging: false }),
-    }));
+    rows.push(
+      row({
+        id: index + 101,
+        action: index < 10 || partial ? "filled" : "failed",
+        partial,
+        status: index < 10 || partial ? "filled" : timeout ? "timeout" : "failed",
+        realized: index < 10 ? 0.04 : -0.2,
+        leadLagSnapshot: snapshot({
+          confidence: 0.86,
+          adverse: 0.86,
+          stale: 0.05,
+          leader: "polymarket",
+          lagging: "kalshi",
+          cheapLegIsLagging: false,
+        }),
+      }),
+    );
   }
 
   const report = buildLeadLagCalibrationReport(rows, undefined, new Date(startedAt));
 
   assert.equal(report.summary.sampleCount, 200);
   assert.equal(report.summary.exactPairedFills, 70);
-  assert.equal(report.leaderVenueBuckets.some((bucket) => bucket.label === "polymarket" && bucket.count === 100), true);
-  assert.equal(report.cheapLegLaggingBuckets.some((bucket) => bucket.label === "true"), true);
+  assert.equal(
+    report.leaderVenueBuckets.some((bucket) => bucket.label === "polymarket" && bucket.count === 100),
+    true,
+  );
+  assert.equal(
+    report.cheapLegLaggingBuckets.some((bucket) => bucket.label === "true"),
+    true,
+  );
   assert.equal(report.simulatedGateBuckets.find((bucket) => bucket.label === "blocked")?.count, 100);
   assert.equal(report.gateSimulation.blockedBadAttempts, 90);
   assert.equal(report.gateSimulation.blockedProfitableExactFills, 10);
@@ -110,19 +143,21 @@ test("lead-lag calibration buckets adverse Polymarket-leading attempts and passe
 });
 
 test("lead-lag calibration blocks promotion on insufficient samples and weak adverse directionality", () => {
-  const rows = Array.from({ length: 20 }, (_, index) => row({
-    id: index + 1,
-    action: "filled",
-    realized: 0.03,
-    leadLagSnapshot: snapshot({
-      confidence: index % 2 === 0 ? 0.8 : 0.2,
-      adverse: index % 2 === 0 ? 0.8 : 0.2,
-      stale: 0.2,
-      leader: index % 2 === 0 ? "polymarket" : "none",
-      lagging: index % 2 === 0 ? "kalshi" : null,
-      cheapLegIsLagging: index % 2 === 0 ? false : null,
+  const rows = Array.from({ length: 20 }, (_, index) =>
+    row({
+      id: index + 1,
+      action: "filled",
+      realized: 0.03,
+      leadLagSnapshot: snapshot({
+        confidence: index % 2 === 0 ? 0.8 : 0.2,
+        adverse: index % 2 === 0 ? 0.8 : 0.2,
+        stale: 0.2,
+        leader: index % 2 === 0 ? "polymarket" : "none",
+        lagging: index % 2 === 0 ? "kalshi" : null,
+        cheapLegIsLagging: index % 2 === 0 ? false : null,
+      }),
     }),
-  }));
+  );
 
   const report = buildLeadLagCalibrationReport(rows, { minSamples: 200 }, new Date(startedAt));
 

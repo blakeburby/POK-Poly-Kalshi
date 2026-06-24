@@ -69,26 +69,26 @@ live in `live_execution_locks` and are cleared only through a guarded settlement
 
 ## Module map (`src/`)
 
-| Path | Responsibility |
-| --- | --- |
-| `index.ts` | Process entry: boot, wire dependencies, start scanner + HTTP server, graceful shutdown. |
-| `config.ts` | **The only** place env is parsed (`loadConfig`). Produces the immutable `AppConfig`. |
-| `types.ts` | Cross-layer data contracts (books, candidates, execution results, dashboard view-model). |
-| `logger.ts` | Structured JSON logging sink (severity + category + context). |
-| `discovery/` | Find the live BTC 15m markets / strike pairs / token ids on each venue. |
-| `ws/` | WebSocket reconnect/backoff helpers + the feed-silence watchdog predicate. |
-| `kalshi/` | Kalshi REST + WS + FIX clients, auth (RSA request signing), order-book parsing. |
-| `polymarket/` | Polymarket CLOB book client, user stream, price-to-beat capture. |
-| `books/` | `BookStore`: in-memory freshest-book cache keyed by contract. |
-| `scanner/` | Candidate generation + payoff math (executable edge, depth-weighted VWAP). |
-| `execution/` | The trade engine: quote-quality gate, the `LiveExecutor` orchestrator, the venue order clients, fill confirmation/reconciliation, fill-quality + lead-lag scoring. |
-| `signals/` | Lead-lag scoring + calibration models. |
-| `trading/` | Read-models for the dashboard: account sources, venue P&L, activity, equity sampler. |
-| `analytics/` | Performance aggregation for the dashboard. |
-| `db/` | Postgres pool, versioned SQL migrations, and one query module per table. |
-| `dashboard/` | The worker's HTTP API surface (snapshots, SSE) + signal transport/notifier. |
-| `latency/`, `diagnostics/` | Latency instrumentation and runtime-health diagnostics. |
-| `health.ts`, `shutdown.ts`, `migrate.ts` | Health endpoint, graceful shutdown, migration runner. |
+| Path                                     | Responsibility                                                                                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `index.ts`                               | Process entry: boot, wire dependencies, start scanner + HTTP server, graceful shutdown.                                                                            |
+| `config.ts`                              | **The only** place env is parsed (`loadConfig`). Produces the immutable `AppConfig`.                                                                               |
+| `types.ts`                               | Cross-layer data contracts (books, candidates, execution results, dashboard view-model).                                                                           |
+| `logger.ts`                              | Structured JSON logging sink (severity + category + context).                                                                                                      |
+| `discovery/`                             | Find the live BTC 15m markets / strike pairs / token ids on each venue.                                                                                            |
+| `ws/`                                    | WebSocket reconnect/backoff helpers + the feed-silence watchdog predicate.                                                                                         |
+| `kalshi/`                                | Kalshi REST + WS + FIX clients, auth (RSA request signing), order-book parsing.                                                                                    |
+| `polymarket/`                            | Polymarket CLOB book client, user stream, price-to-beat capture.                                                                                                   |
+| `books/`                                 | `BookStore`: in-memory freshest-book cache keyed by contract.                                                                                                      |
+| `scanner/`                               | Candidate generation + payoff math (executable edge, depth-weighted VWAP).                                                                                         |
+| `execution/`                             | The trade engine: quote-quality gate, the `LiveExecutor` orchestrator, the venue order clients, fill confirmation/reconciliation, fill-quality + lead-lag scoring. |
+| `signals/`                               | Lead-lag scoring + calibration models.                                                                                                                             |
+| `trading/`                               | Read-models for the dashboard: account sources, venue P&L, activity, equity sampler.                                                                               |
+| `analytics/`                             | Performance aggregation for the dashboard.                                                                                                                         |
+| `db/`                                    | Postgres pool, versioned SQL migrations, and one query module per table.                                                                                           |
+| `dashboard/`                             | The worker's HTTP API surface (snapshots, SSE) + signal transport/notifier.                                                                                        |
+| `latency/`, `diagnostics/`               | Latency instrumentation and runtime-health diagnostics.                                                                                                            |
+| `health.ts`, `shutdown.ts`, `migrate.ts` | Health endpoint, graceful shutdown, migration runner.                                                                                                              |
 
 > **Known hotspots** (see the 2026-06-23 architecture audit): `execution/live-clients.ts` (~3.1k LOC, four
 > venue clients in one file) and `execution/executor.ts` (~2.7k LOC, the `LiveExecutor`) are the two largest
@@ -105,7 +105,7 @@ live in `live_execution_locks` and are cleared only through a guarded settlement
 
 ## Key invariants
 
-- **Exact-pair hedging.** The Kalshi hedge is sized off the *actual* Polymarket fill, never the candidate size.
+- **Exact-pair hedging.** The Kalshi hedge is sized off the _actual_ Polymarket fill, never the candidate size.
 - **Single executor.** Dynamic sizing requires `ARB_EXECUTION_CONCURRENCY=1` (enforced in `config.ts`); the
   hot path assumes one in-flight execution.
 - **Centralized config.** Env is read only in `config.ts`; everything else takes a typed `AppConfig`.
@@ -116,16 +116,16 @@ live in `live_execution_locks` and are cleared only through a guarded settlement
 
 ## Glossary
 
-| Term | Meaning |
-| --- | --- |
-| **FAK** | Fill-and-kill: fills whatever it can immediately, cancels the rest. Used for the first (Polymarket) leg because it is cancelable. |
-| **FOK** | Fill-or-kill: fills the entire size or nothing. Used for the Kalshi floor-hedge so the hedge is all-or-nothing. |
-| **Floor-hedge** | Hedging the realized first-leg fill size on the other venue to lock the spread. |
-| **Exact-pair** | Both legs end at the same share count → fully hedged, zero directional exposure. |
-| **Edge** | Guaranteed profit per share = `$1 − (kalshi cost + polymarket cost)`, after fees and cushion. |
-| **Cushion** | A taker price offset added so a marketable order crosses the book without erasing the edge. |
-| **Hot path** | The latency-critical order-submission path; uses cached readiness/book data to avoid network calls. |
-| **Geoblock** | Polymarket's consumer endpoint flags the worker's region; advisory only (the CLOB still fills) — see [docs/audits](./audits). |
-| **Feed-silence watchdog** | Forces a WS reconnect when a socket stays open but stops sending book deltas. |
-| **Loss-cap hardlock** | An auto-halt triggered when a trade realizes an edge worse than `LIVE_HEDGE_MAX_LOSS_DOLLARS`. |
-| **Price-to-beat** | The BTC reference level used to determine which side of a strike wins at expiry. |
+| Term                      | Meaning                                                                                                                           |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **FAK**                   | Fill-and-kill: fills whatever it can immediately, cancels the rest. Used for the first (Polymarket) leg because it is cancelable. |
+| **FOK**                   | Fill-or-kill: fills the entire size or nothing. Used for the Kalshi floor-hedge so the hedge is all-or-nothing.                   |
+| **Floor-hedge**           | Hedging the realized first-leg fill size on the other venue to lock the spread.                                                   |
+| **Exact-pair**            | Both legs end at the same share count → fully hedged, zero directional exposure.                                                  |
+| **Edge**                  | Guaranteed profit per share = `$1 − (kalshi cost + polymarket cost)`, after fees and cushion.                                     |
+| **Cushion**               | A taker price offset added so a marketable order crosses the book without erasing the edge.                                       |
+| **Hot path**              | The latency-critical order-submission path; uses cached readiness/book data to avoid network calls.                               |
+| **Geoblock**              | Polymarket's consumer endpoint flags the worker's region; advisory only (the CLOB still fills) — see [docs/audits](./audits).     |
+| **Feed-silence watchdog** | Forces a WS reconnect when a socket stays open but stops sending book deltas.                                                     |
+| **Loss-cap hardlock**     | An auto-halt triggered when a trade realizes an edge worse than `LIVE_HEDGE_MAX_LOSS_DOLLARS`.                                    |
+| **Price-to-beat**         | The BTC reference level used to determine which side of a strike wins at expiry.                                                  |

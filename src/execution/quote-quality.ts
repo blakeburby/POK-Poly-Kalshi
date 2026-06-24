@@ -1,5 +1,17 @@
 import type { AppConfig } from "../config";
-import type { ArbCandidate, ArbLeg, BinaryContract, BookLevel, LegDirection, QuoteSnapshot, QuoteSnapshotLeg, ShadowLadderCapture, ShadowLadderLeg, ShadowLadderProbe, Venue } from "../types";
+import type {
+  ArbCandidate,
+  ArbLeg,
+  BinaryContract,
+  BookLevel,
+  LegDirection,
+  QuoteSnapshot,
+  QuoteSnapshotLeg,
+  ShadowLadderCapture,
+  ShadowLadderLeg,
+  ShadowLadderProbe,
+  Venue,
+} from "../types";
 import { roundPrice } from "./num-utils";
 
 export interface LiveQuoteBooks {
@@ -65,7 +77,9 @@ export function depthWeightedAsk(levels: BookLevel[], size: number): DepthVwapRe
   let worstAsk = 0;
   const levelsConsumed: BookLevel[] = [];
   const sorted = [...levels]
-    .filter((level) => finite(level.price) && finite(level.size) && level.price >= 0 && level.price <= 1 && level.size > 0)
+    .filter(
+      (level) => finite(level.price) && finite(level.size) && level.price >= 0 && level.price <= 1 && level.size > 0,
+    )
     .sort((a, b) => a.price - b.price);
 
   for (const level of sorted) {
@@ -105,12 +119,12 @@ export function executableLiquidityWithinBand(levels: BookLevel[], topAsk: numbe
   let total = 0;
   for (const level of levels) {
     if (
-      finite(level.price)
-      && finite(level.size)
-      && level.price >= 0
-      && level.price <= 1
-      && level.size > 0
-      && level.price <= limit
+      finite(level.price) &&
+      finite(level.size) &&
+      level.price >= 0 &&
+      level.price <= 1 &&
+      level.size > 0 &&
+      level.price <= limit
     ) {
       total += level.size;
     }
@@ -130,10 +144,27 @@ function quoteLeg(
   extraCrossCents = 0,
   maxAgeMs = config.liveQuoteMaxAgeMs,
   orderSize = config.liveOrderSize,
-): { snapshot: QuoteSnapshotLeg | null; reason: string | null; maxBuyPrice: number | null; adjustedLeg: ArbLeg | null } {
+): {
+  snapshot: QuoteSnapshotLeg | null;
+  reason: string | null;
+  maxBuyPrice: number | null;
+  adjustedLeg: ArbLeg | null;
+} {
   const depthRequired = Math.max(orderSize, config.liveMinBookDepthShares);
-  if (!leg) return { snapshot: null, reason: "candidate must contain one Kalshi leg and one Polymarket leg", maxBuyPrice: null, adjustedLeg: null };
-  if (!contract) return { snapshot: null, reason: `${leg.venue} contract ${leg.contractId} is missing from live book preflight`, maxBuyPrice: null, adjustedLeg: null };
+  if (!leg)
+    return {
+      snapshot: null,
+      reason: "candidate must contain one Kalshi leg and one Polymarket leg",
+      maxBuyPrice: null,
+      adjustedLeg: null,
+    };
+  if (!contract)
+    return {
+      snapshot: null,
+      reason: `${leg.venue} contract ${leg.contractId} is missing from live book preflight`,
+      maxBuyPrice: null,
+      adjustedLeg: null,
+    };
 
   const topAsk = askFor(contract, leg.direction);
   const bookLevels = levelsFor(contract, leg.direction);
@@ -145,15 +176,18 @@ function quoteLeg(
   // a small LIVE_ORDER_SIZE (where worstAsk(1) == best ask).
   const liquidityGuardOn = config.liveMinExecutableLiquidityShares > 0;
   const slippageGuardOn = config.liveMaxExecutableAskSlippageCents > 0;
-  const liquidityBandCents = config.liveMaxExecutableAskSlippageCents > 0
-    ? config.liveMaxExecutableAskSlippageCents
-    : config.liveTakerPriceCushionCents;
-  const executableLiquidityShares = liquidityGuardOn && topAsk != null && finite(topAsk)
-    ? executableLiquidityWithinBand(bookLevels, topAsk, liquidityBandCents)
-    : null;
-  const executableAskSlippageCents = slippageGuardOn && executionVwap != null && topAsk != null && finite(topAsk)
-    ? roundPrice(100 * (executionVwap.worstAsk - topAsk))
-    : null;
+  const liquidityBandCents =
+    config.liveMaxExecutableAskSlippageCents > 0
+      ? config.liveMaxExecutableAskSlippageCents
+      : config.liveTakerPriceCushionCents;
+  const executableLiquidityShares =
+    liquidityGuardOn && topAsk != null && finite(topAsk)
+      ? executableLiquidityWithinBand(bookLevels, topAsk, liquidityBandCents)
+      : null;
+  const executableAskSlippageCents =
+    slippageGuardOn && executionVwap != null && topAsk != null && finite(topAsk)
+      ? roundPrice(100 * (executionVwap.worstAsk - topAsk))
+      : null;
   const quoteAgeMs = now - contract.updatedAt;
   const snapshot: QuoteSnapshotLeg = {
     venue: leg.venue,
@@ -163,9 +197,10 @@ function quoteLeg(
     worstAsk: executionVwap?.worstAsk ?? null,
     vwap: executionVwap?.vwap ?? null,
     maxBuyPrice: null,
-    depth: requiredDepthVwap?.depth
-      ?? executionVwap?.depth
-      ?? bookLevels.reduce((sum, level) => sum + (finite(level.size) ? level.size : 0), 0),
+    depth:
+      requiredDepthVwap?.depth ??
+      executionVwap?.depth ??
+      bookLevels.reduce((sum, level) => sum + (finite(level.size) ? level.size : 0), 0),
     depthRequired,
     levelsConsumed: executionVwap?.levelsConsumed ?? [],
     spread: spreadFor(contract, leg.direction),
@@ -180,10 +215,20 @@ function quoteLeg(
   };
 
   if (quoteAgeMs > maxAgeMs) {
-    return { snapshot, reason: `${leg.venue} ${leg.direction} quote is stale: age ${quoteAgeMs}ms exceeds ${maxAgeMs}ms`, maxBuyPrice: null, adjustedLeg: null };
+    return {
+      snapshot,
+      reason: `${leg.venue} ${leg.direction} quote is stale: age ${quoteAgeMs}ms exceeds ${maxAgeMs}ms`,
+      maxBuyPrice: null,
+      adjustedLeg: null,
+    };
   }
   if (topAsk == null || !finite(topAsk)) {
-    return { snapshot, reason: `${leg.venue} ${leg.direction} ask is unavailable`, maxBuyPrice: null, adjustedLeg: null };
+    return {
+      snapshot,
+      reason: `${leg.venue} ${leg.direction} ask is unavailable`,
+      maxBuyPrice: null,
+      adjustedLeg: null,
+    };
   }
   if (!executionVwap || !requiredDepthVwap) {
     return {
@@ -216,7 +261,12 @@ function quoteLeg(
     }
   }
   if (contract.tickSizeChangedAt != null && now - contract.tickSizeChangedAt <= config.liveQuoteMaxAgeMs) {
-    return { snapshot, reason: `${leg.venue} ${leg.direction} tick size changed within quote freshness window`, maxBuyPrice: null, adjustedLeg: null };
+    return {
+      snapshot,
+      reason: `${leg.venue} ${leg.direction} tick size changed within quote freshness window`,
+      maxBuyPrice: null,
+      adjustedLeg: null,
+    };
   }
 
   // The marketable offset is at least the taker cushion; for the first/cancelable leg an extra cross
@@ -248,10 +298,19 @@ export function evaluateLiveQuoteQuality(
   const kalshi = quoteLeg(kalshiLeg, kalshiContract, config, now, 0, config.liveQuoteMaxAgeMs, orderSize);
   // The extra cross offset (P1-5) and the optionally-tighter freshness bound (P2-10) apply ONLY to the
   // staleness-prone Polymarket leg. The Kalshi leg keeps the standard cushion and freshness bar.
-  const polymarket = quoteLeg(polymarketLeg, polymarketContract, config, now, polymarketFirstCrossCents, config.livePolymarketQuoteMaxAgeMs ?? config.liveQuoteMaxAgeMs, orderSize);
-  const quoteSkewMs = kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
-    ? Math.abs(kalshi.snapshot.updatedAt - polymarket.snapshot.updatedAt)
-    : null;
+  const polymarket = quoteLeg(
+    polymarketLeg,
+    polymarketContract,
+    config,
+    now,
+    polymarketFirstCrossCents,
+    config.livePolymarketQuoteMaxAgeMs ?? config.liveQuoteMaxAgeMs,
+    orderSize,
+  );
+  const quoteSkewMs =
+    kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
+      ? Math.abs(kalshi.snapshot.updatedAt - polymarket.snapshot.updatedAt)
+      : null;
 
   let failureReason = kalshi.reason ?? polymarket.reason;
   if (!failureReason && quoteSkewMs != null && quoteSkewMs > config.liveQuoteSyncMaxSkewMs) {
@@ -260,22 +319,25 @@ export function evaluateLiveQuoteQuality(
     // just reflects one venue being quieter — don't drop a fillable candidate for it. Only skip on skew when
     // a book is genuinely stale. Flag off restores the strict absolute-skew gate. Execution (FAK/FOK +
     // cushion) safely handles a book that moved in the interim: a moved book FAK-misses rather than mis-fills.
-    const olderBookAgeMs = kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
-      ? now - Math.min(kalshi.snapshot.updatedAt, polymarket.snapshot.updatedAt)
-      : null;
+    const olderBookAgeMs =
+      kalshi.snapshot?.updatedAt != null && polymarket.snapshot?.updatedAt != null
+        ? now - Math.min(kalshi.snapshot.updatedAt, polymarket.snapshot.updatedAt)
+        : null;
     const bothFresh = olderBookAgeMs != null && olderBookAgeMs <= config.liveQuoteMaxAgeMs;
     if (!config.liveQuoteSkewBothFreshEnabled || !bothFresh) {
       failureReason = `quote skew ${quoteSkewMs}ms exceeds ${config.liveQuoteSyncMaxSkewMs}ms`;
     }
   }
 
-  const projectedPremium = kalshi.snapshot?.vwap != null && polymarket.snapshot?.vwap != null
-    ? roundPrice(kalshi.snapshot.vwap + polymarket.snapshot.vwap)
-    : null;
+  const projectedPremium =
+    kalshi.snapshot?.vwap != null && polymarket.snapshot?.vwap != null
+      ? roundPrice(kalshi.snapshot.vwap + polymarket.snapshot.vwap)
+      : null;
   const projectedEdge = projectedPremium == null ? null : roundPrice(1 - projectedPremium);
-  const projectedPremiumAtLimit = kalshi.maxBuyPrice != null && polymarket.maxBuyPrice != null
-    ? roundPrice(kalshi.maxBuyPrice + polymarket.maxBuyPrice)
-    : null;
+  const projectedPremiumAtLimit =
+    kalshi.maxBuyPrice != null && polymarket.maxBuyPrice != null
+      ? roundPrice(kalshi.maxBuyPrice + polymarket.maxBuyPrice)
+      : null;
   const projectedEdgeAtLimit = projectedPremiumAtLimit == null ? null : roundPrice(1 - projectedPremiumAtLimit);
   // Fee-aware gate (flag-gated): subtract the expected Kalshi taker fee, priced at the Kalshi leg VWAP (the
   // expected fill price, matching the realized per-share fee basis). Polymarket CLOB fee ~0. When the flag
@@ -283,9 +345,8 @@ export function evaluateLiveQuoteQuality(
   const expectedKalshiFee = config.liveFeeAwareGateEnabled
     ? roundPrice(expectedKalshiFeePerShare(kalshi.snapshot?.vwap ?? null))
     : null;
-  const projectedEdgeAfterFees = projectedEdgeAtLimit == null
-    ? null
-    : roundPrice(projectedEdgeAtLimit - (expectedKalshiFee ?? 0));
+  const projectedEdgeAfterFees =
+    projectedEdgeAtLimit == null ? null : roundPrice(projectedEdgeAtLimit - (expectedKalshiFee ?? 0));
   if (!failureReason && projectedEdgeAfterFees != null && projectedEdgeAfterFees + 1e-9 < config.minProfitDollars) {
     failureReason = `${CUSHIONED_EDGE_REASON_PREFIX} ${projectedEdgeAfterFees.toFixed(4)} below threshold ${config.minProfitDollars.toFixed(4)}`;
   }
@@ -352,7 +413,11 @@ export function selectExecutableSize(
   return config.liveOrderSize; // nothing in the band cleared; fall back to the static size (gate re-checks)
 }
 
-function shadowLadderLeg(leg: ArbLeg | null, contract: BinaryContract | null, probeSizes: number[]): ShadowLadderLeg | null {
+function shadowLadderLeg(
+  leg: ArbLeg | null,
+  contract: BinaryContract | null,
+  probeSizes: number[],
+): ShadowLadderLeg | null {
   if (!leg || !contract) return null;
   const topAsk = askFor(contract, leg.direction);
   const bookLevels = levelsFor(contract, leg.direction);
@@ -360,9 +425,23 @@ function shadowLadderLeg(leg: ArbLeg | null, contract: BinaryContract | null, pr
   const probes: ShadowLadderProbe[] = probeSizes.map((size) => {
     const result = depthWeightedAsk(bookLevels, size);
     if (!result) {
-      return { size, vwap: null, worstAsk: null, depth: roundPrice(totalDepth), sufficientDepth: false, levelsConsumed: [] };
+      return {
+        size,
+        vwap: null,
+        worstAsk: null,
+        depth: roundPrice(totalDepth),
+        sufficientDepth: false,
+        levelsConsumed: [],
+      };
     }
-    return { size, vwap: result.vwap, worstAsk: result.worstAsk, depth: result.depth, sufficientDepth: true, levelsConsumed: result.levelsConsumed };
+    return {
+      size,
+      vwap: result.vwap,
+      worstAsk: result.worstAsk,
+      depth: result.depth,
+      sufficientDepth: true,
+      levelsConsumed: result.levelsConsumed,
+    };
   });
   return {
     venue: leg.venue,
@@ -376,7 +455,12 @@ function shadowLadderLeg(leg: ArbLeg | null, contract: BinaryContract | null, pr
 // T2.4: pure, read-only multi-size ladder capture used ONLY on the already-rejected below-threshold-edge
 // path (gated by LIVE_SHADOW_LADDER_CAPTURE_ENABLED). It performs only arithmetic over already-fetched
 // book arrays — no network, no order placement, no gate mutation — so it can never affect trading.
-export function captureShadowLadder(candidate: ArbCandidate, books: LiveQuoteBooks, config: AppConfig, now: number): ShadowLadderCapture {
+export function captureShadowLadder(
+  candidate: ArbCandidate,
+  books: LiveQuoteBooks,
+  config: AppConfig,
+  now: number,
+): ShadowLadderCapture {
   const probeSizes = Array.from(new Set([...(config.liveShadowLadderProbeSizes ?? []), config.liveOrderSize]))
     .filter((size) => Number.isFinite(size) && size > 0)
     .sort((a, b) => a - b);
@@ -386,9 +470,8 @@ export function captureShadowLadder(candidate: ArbCandidate, books: LiveQuoteBoo
   const polymarketContract = polymarketLeg ? findContract(books, polymarketLeg) : null;
   const kalshi = shadowLadderLeg(kalshiLeg, kalshiContract, probeSizes);
   const polymarket = shadowLadderLeg(polymarketLeg, polymarketContract, probeSizes);
-  const topOfBookEdge = kalshi?.topAsk != null && polymarket?.topAsk != null
-    ? roundPrice(1 - (kalshi.topAsk + polymarket.topAsk))
-    : null;
+  const topOfBookEdge =
+    kalshi?.topAsk != null && polymarket?.topAsk != null ? roundPrice(1 - (kalshi.topAsk + polymarket.topAsk)) : null;
   const executableEdgeBySize = probeSizes.map((size) => {
     const k = kalshi?.probes.find((probe) => probe.size === size);
     const p = polymarket?.probes.find((probe) => probe.size === size);

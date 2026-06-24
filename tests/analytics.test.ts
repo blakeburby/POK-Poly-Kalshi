@@ -38,8 +38,20 @@ function at(timestampMs: number): string {
 
 test("analytics estimates guaranteed PnL from fill prices and falls back to premium", () => {
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillPrice: 0.51, polymarketFillPrice: 0.41 })), 0.08);
-  assert.equal(estimatedGuaranteedPnl(signal({ higher: { venue: "kalshi", contractId: "kalshi", direction: "no", strike: 1502, ask: 0.46 }, kalshiFillPrice: 0.54, polymarketFillPrice: 0.52 })), 0.02);
-  assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillPrice: null, polymarketFillPrice: null, premium: 0.95 })), 0.05);
+  assert.equal(
+    estimatedGuaranteedPnl(
+      signal({
+        higher: { venue: "kalshi", contractId: "kalshi", direction: "no", strike: 1502, ask: 0.46 },
+        kalshiFillPrice: 0.54,
+        polymarketFillPrice: 0.52,
+      }),
+    ),
+    0.02,
+  );
+  assert.equal(
+    estimatedGuaranteedPnl(signal({ kalshiFillPrice: null, polymarketFillPrice: null, premium: 0.95 })),
+    0.05,
+  );
   assert.equal(estimatedGuaranteedPnl(signal({ action: "failed" })), null);
   assert.equal(estimatedGuaranteedPnl(signal({ executionGroupId: null })), null);
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillId: "dry-run-kalshi-1" })), null);
@@ -54,22 +66,45 @@ test("C2: an in-band Polymarket FAK over-hedge (5 / 5.16) counts as a completed 
   // A genuine underfill (Polymarket below the Kalshi hedge) is NOT a clean hedge -> still excluded.
   assert.equal(estimatedGuaranteedPnl(signal({ kalshiFillCount: 5, polymarketFillCount: 4 })), null);
   const now = Date.UTC(2026, 3, 29, 20, 30);
-  const w = buildAnalyticsWindow([
-    signal({ id: 1, updatedAt: at(now - 5 * 60 * 1000), kalshiFillCount: 5, polymarketFillCount: 5.16, kalshiFillPrice: 0.5, polymarketFillPrice: 0.4 }),
-  ], "hourly", now);
+  const w = buildAnalyticsWindow(
+    [
+      signal({
+        id: 1,
+        updatedAt: at(now - 5 * 60 * 1000),
+        kalshiFillCount: 5,
+        polymarketFillCount: 5.16,
+        kalshiFillPrice: 0.5,
+        polymarketFillPrice: 0.4,
+      }),
+    ],
+    "hourly",
+    now,
+  );
   assert.equal(w.filledTrades, 1);
 });
 
 test("C2: fill rate uses REAL ATTEMPTS as the denominator, not filled-only (was structurally ~100%)", () => {
   const now = Date.UTC(2026, 3, 29, 20, 30);
-  const failed = (id: number, mins: number) => signal({
-    id, updatedAt: at(now - mins * 60 * 1000), action: "failed",
-    kalshiFillId: null, polymarketFillId: null, kalshiFillCount: 0, polymarketFillCount: 0,
-  });
-  const w = buildAnalyticsWindow([
-    signal({ id: 1, updatedAt: at(now - 5 * 60 * 1000), kalshiFillPrice: 0.5, polymarketFillPrice: 0.4 }), // 1 filled
-    failed(2, 6), failed(3, 7), failed(4, 8), // 3 real no-fill/failed attempts (executionGroupId set)
-  ], "hourly", now);
+  const failed = (id: number, mins: number) =>
+    signal({
+      id,
+      updatedAt: at(now - mins * 60 * 1000),
+      action: "failed",
+      kalshiFillId: null,
+      polymarketFillId: null,
+      kalshiFillCount: 0,
+      polymarketFillCount: 0,
+    });
+  const w = buildAnalyticsWindow(
+    [
+      signal({ id: 1, updatedAt: at(now - 5 * 60 * 1000), kalshiFillPrice: 0.5, polymarketFillPrice: 0.4 }), // 1 filled
+      failed(2, 6),
+      failed(3, 7),
+      failed(4, 8), // 3 real no-fill/failed attempts (executionGroupId set)
+    ],
+    "hourly",
+    now,
+  );
   assert.equal(w.filledTrades, 1);
   assert.equal(w.opportunityCount, 4); // 1 filled + 3 attempts, NOT filled/filled
   assert.equal(w.fillRate, 0.25);
@@ -77,13 +112,23 @@ test("C2: fill rate uses REAL ATTEMPTS as the denominator, not filled-only (was 
 
 test("analytics computes win loss rates, profit factor, and cumulative buckets", () => {
   const now = Date.UTC(2026, 3, 29, 20, 30);
-  const analytics = buildAnalyticsWindow([
-    signal({ id: 1, updatedAt: at(now - 30 * 60 * 1000), kalshiFillPrice: 0.51, polymarketFillPrice: 0.4 }),
-    signal({ id: 2, updatedAt: at(now - 70 * 60 * 1000), kalshiFillPrice: 0.55, polymarketFillPrice: 0.47 }),
-    signal({ id: 3, updatedAt: at(now - 2 * 60 * 60 * 1000), kalshiFillPrice: null, polymarketFillPrice: null, premium: 0.95 }),
-    signal({ id: 4, updatedAt: at(now - 3 * 60 * 60 * 1000), kalshiFillPrice: 0.5, polymarketFillPrice: 0.5 }),
-    signal({ id: 5, updatedAt: at(now - 30 * 60 * 60 * 1000), kalshiFillPrice: 0.4, polymarketFillPrice: 0.4 }),
-  ], "hourly", now);
+  const analytics = buildAnalyticsWindow(
+    [
+      signal({ id: 1, updatedAt: at(now - 30 * 60 * 1000), kalshiFillPrice: 0.51, polymarketFillPrice: 0.4 }),
+      signal({ id: 2, updatedAt: at(now - 70 * 60 * 1000), kalshiFillPrice: 0.55, polymarketFillPrice: 0.47 }),
+      signal({
+        id: 3,
+        updatedAt: at(now - 2 * 60 * 60 * 1000),
+        kalshiFillPrice: null,
+        polymarketFillPrice: null,
+        premium: 0.95,
+      }),
+      signal({ id: 4, updatedAt: at(now - 3 * 60 * 60 * 1000), kalshiFillPrice: 0.5, polymarketFillPrice: 0.5 }),
+      signal({ id: 5, updatedAt: at(now - 30 * 60 * 60 * 1000), kalshiFillPrice: 0.4, polymarketFillPrice: 0.4 }),
+    ],
+    "hourly",
+    now,
+  );
 
   assert.equal(analytics.filledTrades, 4);
   assert.equal(analytics.tradesWon, 2);
@@ -113,9 +158,11 @@ test("analytics computes win loss rates, profit factor, and cumulative buckets",
 
 test("analytics exposes no-loss profit factor state and insufficient sharpe as null", () => {
   const now = Date.UTC(2026, 3, 29, 20, 30);
-  const analytics = buildAnalyticsWindow([
-    signal({ updatedAt: at(now - 1_000), kalshiFillPrice: 0.45, polymarketFillPrice: 0.45 }),
-  ], "hourly", now);
+  const analytics = buildAnalyticsWindow(
+    [signal({ updatedAt: at(now - 1_000), kalshiFillPrice: 0.45, polymarketFillPrice: 0.45 })],
+    "hourly",
+    now,
+  );
 
   assert.equal(analytics.tradesWon, 1);
   assert.equal(analytics.tradesLost, 0);

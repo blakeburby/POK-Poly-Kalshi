@@ -4,7 +4,13 @@ import { generateKeyPairSync } from "node:crypto";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AssetType, OrderType, Side, type BalanceAllowanceResponse, type SignedOrder } from "@polymarket/clob-client-v2";
+import {
+  AssetType,
+  OrderType,
+  Side,
+  type BalanceAllowanceResponse,
+  type SignedOrder,
+} from "@polymarket/clob-client-v2";
 import type { AppConfig } from "../src/config";
 import { loadConfig } from "../src/config";
 import { BookStore } from "../src/books/book-store";
@@ -37,8 +43,21 @@ import { LiveExposureCache } from "../src/execution/live-hot-path";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { ArbLeg, DashboardSignal, LiveExecutionLock, Venue, VenueExecutionReadiness } from "../src/types";
-import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "../src/execution/venue-confirmations";
-import { buildKalshiFixNewOrderFields, encodeFixMessage, extractFixMessages, kalshiFixLimitPriceField, parseFixMessage, parseKalshiFixExecutionReport, type KalshiFixOrderInput } from "../src/kalshi/fix";
+import {
+  buildUserStreamReadiness,
+  defaultReconciliationReadiness,
+  type VenueConfirmationMonitor,
+  type VenueConfirmationResult,
+} from "../src/execution/venue-confirmations";
+import {
+  buildKalshiFixNewOrderFields,
+  encodeFixMessage,
+  extractFixMessages,
+  kalshiFixLimitPriceField,
+  parseFixMessage,
+  parseKalshiFixExecutionReport,
+  type KalshiFixOrderInput,
+} from "../src/kalshi/fix";
 import { contract } from "./helpers";
 
 const { privateKey: kalshiTestPrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -47,7 +66,11 @@ const kalshiTestPrivateKeyPem = kalshiTestPrivateKey.export({ type: "pkcs8", for
 test("P0.1: sanitizeError never throws, surfaces code/status, and redacts secrets", () => {
   // Hot-path catch helper: must NEVER throw, on any input, so an order-error path can't crash on logging.
   const throwingMessage = new Error("x");
-  Object.defineProperty(throwingMessage, "message", { get() { throw new Error("boom"); } });
+  Object.defineProperty(throwingMessage, "message", {
+    get() {
+      throw new Error("boom");
+    },
+  });
   assert.doesNotThrow(() => sanitizeError(throwingMessage));
   assert.equal(sanitizeError(throwingMessage), "[unserializable error]");
 
@@ -67,7 +90,9 @@ test("P0.1: sanitizeError never throws, surfaces code/status, and redacts secret
   assert.match(sanitizeError(http), /status=401/);
 
   // Secret redaction still applies (private key hex, user path, auth header key).
-  const leaky = new Error("key 0x0123456789abcdef0123456789abcdef0123456789abcdef hit /v1/users/0xdeadbeef cookie=abc123");
+  const leaky = new Error(
+    "key 0x0123456789abcdef0123456789abcdef0123456789abcdef hit /v1/users/0xdeadbeef cookie=abc123",
+  );
   const sanitized = sanitizeError(leaky);
   assert.match(sanitized, /0x\[redacted\]/);
   assert.match(sanitized, /\/v1\/users\/\[redacted\]/);
@@ -251,12 +276,15 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
 function kalshiUiSessionFile(input: Record<string, unknown> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "kalshi-ui-session-"));
   const path = join(dir, "session.json");
-  writeFileSync(path, JSON.stringify({
-    userId: "user-123",
-    cookie: "kalshi_session=test-session",
-    csrfToken: "csrf-test",
-    ...input,
-  }));
+  writeFileSync(
+    path,
+    JSON.stringify({
+      userId: "user-123",
+      cookie: "kalshi_session=test-session",
+      csrfToken: "csrf-test",
+      ...input,
+    }),
+  );
   chmodSync(path, 0o600);
   return path;
 }
@@ -282,7 +310,14 @@ const allowedGeoblock: PolymarketGeoblockChecker = async (now) => ({
 });
 
 function ready(venue: Venue): VenueExecutionReadiness {
-  return { configured: true, ready: true, reason: null, balance: venue === "polymarket" ? 10 : null, allowance: venue === "polymarket" ? 10 : null, lastCheckedAt: 1_800_000_000_000 };
+  return {
+    configured: true,
+    ready: true,
+    reason: null,
+    balance: venue === "polymarket" ? 10 : null,
+    allowance: venue === "polymarket" ? 10 : null,
+    lastCheckedAt: 1_800_000_000_000,
+  };
 }
 
 class FakeVenueClient implements VenueOrderClient {
@@ -335,7 +370,11 @@ class UnwindableVenueClient extends FakeVenueClient {
   unwindCalls = 0;
   lastUnwindRequest: VenueUnwindRequest | null = null;
 
-  constructor(venue: Venue, result: Partial<VenueOrderResult>, private readonly outcome: VenueUnwindOutcome | null) {
+  constructor(
+    venue: Venue,
+    result: Partial<VenueOrderResult>,
+    private readonly outcome: VenueUnwindOutcome | null,
+  ) {
     super(venue, result);
   }
 
@@ -350,7 +389,10 @@ class UnwindableVenueClient extends FakeVenueClient {
 class SequencedVenueClient extends FakeVenueClient {
   private call = 0;
 
-  constructor(venue: Venue, private readonly results: Partial<VenueOrderResult>[]) {
+  constructor(
+    venue: Venue,
+    private readonly results: Partial<VenueOrderResult>[],
+  ) {
     super(venue);
   }
 
@@ -448,7 +490,14 @@ class FakeConfirmationMonitor implements VenueConfirmationMonitor {
 }
 
 function liveCandidate(now: number) {
-  const lower = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesTokenId: "yes-token", updatedAt: now });
+  const lower = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
   const higher = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now });
   const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
   assert.ok(candidate);
@@ -564,41 +613,61 @@ function qualityReader(now: number, signals: DashboardSignal[]) {
 }
 
 function exactQualitySignals(now: number, count = 40): DashboardSignal[] {
-  return Array.from({ length: count }, (_, index) => qualitySignal(now, { id: index + 1, executionGroupId: `exact-${index}` }));
+  return Array.from({ length: count }, (_, index) =>
+    qualitySignal(now, { id: index + 1, executionGroupId: `exact-${index}` }),
+  );
 }
 
 function poorQualitySignals(now: number, count = 40): DashboardSignal[] {
-  return Array.from({ length: count }, (_, index) => qualitySignal(now, {
-    id: index + 1,
-    action: "failed",
-    failureReason: "risk quarantined: Polymarket mismatch",
-    kalshiStatus: "filled",
-    polymarketStatus: index % 2 === 0 ? "unknown" : "unexpected_fill_count",
-    kalshiFillCount: 5,
-    polymarketFillCount: index % 3 === 0 ? 0 : 5.25,
-    partialFill: true,
-    polymarketError: index % 2 === 0 ? "order response timeout after 2500ms" : null,
-    executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: index % 2 === 0 ? 2500 : 1800 },
-    riskQuarantineExposureDollars: 2.5,
-  }));
+  return Array.from({ length: count }, (_, index) =>
+    qualitySignal(now, {
+      id: index + 1,
+      action: "failed",
+      failureReason: "risk quarantined: Polymarket mismatch",
+      kalshiStatus: "filled",
+      polymarketStatus: index % 2 === 0 ? "unknown" : "unexpected_fill_count",
+      kalshiFillCount: 5,
+      polymarketFillCount: index % 3 === 0 ? 0 : 5.25,
+      partialFill: true,
+      polymarketError: index % 2 === 0 ? "order response timeout after 2500ms" : null,
+      executionTimings: { kalshiOrderRttMs: 100, polymarketOrderRttMs: index % 2 === 0 ? 2500 : 1800 },
+      riskQuarantineExposureDollars: 2.5,
+    }),
+  );
 }
 
 function kalshiLowerLiveCandidate(now: number) {
   const lower = contract({ venue: "kalshi", contractId: "kalshi", strike: 1500, yesAsk: 0.4, updatedAt: now });
-  const higher = contract({ venue: "polymarket", contractId: "poly", strike: 1502, noAsk: 0.5, noTokenId: "no-token", updatedAt: now });
+  const higher = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1502,
+    noAsk: 0.5,
+    noTokenId: "no-token",
+    updatedAt: now,
+  });
   const candidate = buildGuaranteedCandidate(lower, higher, 0.05);
   assert.ok(candidate);
   return { candidate, lower, higher };
 }
 
 test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => {
-  const yes = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-YES",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, { executionGroupId: "group", clientOrderId: "client-yes", size: 1, maxBuyPrice: 0.41, placementMode: "polymarket_first_exact" });
+  const yes = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-YES",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-yes",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "polymarket_first_exact",
+    },
+  );
 
   assert.equal(yes.ticker, "KXBTC15M-YES");
   assert.equal(yes.side, "bid");
@@ -607,105 +676,135 @@ test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => 
   assert.equal(yes.time_in_force, "immediate_or_cancel");
   assert.equal("order_group_id" in yes, false);
 
-  const no = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-NO",
-    direction: "no",
-    strike: 1502,
-    ask: 0.5,
-  }, { executionGroupId: "group", clientOrderId: "client-no", size: 1, maxBuyPrice: 0.51, placementMode: "polymarket_first_exact" });
+  const no = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-NO",
+      direction: "no",
+      strike: 1502,
+      ask: 0.5,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-no",
+      size: 1,
+      maxBuyPrice: 0.51,
+      placementMode: "polymarket_first_exact",
+    },
+  );
 
   assert.equal(no.side, "ask");
   assert.equal(no.price, "0.4900");
   assert.equal("order_group_id" in no, false);
 
-  const limitRest = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-LIMIT",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-limit",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "parallel_limit_rest",
-    limitRestMs: 500,
-  });
+  const limitRest = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-LIMIT",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-limit",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "parallel_limit_rest",
+      limitRestMs: 500,
+    },
+  );
   assert.equal(limitRest.time_in_force, "good_till_canceled");
 
-  const market = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-MARKET",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-market",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "parallel_market",
-  });
+  const market = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-MARKET",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-market",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "parallel_market",
+    },
+  );
   assert.equal(market.time_in_force, "immediate_or_cancel");
 
-  const parallelQuick = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-QUICK",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-quick",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "parallel_quick",
-  });
+  const parallelQuick = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-QUICK",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-quick",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "parallel_quick",
+    },
+  );
   assert.equal(parallelQuick.time_in_force, "immediate_or_cancel");
 
-  const configuredFok = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-FOK",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-fok",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "polymarket_first_exact",
-  }, { hedgeTimeInForce: "fill_or_kill" });
+  const configuredFok = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-FOK",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-fok",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "polymarket_first_exact",
+    },
+    { hedgeTimeInForce: "fill_or_kill" },
+  );
   assert.equal(configuredFok.time_in_force, "fill_or_kill");
 
   // T1.3: the Kalshi FIRST leg under kalshi_first_exact is always atomic FOK (exact integer size or 0),
   // independent of the configured hedge TIF. Locks in the default-branch behavior of kalshiTimeInForce.
-  const kalshiFirst = buildKalshiV2OrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-KFIRST",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-kfirst",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "kalshi_first_exact",
-  }, { hedgeTimeInForce: "immediate_or_cancel" });
+  const kalshiFirst = buildKalshiV2OrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-KFIRST",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client-kfirst",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "kalshi_first_exact",
+    },
+    { hedgeTimeInForce: "immediate_or_cancel" },
+  );
   assert.equal(kalshiFirst.time_in_force, "fill_or_kill");
 });
 
 test("Kalshi UI Quick Order body maps YES and NO legs onto user-side market orders", () => {
-  const yes = buildKalshiUiQuickOrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-YES",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, { executionGroupId: "group", clientOrderId: "client-yes", size: 5, maxBuyPrice: 0.61 }, "market-yes");
+  const yes = buildKalshiUiQuickOrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-YES",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+    },
+    { executionGroupId: "group", clientOrderId: "client-yes", size: 5, maxBuyPrice: 0.61 },
+    "market-yes",
+  );
 
   assert.equal(yes.market_id, "market-yes");
   assert.equal(yes.count_fp, "5.00");
@@ -718,13 +817,17 @@ test("Kalshi UI Quick Order body maps YES and NO legs onto user-side market orde
   assert.equal(yes.price_dollars, "0.6100");
   assert.equal(yes.max_cost_cents, 305);
 
-  const no = buildKalshiUiQuickOrderBody({
-    venue: "kalshi",
-    contractId: "KXBTC15M-NO",
-    direction: "no",
-    strike: 1502,
-    ask: 0.5,
-  }, { executionGroupId: "group", clientOrderId: "client-no", size: 1.77, maxBuyPrice: 0.54 }, "market-no");
+  const no = buildKalshiUiQuickOrderBody(
+    {
+      venue: "kalshi",
+      contractId: "KXBTC15M-NO",
+      direction: "no",
+      strike: 1502,
+      ask: 0.5,
+    },
+    { executionGroupId: "group", clientOrderId: "client-no", size: 1.77, maxBuyPrice: 0.54 },
+    "market-no",
+  );
 
   assert.equal(no.side, "no");
   assert.equal(no.user_side, "no");
@@ -734,16 +837,19 @@ test("Kalshi UI Quick Order body maps YES and NO legs onto user-side market orde
 
 test("Kalshi UI Quick Order readiness fails closed until cap behavior is validated", async () => {
   const sessionPath = kalshiUiSessionFile();
-  const client = new KalshiUiQuickOrderClient(config({
-    kalshiHedgeOrderMode: "ui_quick_order",
-    kalshiUiSessionPath: sessionPath,
-    kalshiUiQuickOrderCapValidated: false,
-  }), (async (url: Parameters<typeof fetch>[0]): Promise<Response> => {
-    if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
-      return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
-    }
-    throw new Error("readiness should not call private UI endpoints when cap validation is false");
-  }) as typeof fetch);
+  const client = new KalshiUiQuickOrderClient(
+    config({
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiSessionPath: sessionPath,
+      kalshiUiQuickOrderCapValidated: false,
+    }),
+    (async (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
+        return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+      }
+      throw new Error("readiness should not call private UI endpoints when cap validation is false");
+    }) as typeof fetch,
+  );
 
   const readiness = await withKalshiEnv(() => client.readiness(1_800_000_000_000));
 
@@ -752,9 +858,11 @@ test("Kalshi UI Quick Order readiness fails closed until cap behavior is validat
 });
 
 test("Kalshi UI Quick Order client refuses unsupported placement modes", async () => {
-  const client = new KalshiUiQuickOrderClient(config({
-    kalshiHedgeOrderMode: "ui_quick_order",
-  }));
+  const client = new KalshiUiQuickOrderClient(
+    config({
+      kalshiHedgeOrderMode: "ui_quick_order",
+    }),
+  );
   const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-MARKET", direction: "yes", strike: 1500, ask: 0.5 };
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -764,76 +872,108 @@ test("Kalshi UI Quick Order client refuses unsupported placement modes", async (
     placementMode: "parallel_market",
   };
 
-  assert.match(await client.preflightOrder(leg, context) ?? "", /only supported/);
+  assert.match((await client.preflightOrder(leg, context)) ?? "", /only supported/);
   await assert.rejects(() => client.placeOrder(leg, context), /only supported/);
 });
 
 test("Kalshi UI Quick Order client resolves UI market id and posts market IOC order", async () => {
   const sessionPath = kalshiUiSessionFile();
-  const calls: Array<{ method: string; path: string; body?: Record<string, unknown>; cookie?: string | null; csrf?: string | null }> = [];
+  const calls: Array<{
+    method: string;
+    path: string;
+    body?: Record<string, unknown>;
+    cookie?: string | null;
+    csrf?: string | null;
+  }> = [];
   const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
     const parsed = new URL(String(url));
     const method = init?.method ?? "GET";
     const headers = init?.headers as Record<string, string> | undefined;
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
-    calls.push({ method, path: parsed.pathname, body, cookie: headers?.Cookie ?? null, csrf: headers?.["X-CSRF-Token"] ?? null });
+    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+    calls.push({
+      method,
+      path: parsed.pathname,
+      body,
+      cookie: headers?.Cookie ?? null,
+      csrf: headers?.["X-CSRF-Token"] ?? null,
+    });
     if (parsed.pathname.endsWith("/portfolio/balance")) {
       return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
     }
     if (parsed.pathname.endsWith("/event_positions/KXBTC15M-26JUN140300")) {
-      return new Response(JSON.stringify({
-        event_position: {
-          market_positions: [{
-            market_id: "ui-market-123",
-            market_ticker: "KXBTC15M-26JUN140300-00",
-          }],
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          event_position: {
+            market_positions: [
+              {
+                market_id: "ui-market-123",
+                market_ticker: "KXBTC15M-26JUN140300-00",
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
     }
     if (method === "POST" && parsed.pathname.endsWith("/orders")) {
       assert.equal(body?.order_type, "market");
       assert.equal(body?.time_in_force, "immediate_or_cancel");
       assert.equal(body?.market_id, "ui-market-123");
-      return new Response(JSON.stringify({
-        order: {
-          order_id: "ui-order-1",
-          market_id: "ui-market-123",
-          market_ticker: "KXBTC15M-26JUN140300-00",
-          status: "pending",
-          order_type: "market",
-          user_side: "yes",
-          price_dollars: "0.5400",
-          fill_count_fp: "1.00",
-          remaining_count_fp: "0.00",
-        },
-      }), { status: 201 });
+      return new Response(
+        JSON.stringify({
+          order: {
+            order_id: "ui-order-1",
+            market_id: "ui-market-123",
+            market_ticker: "KXBTC15M-26JUN140300-00",
+            status: "pending",
+            order_type: "market",
+            user_side: "yes",
+            price_dollars: "0.5400",
+            fill_count_fp: "1.00",
+            remaining_count_fp: "0.00",
+          },
+        }),
+        { status: 201 },
+      );
     }
     if (method === "GET" && parsed.pathname.endsWith("/orders/ui-order-1")) {
-      return new Response(JSON.stringify({
-        order: {
-          order_id: "ui-order-1",
-          market_id: "ui-market-123",
-          market_ticker: "KXBTC15M-26JUN140300-00",
-          status: "executed",
-          order_type: "market",
-          user_side: "yes",
-          price_dollars: "0.5400",
-          fill_count_fp: "1.00",
-          remaining_count_fp: "0.00",
-          taker_fill_cost_dollars: "0.5400",
-          taker_fees_dollars: "0.0100",
-          updated_ts: "2026-06-14T06:49:27.93588Z",
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          order: {
+            order_id: "ui-order-1",
+            market_id: "ui-market-123",
+            market_ticker: "KXBTC15M-26JUN140300-00",
+            status: "executed",
+            order_type: "market",
+            user_side: "yes",
+            price_dollars: "0.5400",
+            fill_count_fp: "1.00",
+            remaining_count_fp: "0.00",
+            taker_fill_cost_dollars: "0.5400",
+            taker_fees_dollars: "0.0100",
+            updated_ts: "2026-06-14T06:49:27.93588Z",
+          },
+        }),
+        { status: 200 },
+      );
     }
     return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
   };
-  const client = new KalshiUiQuickOrderClient(config({
-    kalshiHedgeOrderMode: "ui_quick_order",
-    kalshiUiSessionPath: sessionPath,
-    kalshiUiQuickOrderCapValidated: true,
-  }), fetchFn as typeof fetch);
-  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-26JUN140300-00", direction: "yes", strike: 1500, ask: 0.54 };
+  const client = new KalshiUiQuickOrderClient(
+    config({
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiSessionPath: sessionPath,
+      kalshiUiQuickOrderCapValidated: true,
+    }),
+    fetchFn as typeof fetch,
+  );
+  const leg: ArbLeg = {
+    venue: "kalshi",
+    contractId: "KXBTC15M-26JUN140300-00",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.54,
+  };
   const context: LiveOrderContext = {
     executionGroupId: "group",
     clientOrderId: "client-ui",
@@ -863,7 +1003,13 @@ test("Kalshi UI Quick Order client supports captured WAF-header session without 
     cookie: null,
     headers: { "x-aws-waf-token": "waf-test" },
   });
-  const calls: Array<{ method: string; path: string; cookie?: string | null; csrf?: string | null; waf?: string | null }> = [];
+  const calls: Array<{
+    method: string;
+    path: string;
+    cookie?: string | null;
+    csrf?: string | null;
+    waf?: string | null;
+  }> = [];
   const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
     const parsed = new URL(String(url));
     const method = init?.method ?? "GET";
@@ -879,51 +1025,71 @@ test("Kalshi UI Quick Order client supports captured WAF-header session without 
       return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
     }
     if (parsed.pathname.endsWith("/event_positions/KXBTC15M-26JUN140300")) {
-      return new Response(JSON.stringify({
-        event_position: {
-          market_positions: [{
-            market_id: "ui-market-123",
-            market_ticker: "KXBTC15M-26JUN140300-00",
-          }],
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          event_position: {
+            market_positions: [
+              {
+                market_id: "ui-market-123",
+                market_ticker: "KXBTC15M-26JUN140300-00",
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
     }
     if (method === "POST" && parsed.pathname.endsWith("/orders")) {
-      return new Response(JSON.stringify({
-        order: {
-          order_id: "ui-order-1",
-          market_id: "ui-market-123",
-          market_ticker: "KXBTC15M-26JUN140300-00",
-          status: "executed",
-          user_side: "yes",
-          price_dollars: "0.5400",
-          fill_count_fp: "1.00",
-          remaining_count_fp: "0.00",
-        },
-      }), { status: 201 });
+      return new Response(
+        JSON.stringify({
+          order: {
+            order_id: "ui-order-1",
+            market_id: "ui-market-123",
+            market_ticker: "KXBTC15M-26JUN140300-00",
+            status: "executed",
+            user_side: "yes",
+            price_dollars: "0.5400",
+            fill_count_fp: "1.00",
+            remaining_count_fp: "0.00",
+          },
+        }),
+        { status: 201 },
+      );
     }
     if (method === "GET" && parsed.pathname.endsWith("/orders/ui-order-1")) {
-      return new Response(JSON.stringify({
-        order: {
-          order_id: "ui-order-1",
-          market_id: "ui-market-123",
-          market_ticker: "KXBTC15M-26JUN140300-00",
-          status: "executed",
-          user_side: "yes",
-          price_dollars: "0.5400",
-          fill_count_fp: "1.00",
-          remaining_count_fp: "0.00",
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          order: {
+            order_id: "ui-order-1",
+            market_id: "ui-market-123",
+            market_ticker: "KXBTC15M-26JUN140300-00",
+            status: "executed",
+            user_side: "yes",
+            price_dollars: "0.5400",
+            fill_count_fp: "1.00",
+            remaining_count_fp: "0.00",
+          },
+        }),
+        { status: 200 },
+      );
     }
     return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
   };
-  const client = new KalshiUiQuickOrderClient(config({
-    kalshiHedgeOrderMode: "ui_quick_order",
-    kalshiUiSessionPath: sessionPath,
-    kalshiUiQuickOrderCapValidated: true,
-  }), fetchFn as typeof fetch);
-  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-26JUN140300-00", direction: "yes", strike: 1500, ask: 0.54 };
+  const client = new KalshiUiQuickOrderClient(
+    config({
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiSessionPath: sessionPath,
+      kalshiUiQuickOrderCapValidated: true,
+    }),
+    fetchFn as typeof fetch,
+  );
+  const leg: ArbLeg = {
+    venue: "kalshi",
+    contractId: "KXBTC15M-26JUN140300-00",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.54,
+  };
   const context: LiveOrderContext = {
     executionGroupId: "group",
     clientOrderId: "client-ui",
@@ -945,7 +1111,9 @@ test("Kalshi UI Quick Order client supports captured WAF-header session without 
 
 test("Kalshi order client factory selects UI Quick Order mode only when configured", () => {
   assert.ok(createKalshiOrderClient(config()) instanceof KalshiOrderClient);
-  assert.ok(createKalshiOrderClient(config({ kalshiHedgeOrderMode: "ui_quick_order" })) instanceof KalshiUiQuickOrderClient);
+  assert.ok(
+    createKalshiOrderClient(config({ kalshiHedgeOrderMode: "ui_quick_order" })) instanceof KalshiUiQuickOrderClient,
+  );
   assert.ok(createKalshiOrderClient(config({ kalshiHedgeOrderMode: "fix_ioc" })) instanceof KalshiFixOrderClient);
 });
 
@@ -954,16 +1122,20 @@ test("Kalshi FIX helpers build capped IOC limit orders with strict price roundin
   assert.equal(kalshiFixLimitPriceField(0.615, "yes", false), "61");
   assert.equal(kalshiFixLimitPriceField(0.385, "no", false), "39");
 
-  const fields = buildKalshiFixNewOrderFields({
-    clientOrderId: "client-fix",
-    symbol: "KXBTC15M-26JUN140300-00",
-    direction: "yes",
-    quantity: 5,
-    yesBookLimitPrice: 0.615,
-    maxExecutionCostDollars: 3.075,
-    timeInForce: "immediate_or_cancel",
-    orderGroupId: "group-1",
-  }, { useDollars: true }, "20260614-21:00:00.123");
+  const fields = buildKalshiFixNewOrderFields(
+    {
+      clientOrderId: "client-fix",
+      symbol: "KXBTC15M-26JUN140300-00",
+      direction: "yes",
+      quantity: 5,
+      yesBookLimitPrice: 0.615,
+      maxExecutionCostDollars: 3.075,
+      timeInForce: "immediate_or_cancel",
+      orderGroupId: "group-1",
+    },
+    { useDollars: true },
+    "20260614-21:00:00.123",
+  );
   const byTag = Object.fromEntries(fields.map(([tag, value]) => [String(tag), String(value)]));
   assert.equal(byTag["11"], "client-fix");
   assert.equal(byTag["38"], "5.00");
@@ -986,18 +1158,21 @@ test("Kalshi FIX helpers build capped IOC limit orders with strict price roundin
 });
 
 test("Kalshi FIX execution reports parse fill, fee, and timestamps", () => {
-  const report = parseKalshiFixExecutionReport({
-    "11": "client-fix",
-    "14": "5.00",
-    "17": "4;7",
-    "37": "order-fix",
-    "39": "2",
-    "6": "0.6100",
-    "137": "0.0020",
-    "150": "F",
-    "151": "0.00",
-    "60": "20260614-21:00:00.123",
-  }, true);
+  const report = parseKalshiFixExecutionReport(
+    {
+      "11": "client-fix",
+      "14": "5.00",
+      "17": "4;7",
+      "37": "order-fix",
+      "39": "2",
+      "6": "0.6100",
+      "137": "0.0020",
+      "150": "F",
+      "151": "0.00",
+      "60": "20260614-21:00:00.123",
+    },
+    true,
+  );
   assert.equal(report.clientOrderId, "client-fix");
   assert.equal(report.orderId, "order-fix");
   assert.equal(report.cumulativeQuantity, 5);
@@ -1027,31 +1202,44 @@ test("Kalshi FIX order client submits NO hedge through capped supported IOC rout
         exchangeTimestampMs: Date.parse("2026-06-14T21:00:00.123Z"),
         text: null,
         ambiguous: false,
-        reports: [{
-          clientOrderId: input.clientOrderId,
-          orderId: "fix-order-1",
-          execId: "1;1",
-          ordStatus: "2",
-          execType: "F",
-          text: null,
-          cumulativeQuantity: input.quantity,
-          leavesQuantity: 0,
-          averageYesBookPrice: input.yesBookLimitPrice,
-          lastYesBookPrice: input.yesBookLimitPrice,
-          lastQuantity: input.quantity,
-          feeDollars: 0.001,
-          exchangeTimestampMs: Date.parse("2026-06-14T21:00:00.123Z"),
-          rawTags: {},
-        }],
+        reports: [
+          {
+            clientOrderId: input.clientOrderId,
+            orderId: "fix-order-1",
+            execId: "1;1",
+            ordStatus: "2",
+            execType: "F",
+            text: null,
+            cumulativeQuantity: input.quantity,
+            leavesQuantity: 0,
+            averageYesBookPrice: input.yesBookLimitPrice,
+            lastYesBookPrice: input.yesBookLimitPrice,
+            lastQuantity: input.quantity,
+            feeDollars: 0.001,
+            exchangeTimestampMs: Date.parse("2026-06-14T21:00:00.123Z"),
+            rawTags: {},
+          },
+        ],
       };
     },
   };
-  const fetchFn = async (): Promise<Response> => new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
-  const client = new KalshiFixOrderClient(config({
-    kalshiHedgeOrderMode: "fix_ioc",
-    liveKalshiHedgeTimeInForce: "immediate_or_cancel",
-  }), fetchFn as typeof fetch, session);
-  const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-26JUN140300-00", direction: "no", strike: 1500, ask: 0.61 };
+  const fetchFn = async (): Promise<Response> =>
+    new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
+  const client = new KalshiFixOrderClient(
+    config({
+      kalshiHedgeOrderMode: "fix_ioc",
+      liveKalshiHedgeTimeInForce: "immediate_or_cancel",
+    }),
+    fetchFn as typeof fetch,
+    session,
+  );
+  const leg: ArbLeg = {
+    venue: "kalshi",
+    contractId: "KXBTC15M-26JUN140300-00",
+    direction: "no",
+    strike: 1500,
+    ask: 0.61,
+  };
   const context: LiveOrderContext = {
     executionGroupId: "group",
     clientOrderId: "client-fix",
@@ -1086,23 +1274,29 @@ test("Kalshi order client pre-arms request during preflight and patches final pr
       return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
     }
     calls.push({
-      body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {},
+      body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {},
       headers: init?.headers as Record<string, string>,
     });
-    return new Response(JSON.stringify({
-      order: {
-        order_id: "kalshi-prearmed",
-        client_order_id: "client-prearm",
-        status: "executed",
-        fill_count: "5",
-        yes_price_dollars: "0.5300",
-      },
-    }), { status: 200 });
+    return new Response(
+      JSON.stringify({
+        order: {
+          order_id: "kalshi-prearmed",
+          client_order_id: "client-prearm",
+          status: "executed",
+          fill_count: "5",
+          yes_price_dollars: "0.5300",
+        },
+      }),
+      { status: 200 },
+    );
   };
-  const client = new KalshiOrderClient(config({
-    liveKalshiPrearmEnabled: true,
-    liveKalshiPrearmMaxAgeMs: 5_000,
-  }), fetchFn as typeof fetch);
+  const client = new KalshiOrderClient(
+    config({
+      liveKalshiPrearmEnabled: true,
+      liveKalshiPrearmMaxAgeMs: 5_000,
+    }),
+    fetchFn as typeof fetch,
+  );
   const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-PREARM", direction: "yes", strike: 1500, ask: 0.5 };
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -1145,7 +1339,14 @@ test("LA1: Kalshi preflight reuses a warm, margin-covered readiness cache but fo
     return { client, balanceCalls: () => balanceCalls };
   };
   const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-LA1", direction: "yes", strike: 1500, ask: 0.5 };
-  const base: LiveOrderContext = { executionGroupId: "g", clientOrderId: "c", size: 5, maxBuyPrice: 1, requiredCollateral: 5.25, placementMode: "polymarket_first_exact" };
+  const base: LiveOrderContext = {
+    executionGroupId: "g",
+    clientOrderId: "c",
+    size: 5,
+    maxBuyPrice: 1,
+    requiredCollateral: 5.25,
+    placementMode: "polymarket_first_exact",
+  };
 
   // Funded with headroom ($100 >> 5.25 + margin): first preflight forces a fetch and warms the cache; the
   // second (the executor's refreshed preflight) reuses it -> only ONE balance RTT.
@@ -1172,21 +1373,27 @@ test("Kalshi order client falls back to live signing when pre-armed request is s
     if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
       return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
     }
-    calls.push({ body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {} });
-    return new Response(JSON.stringify({
-      order: {
-        order_id: "kalshi-stale-prearm",
-        client_order_id: "client-stale",
-        status: "executed",
-        fill_count: "5",
-        yes_price_dollars: "0.5300",
-      },
-    }), { status: 200 });
+    calls.push({ body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
+    return new Response(
+      JSON.stringify({
+        order: {
+          order_id: "kalshi-stale-prearm",
+          client_order_id: "client-stale",
+          status: "executed",
+          fill_count: "5",
+          yes_price_dollars: "0.5300",
+        },
+      }),
+      { status: 200 },
+    );
   };
-  const client = new KalshiOrderClient(config({
-    liveKalshiPrearmEnabled: true,
-    liveKalshiPrearmMaxAgeMs: 10,
-  }), fetchFn as typeof fetch);
+  const client = new KalshiOrderClient(
+    config({
+      liveKalshiPrearmEnabled: true,
+      liveKalshiPrearmMaxAgeMs: 10,
+    }),
+    fetchFn as typeof fetch,
+  );
   const leg: ArbLeg = { venue: "kalshi", contractId: "KXBTC15M-STALE", direction: "yes", strike: 1500, ask: 0.5 };
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -1219,32 +1426,40 @@ test("Kalshi order client uses capped IOC order in parallel_market mode", async 
     if (new URL(String(url)).pathname.endsWith("/portfolio/balance")) {
       return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
     }
-    calls.push({ body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {} });
-    return new Response(JSON.stringify({
-      order: {
-        order_id: "kalshi-market",
-        client_order_id: "client-market",
-        status: "executed",
-        fill_count: "5",
-        yes_price_dollars: "0.5100",
-      },
-    }), { status: 200 });
+    calls.push({ body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
+    return new Response(
+      JSON.stringify({
+        order: {
+          order_id: "kalshi-market",
+          client_order_id: "client-market",
+          status: "executed",
+          fill_count: "5",
+          yes_price_dollars: "0.5100",
+        },
+      }),
+      { status: 200 },
+    );
   };
   const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
 
-  const result = await withKalshiEnv(() => client.placeOrder({
-    venue: "kalshi",
-    contractId: "KXBTC15M-MARKET",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.5,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-market",
-    size: 5,
-    maxBuyPrice: 0.51,
-    placementMode: "parallel_market",
-  }));
+  const result = await withKalshiEnv(() =>
+    client.placeOrder(
+      {
+        venue: "kalshi",
+        contractId: "KXBTC15M-MARKET",
+        direction: "yes",
+        strike: 1500,
+        ask: 0.5,
+      },
+      {
+        executionGroupId: "group",
+        clientOrderId: "client-market",
+        size: 5,
+        maxBuyPrice: 0.51,
+        placementMode: "parallel_market",
+      },
+    ),
+  );
 
   assert.equal(calls[0]?.body.time_in_force, "immediate_or_cancel");
   assert.equal(calls[0]?.body.price, "0.5100");
@@ -1262,20 +1477,25 @@ test("Kalshi order client preflight blocks when cash cannot cover hedge collater
   };
   const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
 
-  const reason = await withKalshiEnv(() => client.preflightOrder({
-    venue: "kalshi",
-    contractId: "KXBTC15M-COLLATERAL",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.5,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-collateral",
-    size: 8,
-    maxBuyPrice: 0.52,
-    requiredCollateral: 4.41,
-    placementMode: "polymarket_first_exact",
-  }));
+  const reason = await withKalshiEnv(() =>
+    client.preflightOrder(
+      {
+        venue: "kalshi",
+        contractId: "KXBTC15M-COLLATERAL",
+        direction: "yes",
+        strike: 1500,
+        ask: 0.5,
+      },
+      {
+        executionGroupId: "group",
+        clientOrderId: "client-collateral",
+        size: 8,
+        maxBuyPrice: 0.52,
+        requiredCollateral: 4.41,
+        placementMode: "polymarket_first_exact",
+      },
+    ),
+  );
 
   assert.match(reason ?? "", /Kalshi cash balance 0.03 is below required operating cash 4.41/);
 });
@@ -1289,20 +1509,25 @@ test("Kalshi order client preflight requires configured multi-trade operating ca
   };
   const client = new KalshiOrderClient(config({ liveKalshiMinCashDollars: 30 }), fetchFn as typeof fetch);
 
-  const reason = await withKalshiEnv(() => client.preflightOrder({
-    venue: "kalshi",
-    contractId: "KXBTC15M-CASHFLOOR",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.5,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-cash-floor",
-    size: 8,
-    maxBuyPrice: 0.52,
-    requiredCollateral: 4.41,
-    placementMode: "polymarket_first_exact",
-  }));
+  const reason = await withKalshiEnv(() =>
+    client.preflightOrder(
+      {
+        venue: "kalshi",
+        contractId: "KXBTC15M-CASHFLOOR",
+        direction: "yes",
+        strike: 1500,
+        ask: 0.5,
+      },
+      {
+        executionGroupId: "group",
+        clientOrderId: "client-cash-floor",
+        size: 8,
+        maxBuyPrice: 0.52,
+        requiredCollateral: 4.41,
+        placementMode: "polymarket_first_exact",
+      },
+    ),
+  );
 
   assert.match(reason ?? "", /Kalshi cash balance 20 is below required operating cash 30/);
 });
@@ -1346,26 +1571,31 @@ test("Kalshi order client uses aggressive GTC limit and cancels unfilled remaind
     calls.push({
       method: init?.method ?? "GET",
       path: new URL(String(url)).pathname,
-      body: typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null,
+      body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
     });
     return new Response(JSON.stringify(responses.shift() ?? {}), { status: 200 });
   };
   const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
 
-  const result = await withKalshiEnv(() => client.placeOrder({
-    venue: "kalshi",
-    contractId: "KXBTC15M-LIMIT",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "parallel_limit_rest",
-    limitRestMs: 0,
-  }));
+  const result = await withKalshiEnv(() =>
+    client.placeOrder(
+      {
+        venue: "kalshi",
+        contractId: "KXBTC15M-LIMIT",
+        direction: "yes",
+        strike: 1500,
+        ask: 0.4,
+      },
+      {
+        executionGroupId: "group",
+        clientOrderId: "client",
+        size: 1,
+        maxBuyPrice: 0.41,
+        placementMode: "parallel_limit_rest",
+        limitRestMs: 0,
+      },
+    ),
+  );
 
   assert.equal(calls[0]?.method, "POST");
   assert.equal(calls[0]?.path, "/trade-api/v2/portfolio/events/orders");
@@ -1388,20 +1618,23 @@ test("Kalshi order client recovers a timed-out submit by client order ID", async
   const fetchFn = async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
     const parsed = new URL(String(url));
     calls.push({ method: init?.method ?? "GET", path: parsed.pathname, search: parsed.search });
-    return new Response(JSON.stringify({
-      orders: [
-        {
-          order_id: "kalshi-order",
-          client_order_id: "client-timeout",
-          ticker: "KXBTC15M-LATE",
-          status: "executed",
-          fill_count_fp: "5.00",
-          no_price_dollars: "0.3100",
-          taker_fees_dollars: "0.0000",
-          ts_ms: 1_800_000_000_300,
-        },
-      ],
-    }), { status: 200 });
+    return new Response(
+      JSON.stringify({
+        orders: [
+          {
+            order_id: "kalshi-order",
+            client_order_id: "client-timeout",
+            ticker: "KXBTC15M-LATE",
+            status: "executed",
+            fill_count_fp: "5.00",
+            no_price_dollars: "0.3100",
+            taker_fees_dollars: "0.0000",
+            ts_ms: 1_800_000_000_300,
+          },
+        ],
+      }),
+      { status: 200 },
+    );
   };
   const client = new KalshiOrderClient(config(), fetchFn as typeof fetch);
   const timedOut: VenueOrderResult = {
@@ -1416,18 +1649,24 @@ test("Kalshi order client recovers a timed-out submit by client order ID", async
     error: "order response timeout after 2500ms",
   };
 
-  const result = await withKalshiEnv(() => client.recoverTimedOutOrder!({
-    venue: "kalshi",
-    contractId: "KXBTC15M-LATE",
-    direction: "no",
-    strike: 1500,
-    ask: 0.31,
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client-timeout",
-    size: 5,
-    maxBuyPrice: 0.31,
-  }, timedOut));
+  const result = await withKalshiEnv(() =>
+    client.recoverTimedOutOrder!(
+      {
+        venue: "kalshi",
+        contractId: "KXBTC15M-LATE",
+        direction: "no",
+        strike: 1500,
+        ask: 0.31,
+      },
+      {
+        executionGroupId: "group",
+        clientOrderId: "client-timeout",
+        size: 5,
+        maxBuyPrice: 0.31,
+      },
+      timedOut,
+    ),
+  );
 
   assert.equal(calls[0]?.method, "GET");
   assert.equal(calls[0]?.path, "/trade-api/v2/portfolio/orders");
@@ -1443,18 +1682,38 @@ test("Kalshi order client recovers a timed-out submit by client order ID", async
 
 test("Polymarket order client builds a market FOK buy for the selected token", async () => {
   class FakeClob implements PolymarketClobLike {
-    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    createdMarketOrder: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    } | null = null;
     postedType: OrderType | undefined;
 
     async getOrderBook() {
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
-    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+    async createMarketOrder(order: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdMarketOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
@@ -1476,14 +1735,17 @@ test("Polymarket order client builds a market FOK buy for the selected token", a
   }
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-    tokenId: "yes-token",
-  }, { executionGroupId: "group", clientOrderId: "client", size: 1, maxBuyPrice: 0.41 });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+      tokenId: "yes-token",
+    },
+    { executionGroupId: "group", clientOrderId: "client", size: 1, maxBuyPrice: 0.41 },
+  );
 
   assert.equal(fake.createdMarketOrder?.tokenID, "yes-token");
   assert.equal(fake.createdMarketOrder?.price, 0.41);
@@ -1504,25 +1766,51 @@ test("Polymarket order client builds a market FOK buy for the selected token", a
 
 test("Polymarket order client uses FAK market order in parallel_fak mode", async () => {
   class FakeClob implements PolymarketClobLike {
-    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    createdMarketOrder: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    } | null = null;
     postedType: OrderType | undefined;
 
     async getOrderBook() {
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
-    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+    async createMarketOrder(order: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdMarketOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
     async postOrder(_order: SignedOrder, orderType?: OrderType): Promise<unknown> {
       this.postedType = orderType;
-      return { success: true, orderID: "poly-order", status: "matched", takingAmount: "5.128204", makingAmount: "4.00" };
+      return {
+        success: true,
+        orderID: "poly-order",
+        status: "matched",
+        takingAmount: "5.128204",
+        makingAmount: "4.00",
+      };
     }
 
     async cancelOrder(): Promise<unknown> {
@@ -1537,20 +1825,23 @@ test("Polymarket order client uses FAK market order in parallel_fak mode", async
   }
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.78,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.8,
-    placementMode: "parallel_fak",
-  });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.78,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.8,
+      placementMode: "parallel_fak",
+    },
+  );
 
   assert.equal(fake.createdMarketOrder?.tokenID, "yes-token");
   assert.equal(fake.createdMarketOrder?.price, 0.8);
@@ -1574,19 +1865,39 @@ test("Polymarket order client uses FAK market order in parallel_fak mode", async
 test("Polymarket order client uses FAK market order in parallel_market mode", async () => {
   class FakeClob implements PolymarketClobLike {
     createOrderCalls = 0;
-    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    createdMarketOrder: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    } | null = null;
     postedType: OrderType | undefined;
 
     async getOrderBook() {
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createOrderCalls += 1;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
-    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+    async createMarketOrder(order: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdMarketOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
@@ -1608,20 +1919,23 @@ test("Polymarket order client uses FAK market order in parallel_market mode", as
   }
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.78,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.8,
-    placementMode: "parallel_market",
-  });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.78,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.8,
+      placementMode: "parallel_market",
+    },
+  );
 
   assert.equal(fake.createOrderCalls, 0);
   assert.equal(fake.createdMarketOrder?.tokenID, "yes-token");
@@ -1638,19 +1952,39 @@ test("Polymarket order client uses FAK market order in parallel_market mode", as
 test("Polymarket order client uses share-sized FAK limit order in polymarket_first_exact mode", async () => {
   class FakeClob implements PolymarketClobLike {
     createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
-    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    createdMarketOrder: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    } | null = null;
     postedType: OrderType | undefined;
 
     async getOrderBook() {
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
-    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+    async createMarketOrder(order: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdMarketOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
@@ -1672,20 +2006,23 @@ test("Polymarket order client uses share-sized FAK limit order in polymarket_fir
   }
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.78,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.8,
-    placementMode: "polymarket_first_exact",
-  });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.78,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.8,
+      placementMode: "polymarket_first_exact",
+    },
+  );
 
   assert.equal(fake.createdOrder?.tokenID, "yes-token");
   assert.equal(fake.createdOrder?.price, 0.8);
@@ -1704,19 +2041,39 @@ test("Polymarket order client uses share-sized FAK limit order in polymarket_fir
 test("Polymarket order client uses exact-share FAK limit order in parallel_quick mode", async () => {
   class FakeClob implements PolymarketClobLike {
     createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
-    createdMarketOrder: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string } | null = null;
+    createdMarketOrder: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    } | null = null;
     postedType: OrderType | undefined;
 
     async getOrderBook() {
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
-    async createMarketOrder(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType; metadata?: string }): Promise<SignedOrder> {
+    async createMarketOrder(order: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdMarketOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
@@ -1738,20 +2095,23 @@ test("Polymarket order client uses exact-share FAK limit order in parallel_quick
   }
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config({ polymarketOrderType: "FOK" }), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.78,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.8,
-    placementMode: "parallel_quick",
-  });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.78,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.8,
+      placementMode: "parallel_quick",
+    },
+  );
 
   assert.equal(fake.createdOrder?.tokenID, "yes-token");
   assert.equal(fake.createdOrder?.price, 0.8);
@@ -1776,7 +2136,13 @@ test("Polymarket order client builds aggressive GTC limit and cancels unfilled r
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createdOrder = order;
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
@@ -1812,21 +2178,24 @@ test("Polymarket order client builds aggressive GTC limit and cancels unfilled r
   }
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 1,
-    maxBuyPrice: 0.41,
-    placementMode: "parallel_limit_rest",
-    limitRestMs: 0,
-  });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 1,
+      maxBuyPrice: 0.41,
+      placementMode: "parallel_limit_rest",
+      limitRestMs: 0,
+    },
+  );
 
   assert.equal(fake.createdOrder?.tokenID, "yes-token");
   assert.equal(fake.createdOrder?.price, 0.41);
@@ -1948,10 +2317,14 @@ test("Polymarket hot-path preflight uses warmed readiness and metadata without n
     async updateBalanceAllowance(): Promise<void> {}
   }
   const fake = new HotFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveHotPathEnabled: true,
-    liveHotPathCacheMaxAgeMs: 5_000,
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveHotPathEnabled: true,
+      liveHotPathCacheMaxAgeMs: 5_000,
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
   await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
   assert.equal(fake.balanceCalls, 1);
   assert.equal(fake.bookCalls, 1);
@@ -1994,21 +2367,47 @@ test("Polymarket hot-path preflight uses warmed readiness and metadata without n
 test("P1.4: hot-path readiness serves a larger dynamic-size candidate when cached balance + allowance cover it", async () => {
   const now = 1_800_000_000_000;
   class CoverageFakeClob implements PolymarketClobLike {
-    constructor(private readonly bal: string, private readonly allow: string) {}
-    async getOrderBook() { return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false }; }
-    async createOrder(order: { tokenID: string }): Promise<SignedOrder> { return { tokenId: order.tokenID } as unknown as SignedOrder; }
-    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> { return { tokenId: order.tokenID } as unknown as SignedOrder; }
-    async postOrder(): Promise<unknown> { return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" }; }
-    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> { return { balance: this.bal, allowance: this.allow }; }
+    constructor(
+      private readonly bal: string,
+      private readonly allow: string,
+    ) {}
+    async getOrderBook() {
+      return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
+    }
+    async createOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+    async createMarketOrder(order: { tokenID: string }): Promise<SignedOrder> {
+      return { tokenId: order.tokenID } as unknown as SignedOrder;
+    }
+    async postOrder(): Promise<unknown> {
+      return { success: true, orderID: "poly-order", status: "filled", takingAmount: "5", makingAmount: "2" };
+    }
+    async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+      return { balance: this.bal, allowance: this.allow };
+    }
     async updateBalanceAllowance(): Promise<void> {}
   }
-  const leg: ArbLeg = { venue: "polymarket", contractId: "poly", direction: "yes", strike: 1500, ask: 0.4, tokenId: "yes-token" };
+  const leg: ArbLeg = {
+    venue: "polymarket",
+    contractId: "poly",
+    direction: "yes",
+    strike: 1500,
+    ask: 0.4,
+    tokenId: "yes-token",
+  };
   const ctx = (requiredCollateral: number): LiveOrderContext => ({
-    executionGroupId: "group", clientOrderId: "client", size: 20, maxBuyPrice: 0.95,
-    requiredCollateral, requestedAt: now + 100, placementMode: "polymarket_first_exact",
+    executionGroupId: "group",
+    clientOrderId: "client",
+    size: 20,
+    maxBuyPrice: 0.95,
+    requiredCollateral,
+    requestedAt: now + 100,
+    placementMode: "polymarket_first_exact",
   });
   // Isolate the readiness decision from the optional pre-sign path.
-  const cfg = (over: Partial<AppConfig> = {}) => config({ liveHotPathEnabled: true, liveHotPathCacheMaxAgeMs: 5_000, livePolymarketPresignEnabled: false, ...over });
+  const cfg = (over: Partial<AppConfig> = {}) =>
+    config({ liveHotPathEnabled: true, liveHotPathCacheMaxAgeMs: 5_000, livePolymarketPresignEnabled: false, ...over });
 
   // Warm sizes the cache for liveOrderSize-collateral (2.3); the account actually holds balance 20 / allowance 20.
   // Flag ON (default): an 8-collateral candidate exceeds the warmed 2.3 but is funded -> readiness passes.
@@ -2016,17 +2415,27 @@ test("P1.4: hot-path readiness serves a larger dynamic-size candidate when cache
   await on.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
   assert.equal(await on.preflightOrder(leg, ctx(8)), null);
   // ...but a candidate beyond the actual balance (25 > 20) is still correctly skipped, naming the real shortfall.
-  assert.match(await on.preflightOrder(leg, ctx(25)) ?? "", /balance 20\/allowance 20 is below required collateral 25/);
+  assert.match(
+    (await on.preflightOrder(leg, ctx(25))) ?? "",
+    /balance 20\/allowance 20 is below required collateral 25/,
+  );
 
   // Flag OFF: strict warmed-coverage skip is restored (byte-identical to prior behavior).
-  const off = new PolymarketOrderClient(cfg({ liveHotReadinessBalanceCoverageEnabled: false }), async () => new CoverageFakeClob("20", "20"), allowedGeoblock);
+  const off = new PolymarketOrderClient(
+    cfg({ liveHotReadinessBalanceCoverageEnabled: false }),
+    async () => new CoverageFakeClob("20", "20"),
+    allowedGeoblock,
+  );
   await off.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
-  assert.match(await off.preflightOrder(leg, ctx(8)) ?? "", /covers 2.3 collateral but 8 is required/);
+  assert.match((await off.preflightOrder(leg, ctx(8))) ?? "", /covers 2.3 collateral but 8 is required/);
 
   // Allowance still binds: balance covers 8 but allowance (6) does not -> skip even with the flag on.
   const allow = new PolymarketOrderClient(cfg(), async () => new CoverageFakeClob("20", "6"), allowedGeoblock);
   await allow.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
-  assert.match(await allow.preflightOrder(leg, ctx(8)) ?? "", /balance 20\/allowance 6 is below required collateral 8/);
+  assert.match(
+    (await allow.preflightOrder(leg, ctx(8))) ?? "",
+    /balance 20\/allowance 6 is below required collateral 8/,
+  );
 });
 
 test("Polymarket optional pre-sign stores signed order for hot-path placement", async () => {
@@ -2058,10 +2467,14 @@ test("Polymarket optional pre-sign stores signed order for hot-path placement", 
     async updateBalanceAllowance(): Promise<void> {}
   }
   const fake = new PresignFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveHotPathEnabled: true,
-    livePolymarketPresignEnabled: true,
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveHotPathEnabled: true,
+      livePolymarketPresignEnabled: true,
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
   await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -2104,7 +2517,13 @@ test("Polymarket exact-first pre-sign stores share-sized FAK limit order", async
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       this.createOrderCalls += 1;
       this.createdOrder = order;
       return { tokenId: order.tokenID, salt: this.createOrderCalls } as unknown as SignedOrder;
@@ -2126,10 +2545,14 @@ test("Polymarket exact-first pre-sign stores share-sized FAK limit order", async
     async updateBalanceAllowance(): Promise<void> {}
   }
   const fake = new PresignFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveHotPathEnabled: true,
-    livePolymarketPresignEnabled: true,
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveHotPathEnabled: true,
+      livePolymarketPresignEnabled: true,
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
   await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -2193,11 +2616,15 @@ test("Polymarket expired pre-signed order falls back to live signing", async () 
     async updateBalanceAllowance(): Promise<void> {}
   }
   const fake = new PresignFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveHotPathEnabled: true,
-    livePolymarketPresignEnabled: true,
-    livePolymarketSignedOrderTtlMs: 50,
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveHotPathEnabled: true,
+      livePolymarketPresignEnabled: true,
+      livePolymarketSignedOrderTtlMs: 50,
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
   await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -2257,10 +2684,14 @@ test("Polymarket mismatched pre-signed price falls back to live signing", async 
     async updateBalanceAllowance(): Promise<void> {}
   }
   const fake = new PresignFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveHotPathEnabled: true,
-    livePolymarketPresignEnabled: true,
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveHotPathEnabled: true,
+      livePolymarketPresignEnabled: true,
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
   await client.warm?.({ now, tokenIds: ["yes-token"], requiredCollateral: 2.3 });
   const context: LiveOrderContext = {
     executionGroupId: "group",
@@ -2307,16 +2738,18 @@ test("Polymarket timeout recovery resolves unambiguous recent FAK trade evidence
     }
 
     async getTrades(): Promise<unknown[]> {
-      return [{
-        id: "trade-1",
-        taker_order_id: "poly-order",
-        asset_id: "yes-token",
-        side: Side.BUY,
-        size: "5",
-        price: "0.40",
-        match_time: new Date(submittedAt + 100).toISOString(),
-        maker_orders: [],
-      }];
+      return [
+        {
+          id: "trade-1",
+          taker_order_id: "poly-order",
+          asset_id: "yes-token",
+          side: Side.BUY,
+          size: "5",
+          price: "0.40",
+          match_time: new Date(submittedAt + 100).toISOString(),
+          maker_orders: [],
+        },
+      ];
     }
 
     async getOpenOrders(): Promise<unknown[]> {
@@ -2329,7 +2762,11 @@ test("Polymarket timeout recovery resolves unambiguous recent FAK trade evidence
 
     async updateBalanceAllowance(): Promise<void> {}
   }
-  const client = new PolymarketOrderClient(config({ liveFinalRecoveryTimeoutMs: 0 }), async () => new RecoveryFakeClob(), allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({ liveFinalRecoveryTimeoutMs: 0 }),
+    async () => new RecoveryFakeClob(),
+    allowedGeoblock,
+  );
   const timedOut: VenueOrderResult = {
     venue: "polymarket",
     clientOrderId: "client",
@@ -2348,20 +2785,24 @@ test("Polymarket timeout recovery resolves unambiguous recent FAK trade evidence
     },
   };
 
-  const result = await client.recoverTimedOutOrder!({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.39,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.42,
-    placementMode: "parallel_fak",
-  }, timedOut);
+  const result = await client.recoverTimedOutOrder!(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.39,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.42,
+      placementMode: "parallel_fak",
+    },
+    timedOut,
+  );
 
   assert.equal(result?.status, "filled");
   assert.equal(result?.orderId, "poly-order");
@@ -2408,7 +2849,11 @@ test("Polymarket timeout recovery leaves ambiguous recent trade evidence unknown
 
     async updateBalanceAllowance(): Promise<void> {}
   }
-  const client = new PolymarketOrderClient(config({ liveFinalRecoveryTimeoutMs: 0 }), async () => new RecoveryFakeClob(), allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({ liveFinalRecoveryTimeoutMs: 0 }),
+    async () => new RecoveryFakeClob(),
+    allowedGeoblock,
+  );
   const timedOut: VenueOrderResult = {
     venue: "polymarket",
     clientOrderId: "client",
@@ -2421,20 +2866,24 @@ test("Polymarket timeout recovery leaves ambiguous recent trade evidence unknown
     error: "order response timeout after 2500ms",
   };
 
-  const result = await client.recoverTimedOutOrder!({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.39,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.42,
-    placementMode: "parallel_fak",
-  }, timedOut);
+  const result = await client.recoverTimedOutOrder!(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.39,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.42,
+      placementMode: "parallel_fak",
+    },
+    timedOut,
+  );
 
   assert.equal(result?.status, "unknown");
   assert.equal(result?.metadata?.polymarketTimeoutRecoveryStatus, "ambiguous_recent_trades");
@@ -2470,7 +2919,11 @@ test("Polymarket timeout recovery stamps the order type on a not_found result (l
 
     async updateBalanceAllowance(): Promise<void> {}
   }
-  const client = new PolymarketOrderClient(config({ liveFinalRecoveryTimeoutMs: 0 }), async () => new RecoveryFakeClob(), allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({ liveFinalRecoveryTimeoutMs: 0 }),
+    async () => new RecoveryFakeClob(),
+    allowedGeoblock,
+  );
   // An executor-level REST-response timeout synthesizes the timed-out result WITHOUT polymarketOrderType
   // (only the client-level postOrder result carries it). This is the exact input that caused the recurring
   // false no-fill-timeout lock: recovery resolves not_found, but isVerifiedNoFillAfterRecovery cannot recognize
@@ -2491,20 +2944,24 @@ test("Polymarket timeout recovery stamps the order type on a not_found result (l
     },
   };
 
-  const result = await client.recoverTimedOutOrder!({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.39,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.42,
-    placementMode: "polymarket_first_exact",
-  }, timedOut);
+  const result = await client.recoverTimedOutOrder!(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.39,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.42,
+      placementMode: "polymarket_first_exact",
+    },
+    timedOut,
+  );
 
   assert.equal(result?.status, "unknown");
   assert.equal(result?.fillCount ?? null, null);
@@ -2548,14 +3005,17 @@ test("Polymarket order client cancels open orders and does not treat live status
 
   const fake = new FakeClob();
   const client = new PolymarketOrderClient(config(), async () => fake, allowedGeoblock);
-  const result = await client.placeOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.4,
-    tokenId: "yes-token",
-  }, { executionGroupId: "group", clientOrderId: "client", size: 5, maxBuyPrice: 0.23 });
+  const result = await client.placeOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.4,
+      tokenId: "yes-token",
+    },
+    { executionGroupId: "group", clientOrderId: "client", size: 5, maxBuyPrice: 0.23 },
+  );
 
   assert.equal(fake.cancelCalls, 1);
   assert.equal(result.status, "live");
@@ -2566,11 +3026,13 @@ test("Polymarket order client cancels open orders and does not treat live status
 });
 
 test("Polymarket direct API creds are preferred when all relayer fields are present", () => {
-  const creds = polymarketApiCredsFromConfig(config({
-    polymarketApiKey: "api-key",
-    polymarketApiSecret: "api-secret",
-    polymarketApiPassphrase: "api-passphrase",
-  }));
+  const creds = polymarketApiCredsFromConfig(
+    config({
+      polymarketApiKey: "api-key",
+      polymarketApiSecret: "api-secret",
+      polymarketApiPassphrase: "api-passphrase",
+    }),
+  );
 
   assert.deepEqual(creds, {
     key: "api-key",
@@ -2578,11 +3040,16 @@ test("Polymarket direct API creds are preferred when all relayer fields are pres
     passphrase: "api-passphrase",
   });
 
-  assert.equal(polymarketApiCredsFromConfig(config({
-    polymarketApiKey: "api-key",
-    polymarketApiSecret: "",
-    polymarketApiPassphrase: "api-passphrase",
-  })), null);
+  assert.equal(
+    polymarketApiCredsFromConfig(
+      config({
+        polymarketApiKey: "api-key",
+        polymarketApiSecret: "",
+        polymarketApiPassphrase: "api-passphrase",
+      }),
+    ),
+    null,
+  );
 });
 
 test("Polymarket API credentials derive before creating new keys", async () => {
@@ -2619,11 +3086,13 @@ test("Polymarket API credentials derive before creating new keys", async () => {
 
 test("resolvePolymarketApiCreds uses configured env creds without deriving (bypass)", async () => {
   resetPolymarketApiCredsMemo();
-  const resolved = await resolvePolymarketApiCreds(config({
-    polymarketApiKey: "env-key",
-    polymarketApiSecret: "env-secret",
-    polymarketApiPassphrase: "env-passphrase",
-  }));
+  const resolved = await resolvePolymarketApiCreds(
+    config({
+      polymarketApiKey: "env-key",
+      polymarketApiSecret: "env-secret",
+      polymarketApiPassphrase: "env-passphrase",
+    }),
+  );
   assert.equal(resolved.source, "configured");
   assert.deepEqual(resolved.creds, { key: "env-key", secret: "env-secret", passphrase: "env-passphrase" });
 });
@@ -2670,7 +3139,9 @@ test("Polymarket client re-derives creds after a 401 (stale L2 key self-heals, n
     factoryCalls += 1;
     if (factoryCalls === 1) {
       return {
-        getBalanceAllowance: async () => { throw Object.assign(new Error("unauthorized"), { status: 401 }); },
+        getBalanceAllowance: async () => {
+          throw Object.assign(new Error("unauthorized"), { status: 401 });
+        },
         updateBalanceAllowance: async () => {},
       } as unknown as PolymarketClobLike;
     }
@@ -2690,11 +3161,18 @@ test("Polymarket client re-derives creds after a 401 (stale L2 key self-heals, n
 });
 
 test("Polymarket geoblock check parses allowed, blocked, and unknown responses", async () => {
-  const allowed = await checkPolymarketGeoblock(config(), (async () => new Response(JSON.stringify({
-    blocked: false,
-    country: "US",
-    region: "CA",
-  }))) as typeof fetch, 123);
+  const allowed = await checkPolymarketGeoblock(
+    config(),
+    (async () =>
+      new Response(
+        JSON.stringify({
+          blocked: false,
+          country: "US",
+          region: "CA",
+        }),
+      )) as typeof fetch,
+    123,
+  );
 
   assert.equal(allowed.blocked, false);
   assert.equal(allowed.country, "US");
@@ -2702,16 +3180,27 @@ test("Polymarket geoblock check parses allowed, blocked, and unknown responses",
   assert.equal(allowed.checkedAt, 123);
   assert.equal(allowed.reason, null);
 
-  const blocked = await checkPolymarketGeoblock(config(), (async () => new Response(JSON.stringify({
-    blocked: true,
-    country: "GB",
-    region: "ENG",
-  }))) as typeof fetch, 456);
+  const blocked = await checkPolymarketGeoblock(
+    config(),
+    (async () =>
+      new Response(
+        JSON.stringify({
+          blocked: true,
+          country: "GB",
+          region: "ENG",
+        }),
+      )) as typeof fetch,
+    456,
+  );
 
   assert.equal(blocked.blocked, true);
   assert.match(blocked.reason ?? "", /blocked from worker egress/);
 
-  const unknown = await checkPolymarketGeoblock(config(), (async () => new Response("{}", { status: 200 })) as typeof fetch, 789);
+  const unknown = await checkPolymarketGeoblock(
+    config(),
+    (async () => new Response("{}", { status: 200 })) as typeof fetch,
+    789,
+  );
   assert.equal(unknown.blocked, null);
   assert.match(unknown.reason ?? "", /boolean blocked field/);
 });
@@ -2731,7 +3220,13 @@ test("Polymarket readiness requires proxy funder and funded collateral", async (
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
@@ -2751,22 +3246,30 @@ test("Polymarket readiness requires proxy funder and funded collateral", async (
   }
 
   let factoryCalls = 0;
-  const missingFunder = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "",
-  }), async () => {
-    factoryCalls += 1;
-    return new FakeClob("9000000");
-  }, allowedGeoblock);
+  const missingFunder = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "",
+    }),
+    async () => {
+      factoryCalls += 1;
+      return new FakeClob("9000000");
+    },
+    allowedGeoblock,
+  );
   const missingFunderReadiness = await missingFunder.readiness();
   assert.equal(missingFunderReadiness.ready, false);
   assert.match(missingFunderReadiness.reason ?? "", /POLYMARKET_FUNDER_ADDRESS/);
   assert.equal(factoryCalls, 0);
 
-  const zeroBalance = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => new FakeClob("0", "10000000"), allowedGeoblock);
+  const zeroBalance = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => new FakeClob("0", "10000000"),
+    allowedGeoblock,
+  );
   const zeroBalanceReadiness = await zeroBalance.readiness();
   assert.equal(zeroBalanceReadiness.ready, false);
   assert.match(zeroBalanceReadiness.reason ?? "", /collateral balance/);
@@ -2775,10 +3278,14 @@ test("Polymarket readiness requires proxy funder and funded collateral", async (
   assert.equal(zeroBalanceReadiness.funderAddress, "0xAC3b...F2B0");
   assert.equal(zeroBalanceReadiness.clobBalanceSynced, true);
 
-  const funded = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => new FakeClob("9000000", "10000000"), allowedGeoblock);
+  const funded = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => new FakeClob("9000000", "10000000"),
+    allowedGeoblock,
+  );
   const fundedReadiness = await funded.readiness();
   assert.equal(fundedReadiness.ready, true);
   assert.equal(fundedReadiness.balance, 9);
@@ -2812,19 +3319,23 @@ test("Polymarket readiness is not ready when worker egress is geoblocked or unkn
   }
 
   let factoryCalls = 0;
-  const blocked = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => {
-    factoryCalls += 1;
-    return new FakeClob();
-  }, async (now) => ({
-    blocked: true,
-    country: "US",
-    region: "NY",
-    checkedAt: now,
-    reason: "Polymarket CLOB trading blocked from worker egress",
-  }));
+  const blocked = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => {
+      factoryCalls += 1;
+      return new FakeClob();
+    },
+    async (now) => ({
+      blocked: true,
+      country: "US",
+      region: "NY",
+      checkedAt: now,
+      reason: "Polymarket CLOB trading blocked from worker egress",
+    }),
+  );
   const blockedReadiness = await blocked.readiness(1_800_000_000_000);
 
   assert.equal(blockedReadiness.ready, false);
@@ -2835,16 +3346,20 @@ test("Polymarket readiness is not ready when worker egress is geoblocked or unkn
   assert.equal(blockedReadiness.geoblockCheckedAt, 1_800_000_000_000);
   assert.equal(factoryCalls, 0);
 
-  const unknown = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => new FakeClob(), async (now) => ({
-    blocked: null,
-    country: null,
-    region: null,
-    checkedAt: now,
-    reason: "Polymarket geoblock check failed: timeout",
-  }));
+  const unknown = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => new FakeClob(),
+    async (now) => ({
+      blocked: null,
+      country: null,
+      region: null,
+      checkedAt: now,
+      reason: "Polymarket geoblock check failed: timeout",
+    }),
+  );
   const unknownReadiness = await unknown.readiness(1_800_000_000_500);
 
   assert.equal(unknownReadiness.ready, false);
@@ -2876,20 +3391,24 @@ test("Polymarket geoblock gate can be disabled so a blocked egress is advisory, 
   // blocked:true, but POLYMARKET_GEOBLOCK_GATE_ENABLED=false -> readiness must NOT short-circuit. It proceeds
   // to the live balance/creds check and goes green, while still reporting the geoblock verdict advisorily.
   let factoryCalls = 0;
-  const advisory = new PolymarketOrderClient(config({
-    polymarketGeoblockGateEnabled: false,
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => {
-    factoryCalls += 1;
-    return new FundedFakeClob();
-  }, async (now) => ({
-    blocked: true,
-    country: "CA",
-    region: "QC",
-    checkedAt: now,
-    reason: "Polymarket CLOB trading blocked from worker egress",
-  }));
+  const advisory = new PolymarketOrderClient(
+    config({
+      polymarketGeoblockGateEnabled: false,
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => {
+      factoryCalls += 1;
+      return new FundedFakeClob();
+    },
+    async (now) => ({
+      blocked: true,
+      country: "CA",
+      region: "QC",
+      checkedAt: now,
+      reason: "Polymarket CLOB trading blocked from worker egress",
+    }),
+  );
   const advisoryReadiness = await advisory.readiness(1_800_000_000_000);
 
   assert.equal(advisoryReadiness.ready, true);
@@ -2903,17 +3422,21 @@ test("Polymarket geoblock gate can be disabled so a blocked egress is advisory, 
   assert.ok(factoryCalls > 0, "the live balance/creds path runs when the geoblock gate is advisory");
 
   // An unknown (blocked:null) verdict also stops hard-blocking once the gate is disabled.
-  const unknownAdvisory = new PolymarketOrderClient(config({
-    polymarketGeoblockGateEnabled: false,
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => new FundedFakeClob(), async (now) => ({
-    blocked: null,
-    country: null,
-    region: null,
-    checkedAt: now,
-    reason: "Polymarket geoblock check failed: timeout",
-  }));
+  const unknownAdvisory = new PolymarketOrderClient(
+    config({
+      polymarketGeoblockGateEnabled: false,
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => new FundedFakeClob(),
+    async (now) => ({
+      blocked: null,
+      country: null,
+      region: null,
+      checkedAt: now,
+      reason: "Polymarket geoblock check failed: timeout",
+    }),
+  );
   const unknownAdvisoryReadiness = await unknownAdvisory.readiness(1_800_000_000_500);
 
   assert.equal(unknownAdvisoryReadiness.ready, true);
@@ -2929,7 +3452,13 @@ test("Polymarket readiness syncs CLOB balance allowance before deciding readines
       return { min_order_size: "1", tick_size: "0.01" as const, neg_risk: false };
     }
 
-    async createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }): Promise<SignedOrder> {
+    async createOrder(order: {
+      tokenID: string;
+      price: number;
+      size: number;
+      side: Side;
+      metadata?: string;
+    }): Promise<SignedOrder> {
       return { tokenId: order.tokenID } as unknown as SignedOrder;
     }
 
@@ -2948,10 +3477,14 @@ test("Polymarket readiness syncs CLOB balance allowance before deciding readines
   }
 
   const fake = new SyncingFakeClob();
-  const client = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => ({ client: fake, credentialsSource: "derived" }), allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => ({ client: fake, credentialsSource: "derived" }),
+    allowedGeoblock,
+  );
   const readiness = await client.readiness();
 
   assert.equal(readiness.ready, true);
@@ -2992,52 +3525,62 @@ test("Polymarket live preflight reuses cached collateral when it covers candidat
   }
 
   const fake = new BalanceChangingFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveOrderSize: 5,
-    liveCollateralBufferDollars: 0.25,
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveOrderSize: 5,
+      liveCollateralBufferDollars: 0.25,
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
 
   const cached = await client.readiness(1_800_000_000_000);
   assert.equal(cached.ready, true);
   assert.equal(cached.balance, 9);
 
-  const reason = await client.preflightOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.91,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.91,
-    requiredCollateral: 4.8,
-    requestedAt: 1_800_000_000_500,
-  });
+  const reason = await client.preflightOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.91,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.91,
+      requiredCollateral: 4.8,
+      requestedAt: 1_800_000_000_500,
+    },
+  );
 
   assert.equal(reason, null);
   assert.equal(fake.balanceCalls, 1);
   assert.equal(fake.orderBookCalls, 1);
 
-  const secondReason = await client.preflightOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.9,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group-2",
-    clientOrderId: "client-2",
-    size: 5,
-    maxBuyPrice: 0.9,
-    requiredCollateral: 4.75,
-    requestedAt: 1_800_000_000_700,
-  });
+  const secondReason = await client.preflightOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.9,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group-2",
+      clientOrderId: "client-2",
+      size: 5,
+      maxBuyPrice: 0.9,
+      requiredCollateral: 4.75,
+      requestedAt: 1_800_000_000_700,
+    },
+  );
   assert.equal(secondReason, null);
   assert.equal(fake.balanceCalls, 1);
   assert.equal(fake.orderBookCalls, 1);
@@ -3071,32 +3614,39 @@ test("Polymarket live preflight refreshes collateral when cached readiness does 
   }
 
   const fake = new BalanceChangingFakeClob();
-  const client = new PolymarketOrderClient(config({
-    liveOrderSize: 2,
-    liveCollateralBufferDollars: 0.25,
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => fake, allowedGeoblock);
+  const client = new PolymarketOrderClient(
+    config({
+      liveOrderSize: 2,
+      liveCollateralBufferDollars: 0.25,
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => fake,
+    allowedGeoblock,
+  );
 
   const cached = await client.readiness(1_800_000_000_000);
   assert.equal(cached.ready, true);
   assert.equal(cached.balance, 2);
 
-  const reason = await client.preflightOrder({
-    venue: "polymarket",
-    contractId: "poly",
-    direction: "yes",
-    strike: 1500,
-    ask: 0.91,
-    tokenId: "yes-token",
-  }, {
-    executionGroupId: "group",
-    clientOrderId: "client",
-    size: 5,
-    maxBuyPrice: 0.91,
-    requiredCollateral: 4.8,
-    requestedAt: 1_800_000_000_500,
-  });
+  const reason = await client.preflightOrder(
+    {
+      venue: "polymarket",
+      contractId: "poly",
+      direction: "yes",
+      strike: 1500,
+      ask: 0.91,
+      tokenId: "yes-token",
+    },
+    {
+      executionGroupId: "group",
+      clientOrderId: "client",
+      size: 5,
+      maxBuyPrice: 0.91,
+      requiredCollateral: 4.8,
+      requestedAt: 1_800_000_000_500,
+    },
+  );
 
   assert.equal(reason, null);
   assert.equal(fake.balanceCalls, 2);
@@ -3114,7 +3664,10 @@ test("live executor fills only protected candidates after stale book and capped-
 
   const result = await executor.execute(candidate);
   assert.equal(result.action, "filled");
-  assert.match(result.executionGroupId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.match(
+    result.executionGroupId ?? "",
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
   assert.equal(result.partialFill, false);
   assert.equal(kalshi.placed.length, 1);
   assert.equal(polymarket.placed.length, 1);
@@ -3274,7 +3827,11 @@ test("live executor timing metrics separate preflight from venue order RTTs", as
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
   class TimedClient extends FakeVenueClient {
-    constructor(venue: Venue, private readonly preflightMs: number, private readonly orderMs: number) {
+    constructor(
+      venue: Venue,
+      private readonly preflightMs: number,
+      private readonly orderMs: number,
+    ) {
       super(venue);
     }
 
@@ -3327,10 +3884,19 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(defaults.polymarketOrderType, "FAK");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_market" }).liveOrderPlacementMode, "parallel_market");
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_quick" }).liveOrderPlacementMode, "parallel_quick");
-  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_limit_rest" }).liveOrderPlacementMode, "parallel_limit_rest");
+  assert.equal(
+    loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_limit_rest" }).liveOrderPlacementMode,
+    "parallel_limit_rest",
+  );
   assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "parallel_fak" }).liveOrderPlacementMode, "parallel_fak");
-  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "polymarket_first_exact" }).liveOrderPlacementMode, "polymarket_first_exact");
-  assert.equal(loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "kalshi_first_exact" }).liveOrderPlacementMode, "kalshi_first_exact");
+  assert.equal(
+    loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "polymarket_first_exact" }).liveOrderPlacementMode,
+    "polymarket_first_exact",
+  );
+  assert.equal(
+    loadConfig({ LIVE_ORDER_PLACEMENT_MODE: "kalshi_first_exact" }).liveOrderPlacementMode,
+    "kalshi_first_exact",
+  );
   assert.equal(loadConfig({}).liveAutoHardlocksEnabled, true);
   assert.equal(loadConfig({ LIVE_AUTO_HARDLOCKS_ENABLED: "false" }).liveAutoHardlocksEnabled, false);
   assert.equal(loadConfig({}).polymarketGeoblockGateEnabled, true);
@@ -3364,7 +3930,11 @@ test("live executor keeps parallel market available and starts both venue orders
   assert.equal(loadConfig({}).livePolymarketFirstMaxFillShares, 9);
   assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMinFillShares, 5);
   assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5" }).livePolymarketFirstMaxFillShares, 6);
-  assert.equal(loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "4.5", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "5.5" }).livePolymarketFirstMinFillShares, 4.5);
+  assert.equal(
+    loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "4.5", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "5.5" })
+      .livePolymarketFirstMinFillShares,
+    4.5,
+  );
   assert.throws(
     () => loadConfig({ LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES: "6.1", LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES: "6" }),
     /LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES/,
@@ -3374,23 +3944,38 @@ test("live executor keeps parallel market available and starts both venue orders
   // of truth for the post-fill loss lock.
   assert.equal(loadConfig({}).livePolymarketQuoteMaxAgeMs, 750); // default = general bar (inert)
   assert.equal(loadConfig({ LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "300" }).livePolymarketQuoteMaxAgeMs, 300);
-  assert.equal(loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "600", LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "900" }).livePolymarketQuoteMaxAgeMs, 600); // clamped: never looser than general bar
+  assert.equal(
+    loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "600", LIVE_POLYMARKET_QUOTE_MAX_AGE_MS: "900" }).livePolymarketQuoteMaxAgeMs,
+    600,
+  ); // clamped: never looser than general bar
   // P3: the hedge (second leg) quote bound can only LOOSEN the general bar (default = inert).
   assert.equal(loadConfig({}).liveHedgeQuoteMaxAgeMs, 750);
   assert.equal(loadConfig({ LIVE_HEDGE_QUOTE_MAX_AGE_MS: "2000" }).liveHedgeQuoteMaxAgeMs, 2000);
-  assert.equal(loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "750", LIVE_HEDGE_QUOTE_MAX_AGE_MS: "300" }).liveHedgeQuoteMaxAgeMs, 750); // clamped: never tighter than general bar
+  assert.equal(
+    loadConfig({ LIVE_QUOTE_MAX_AGE_MS: "750", LIVE_HEDGE_QUOTE_MAX_AGE_MS: "300" }).liveHedgeQuoteMaxAgeMs,
+    750,
+  ); // clamped: never tighter than general bar
   assert.equal(loadConfig({}).liveHedgeMinCrossTicks, 2);
   assert.equal(loadConfig({}).liveHedgeMaxLossDollars, 0.03); // max(0.03 default, 0.01 + 2*0.01)
   assert.equal(loadConfig({ LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.01" }).liveHedgeMaxLossDollars, 0.03); // floor still applies
   assert.equal(loadConfig({ LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.08" }).liveHedgeMaxLossDollars, 0.08); // configured value above floor wins
-  assert.equal(loadConfig({ LIVE_HEDGE_MIN_CROSS_TICKS: "0", LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.02" }).liveHedgeMaxLossDollars, 0.02);
+  assert.equal(
+    loadConfig({ LIVE_HEDGE_MIN_CROSS_TICKS: "0", LIVE_HEDGE_MAX_LOSS_DOLLARS: "0.02" }).liveHedgeMaxLossDollars,
+    0.02,
+  );
   assert.equal(loadConfig({}).liveKalshiPrearmEnabled, true);
   assert.equal(loadConfig({}).liveKalshiPrearmMaxAgeMs, 5_000);
   assert.equal(loadConfig({}).liveKalshiPrearmPricePolicy, "patch_after_fill");
   // P0-3: the hedge leg is fill_or_kill by default (atomic; no Kalshi partial can strand the pair).
   assert.equal(loadConfig({}).liveKalshiHedgeTimeInForce, "fill_or_kill");
-  assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "immediate_or_cancel" }).liveKalshiHedgeTimeInForce, "immediate_or_cancel");
-  assert.equal(loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "fill_or_kill" }).liveKalshiHedgeTimeInForce, "fill_or_kill");
+  assert.equal(
+    loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "immediate_or_cancel" }).liveKalshiHedgeTimeInForce,
+    "immediate_or_cancel",
+  );
+  assert.equal(
+    loadConfig({ LIVE_KALSHI_HEDGE_TIME_IN_FORCE: "fill_or_kill" }).liveKalshiHedgeTimeInForce,
+    "fill_or_kill",
+  );
   // Kept at 2500 to satisfy the execution.orderTimeoutMs<=2500 readiness gate (bounds the worst-case
   // leg1->leg2 one-sided window); FOK kills return fast so the bounded retry does not need a longer timeout.
   assert.equal(loadConfig({}).liveOrderTimeoutMs, 2_500);
@@ -3838,7 +4423,9 @@ test("W2: a dynamically-sized fill at the selected size (10 > liveOrderSize 5) c
   const locks = new FakeLiveLockStore();
   const kalshi = new FakeVenueClient("kalshi", { fillCount: 10, fillPrice: 0.5 });
   const polymarket = new FakeVenueClient("polymarket", {
-    status: "matched", fillCount: 10, fillPrice: 0.4,
+    status: "matched",
+    fillCount: 10,
+    fillPrice: 0.4,
     metadata: { orderPlacementMode: "parallel_fak", polymarketOrderType: OrderType.FAK, polymarketTakingAmount: 10 },
   });
   const executor = new LiveExecutor(
@@ -3925,61 +4512,75 @@ test("polymarket_first_exact routes Kalshi hedge through UI Quick Order only aft
       return new Response(JSON.stringify({ balance_dollars: "100.00" }), { status: 200 });
     }
     if (parsed.pathname.endsWith("/event_positions/kalshi")) {
-      return new Response(JSON.stringify({
-        event_position: {
-          market_positions: [{
-            market_id: "ui-market-kalshi",
-            market_ticker: "kalshi",
-          }],
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          event_position: {
+            market_positions: [
+              {
+                market_id: "ui-market-kalshi",
+                market_ticker: "kalshi",
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
     }
     if (method === "POST" && parsed.pathname.endsWith("/orders")) {
       uiPostSawPolymarketFill = polymarket.placed.length === 1;
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
       assert.equal(body.order_type, "market");
       assert.equal(body.time_in_force, "immediate_or_cancel");
       assert.equal(body.price_dollars, "0.6100");
-      return new Response(JSON.stringify({
-        order: {
-          order_id: "ui-hedge-order",
-          market_id: "ui-market-kalshi",
-          market_ticker: "kalshi",
-          status: "pending",
-          order_type: "market",
-          user_side: "no",
-          price_dollars: "0.5000",
-          fill_count_fp: "8.00",
-          remaining_count_fp: "0.00",
-        },
-      }), { status: 201 });
+      return new Response(
+        JSON.stringify({
+          order: {
+            order_id: "ui-hedge-order",
+            market_id: "ui-market-kalshi",
+            market_ticker: "kalshi",
+            status: "pending",
+            order_type: "market",
+            user_side: "no",
+            price_dollars: "0.5000",
+            fill_count_fp: "8.00",
+            remaining_count_fp: "0.00",
+          },
+        }),
+        { status: 201 },
+      );
     }
     if (method === "GET" && parsed.pathname.endsWith("/orders/ui-hedge-order")) {
-      return new Response(JSON.stringify({
-        order: {
-          order_id: "ui-hedge-order",
-          market_id: "ui-market-kalshi",
-          market_ticker: "kalshi",
-          status: "executed",
-          order_type: "market",
-          user_side: "no",
-          price_dollars: "0.5000",
-          fill_count_fp: "8.00",
-          remaining_count_fp: "0.00",
-          taker_fill_cost_dollars: "4.0000",
-          taker_fees_dollars: "0.0000",
-        },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          order: {
+            order_id: "ui-hedge-order",
+            market_id: "ui-market-kalshi",
+            market_ticker: "kalshi",
+            status: "executed",
+            order_type: "market",
+            user_side: "no",
+            price_dollars: "0.5000",
+            fill_count_fp: "8.00",
+            remaining_count_fp: "0.00",
+            taker_fill_cost_dollars: "4.0000",
+            taker_fees_dollars: "0.0000",
+          },
+        }),
+        { status: 200 },
+      );
     }
     return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
   };
-  const kalshi = new KalshiUiQuickOrderClient(config({
-    liveOrderSize: 8,
-    liveOrderPlacementMode: "polymarket_first_exact",
-    kalshiHedgeOrderMode: "ui_quick_order",
-    kalshiUiSessionPath: sessionPath,
-    kalshiUiQuickOrderCapValidated: true,
-  }), fetchFn as typeof fetch);
+  const kalshi = new KalshiUiQuickOrderClient(
+    config({
+      liveOrderSize: 8,
+      liveOrderPlacementMode: "polymarket_first_exact",
+      kalshiHedgeOrderMode: "ui_quick_order",
+      kalshiUiSessionPath: sessionPath,
+      kalshiUiQuickOrderCapValidated: true,
+    }),
+    fetchFn as typeof fetch,
+  );
   const executor = new LiveExecutor(
     config({
       liveOrderSize: 8,
@@ -4156,7 +4757,10 @@ test("LA5: fill-quality is scored ONCE when the gate is off and TWICE when on, w
     let scoreCalls = 0;
     const reader = {
       unresolvedRiskQuarantineExposureDollars: async () => 0,
-      listLiveExecutionQualitySignals: async () => { scoreCalls += 1; return exactQualitySignals(now); },
+      listLiveExecutionQualitySignals: async () => {
+        scoreCalls += 1;
+        return exactQualitySignals(now);
+      },
       liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
       liveExactExposureBlockReason: async () => null,
     };
@@ -4204,23 +4808,31 @@ test("P2: liveFillQualityInputCacheMaxAgeMs reuses the shadow fill-quality DB re
   let readCalls = 0;
   const reader = {
     unresolvedRiskQuarantineExposureDollars: async () => 0,
-    listLiveExecutionQualitySignals: async () => { readCalls += 1; return exactQualitySignals(now); },
+    listLiveExecutionQualitySignals: async () => {
+      readCalls += 1;
+      return exactQualitySignals(now);
+    },
     liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
     liveExactExposureBlockReason: async () => null,
   };
-  const make = (ttl: number) => new LiveExecutor(
-    config({
-      liveOrderSize: 8,
-      liveOrderPlacementMode: "polymarket_first_exact",
-      liveFillQualityScoringEnabled: true,
-      liveFillQualityGateEnabled: false,
-      liveFillQualityInputCacheMaxAgeMs: ttl,
-    }),
-    books,
-    new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 }),
-    new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 }),
-    () => now, undefined, undefined, undefined, reader,
-  );
+  const make = (ttl: number) =>
+    new LiveExecutor(
+      config({
+        liveOrderSize: 8,
+        liveOrderPlacementMode: "polymarket_first_exact",
+        liveFillQualityScoringEnabled: true,
+        liveFillQualityGateEnabled: false,
+        liveFillQualityInputCacheMaxAgeMs: ttl,
+      }),
+      books,
+      new FakeVenueClient("kalshi", { fillCount: 8, fillPrice: 0.5 }),
+      new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 }),
+      () => now,
+      undefined,
+      undefined,
+      undefined,
+      reader,
+    );
 
   // Cache ON: two executions within the TTL share a single DB read (off the contended pg pool).
   readCalls = 0;
@@ -4252,19 +4864,20 @@ test("polymarket_first_exact sends Kalshi from exact REST before Polymarket stre
       this.waitCalls.push(result.venue);
       if (result.venue !== "polymarket") return super.waitForVenueResult(result);
       return await new Promise<VenueConfirmationResult>((resolve) => {
-        this.resolvePolymarket = () => resolve({
-          venue: "polymarket",
-          status: "confirmed",
-          reason: null,
-          clientOrderId: result.clientOrderId,
-          venueOrderId: result.orderId,
-          fillCount: 8,
-          fillPrice: 0.4,
-          fee: null,
-          exchangeTimestampMs: null,
-          receivedAtMs: now + 100,
-          eventType: "delayed_test",
-        });
+        this.resolvePolymarket = () =>
+          resolve({
+            venue: "polymarket",
+            status: "confirmed",
+            reason: null,
+            clientOrderId: result.clientOrderId,
+            venueOrderId: result.orderId,
+            fillCount: 8,
+            fillPrice: 0.4,
+            fee: null,
+            exchangeTimestampMs: null,
+            receivedAtMs: now + 100,
+            eventType: "delayed_test",
+          });
       });
     }
   }
@@ -4378,7 +4991,9 @@ test("P1: liveAcceptStreamAckAsOrderResult finalizes from the stream ack WITHOUT
   // while the REST is still unresolved.
   let restResolved = false;
   let releaseRest: (() => void) | null = null as (() => void) | null;
-  const restGate = new Promise<void>((resolve) => { releaseRest = resolve; });
+  const restGate = new Promise<void>((resolve) => {
+    releaseRest = resolve;
+  });
   class GatedSlowRestClient extends FakeVenueClient {
     async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
       this.placed.push({ leg, context });
@@ -4404,10 +5019,17 @@ test("P1: liveAcceptStreamAckAsOrderResult finalizes from the stream ack WITHOUT
       this.waitCalls.push(result.venue);
       if (result.venue !== "polymarket") return super.waitForVenueResult(result);
       return {
-        venue: "polymarket", status: "confirmed", reason: null,
-        clientOrderId: result.clientOrderId, venueOrderId: "polymarket-stream-order",
-        fillCount: 8, fillPrice: 0.4, fee: null, exchangeTimestampMs: null,
-        receivedAtMs: now + 1, eventType: "stream_test",
+        venue: "polymarket",
+        status: "confirmed",
+        reason: null,
+        clientOrderId: result.clientOrderId,
+        venueOrderId: "polymarket-stream-order",
+        fillCount: 8,
+        fillPrice: 0.4,
+        fee: null,
+        exchangeTimestampMs: null,
+        receivedAtMs: now + 1,
+        eventType: "stream_test",
       };
     }
   }
@@ -4420,7 +5042,13 @@ test("P1: liveAcceptStreamAckAsOrderResult finalizes from the stream ack WITHOUT
       liveAcceptStreamAckAsOrderResult: true,
       liveOrderTimeoutMs: 5_000,
     }),
-    books, kalshi, polymarket, () => now, undefined, undefined, new ImmediateStreamConfirmation(),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    undefined,
+    undefined,
+    new ImmediateStreamConfirmation(),
   );
 
   const result = await executor.execute(candidate);
@@ -4652,8 +5280,26 @@ test("shadow ladder capture attaches a ladder to the below-threshold skip only w
   const now = 1_799_999_900_000;
   // Top-of-book executable (0.40 + 0.50 = 0.90 -> 0.10 edge) but the size-8 worst ask collapses the
   // edge below threshold, so this skips with the "cushioned executable edge ... below threshold" reason.
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.56, size: 999 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 999 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 1 },
+      { price: 0.56, size: 999 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 999 }],
+    updatedAt: now,
+  });
   const candidate = buildGuaranteedCandidate(poly, kalshi, 0.05);
   assert.ok(candidate);
 
@@ -4833,7 +5479,12 @@ test("kalshi_first_exact never sends Polymarket when the Kalshi first leg misses
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
   // Kalshi FOK first leg fills 0 (killed): Polymarket must never be sent, leaving a flat position.
-  const kalshi = new FakeVenueClient("kalshi", { status: "canceled", fillCount: 0, fillPrice: null, error: "kalshi FOK killed without fill" });
+  const kalshi = new FakeVenueClient("kalshi", {
+    status: "canceled",
+    fillCount: 0,
+    fillPrice: null,
+    error: "kalshi FOK killed without fill",
+  });
   const polymarket = new FakeVenueClient("polymarket", { fillCount: 8, fillPrice: 0.4 });
   const executor = new LiveExecutor(
     config({
@@ -4886,7 +5537,10 @@ test("polymarket_first_exact does not submit Kalshi when Polymarket fill is outs
 
     assert.equal(polymarket.placed.length, 1);
     assert.equal(kalshi.placed.length, 0);
-    assert.match(result.kalshiError ?? "", /outside configured hedge range|not available inside configured hedge range/);
+    assert.match(
+      result.kalshiError ?? "",
+      /outside configured hedge range|not available inside configured hedge range/,
+    );
   }
 });
 
@@ -4923,7 +5577,11 @@ test("polymarket_first_exact marks exposure when Kalshi misses after exact Polym
   assert.equal(kalshi.placed.length, 1);
   assert.match(result.liveLockReason ?? "", /venue fill mismatch/);
   assert.match(result.failureReason ?? "", /risk quarantined|venue fill mismatch|Kalshi FOK rejected/);
-  assert.equal(result.recoveryEvidence?.failureClassification && (result.recoveryEvidence.failureClassification as Record<string, unknown>).category, "liquidity_or_partial_fill");
+  assert.equal(
+    result.recoveryEvidence?.failureClassification &&
+      (result.recoveryEvidence.failureClassification as Record<string, unknown>).category,
+    "liquidity_or_partial_fill",
+  );
 });
 
 test("live executor skips without submitting when preflight exceeds quote freshness window", async () => {
@@ -4933,7 +5591,10 @@ test("live executor skips without submitting when preflight exceeds quote freshn
   books.setPolymarketContracts([lower]);
   books.setKalshiContracts([higher]);
   class SlowPreflightClient extends FakeVenueClient {
-    constructor(venue: Venue, private readonly preflightMs: number) {
+    constructor(
+      venue: Venue,
+      private readonly preflightMs: number,
+    ) {
       super(venue);
     }
 
@@ -5132,7 +5793,12 @@ test("live executor does NOT lock a verified zero-exposure Polymarket no-fill st
   const locks = new FakeLiveLockStore();
   const monitor = new FakeConfirmationMonitor();
   monitor.confirmations = {
-    polymarket: { status: "timeout", reason: "polymarket user stream did not confirm 5 shares within 2500ms", fillCount: null, fillPrice: null },
+    polymarket: {
+      status: "timeout",
+      reason: "polymarket user stream did not confirm 5 shares within 2500ms",
+      fillCount: null,
+      fillPrice: null,
+    },
     kalshi: { status: "not_required", fillCount: 0, fillPrice: null },
   };
   const executor = new LiveExecutor(
@@ -5146,7 +5812,13 @@ test("live executor does NOT lock a verified zero-exposure Polymarket no-fill st
     }),
     books,
     // Kalshi: a clean definitive no-fill (zero exposure on the hedge leg).
-    new FakeVenueClient("kalshi", { orderId: null, status: "rejected", fillPrice: null, fillCount: 0, error: "kalshi rejected" }),
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "rejected",
+      fillPrice: null,
+      fillCount: 0,
+      error: "kalshi rejected",
+    }),
     // Polymarket: a REST-response timeout that recovery DEFINITIVELY resolved to no-fill (not_found), FAK.
     new FakeVenueClient("polymarket", {
       orderId: null,
@@ -5184,7 +5856,12 @@ test("live executor STILL locks a Polymarket no-fill timeout that leaves a one-s
   const locks = new FakeLiveLockStore();
   const monitor = new FakeConfirmationMonitor();
   monitor.confirmations = {
-    polymarket: { status: "timeout", reason: "polymarket user stream did not confirm 5 shares within 2500ms", fillCount: null, fillPrice: null },
+    polymarket: {
+      status: "timeout",
+      reason: "polymarket user stream did not confirm 5 shares within 2500ms",
+      fillCount: null,
+      fillPrice: null,
+    },
     kalshi: { status: "confirmed", fillCount: 5, fillPrice: 0.55 },
   };
   const executor = new LiveExecutor(
@@ -5232,7 +5909,12 @@ test("live executor STILL locks a Polymarket no-fill timeout that recovery could
   const locks = new FakeLiveLockStore();
   const monitor = new FakeConfirmationMonitor();
   monitor.confirmations = {
-    polymarket: { status: "timeout", reason: "polymarket user stream did not confirm 5 shares within 2500ms", fillCount: null, fillPrice: null },
+    polymarket: {
+      status: "timeout",
+      reason: "polymarket user stream did not confirm 5 shares within 2500ms",
+      fillCount: null,
+      fillPrice: null,
+    },
     kalshi: { status: "not_required", fillCount: 0, fillPrice: null },
   };
   const executor = new LiveExecutor(
@@ -5244,7 +5926,13 @@ test("live executor STILL locks a Polymarket no-fill timeout that recovery could
       livePolymarketTimeoutRecoveryResolvesNoFill: true,
     }),
     books,
-    new FakeVenueClient("kalshi", { orderId: null, status: "rejected", fillPrice: null, fillCount: 0, error: "kalshi rejected" }),
+    new FakeVenueClient("kalshi", {
+      orderId: null,
+      status: "rejected",
+      fillPrice: null,
+      fillCount: 0,
+      error: "kalshi rejected",
+    }),
     // Recovery could NOT reach Polymarket to verify (query_failed) — the leg's exposure is unverified, so a
     // confirmation timeout still locks for reconciliation. Only a DEFINITIVE not_found resolves to no-fill.
     new FakeVenueClient("polymarket", {
@@ -5326,7 +6014,12 @@ test("live executor quarantines a bounded one-sided fill instead of hard-locking
   assert.equal(readiness.riskState, "quarantined");
 });
 
-function oneSidedAutoUnwindExecutor(autoUnwindEnabled: boolean, outcome: VenueUnwindOutcome | null, now: number, locks: FakeLiveLockStore) {
+function oneSidedAutoUnwindExecutor(
+  autoUnwindEnabled: boolean,
+  outcome: VenueUnwindOutcome | null,
+  now: number,
+  locks: FakeLiveLockStore,
+) {
   const { lower, higher } = liveCandidate(now);
   const books = new BookStore();
   books.setPolymarketContracts([lower]);
@@ -5337,7 +6030,11 @@ function oneSidedAutoUnwindExecutor(autoUnwindEnabled: boolean, outcome: VenueUn
     polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.84 },
   };
   const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 0 };
-  const polymarket = new UnwindableVenueClient("polymarket", { status: "filled", fillCount: 5, fillPrice: 0.84 }, outcome);
+  const polymarket = new UnwindableVenueClient(
+    "polymarket",
+    { status: "filled", fillCount: 5, fillPrice: 0.84 },
+    outcome,
+  );
   const executor = new LiveExecutor(
     config({
       liveOrderSize: 5,
@@ -5392,7 +6089,12 @@ test("auto-unwind falls through to quarantine when the unwind cannot complete (C
   const now = 1_799_999_900_000;
   const { candidate } = liveCandidate(now);
   const locks = new FakeLiveLockStore();
-  const { executor, polymarket } = oneSidedAutoUnwindExecutor(true, { flattened: false, reason: "no liquidity within cap" }, now, locks);
+  const { executor, polymarket } = oneSidedAutoUnwindExecutor(
+    true,
+    { flattened: false, reason: "no liquidity within cap" },
+    now,
+    locks,
+  );
 
   const result = await executor.execute(candidate);
 
@@ -5498,7 +6200,8 @@ test("live executor readiness blocks unresolved exact exposure when guard is ena
   const exposureReader = {
     unresolvedRiskQuarantineExposureDollars: async () => 0,
     liveRiskQuarantineStatus: async () => ({ total: 0, count: 0 }),
-    liveExactExposureBlockReason: async () => "live exact-exposure guard blocked: signal #119283 is marked partial_fill",
+    liveExactExposureBlockReason: async () =>
+      "live exact-exposure guard blocked: signal #119283 is marked partial_fill",
   };
   const executor = new LiveExecutor(
     config({
@@ -5526,11 +6229,16 @@ test("live executor readiness blocks unresolved exact exposure when guard is ena
 });
 
 test("live exposure cache reads persisted quarantine totals from the backing store", async () => {
-  const cache = new LiveExposureCache({
-    listLiveExposureSignals: async () => [],
-    unresolvedRiskQuarantineExposureDollars: async () => 4.2,
-    liveRiskQuarantineStatus: async () => ({ total: 4.2, count: 1 }),
-  }, 5_000, 10, () => 1_800_000_000_000);
+  const cache = new LiveExposureCache(
+    {
+      listLiveExposureSignals: async () => [],
+      unresolvedRiskQuarantineExposureDollars: async () => 4.2,
+      liveRiskQuarantineStatus: async () => ({ total: 4.2, count: 1 }),
+    },
+    5_000,
+    10,
+    () => 1_800_000_000_000,
+  );
 
   await cache.refresh();
 
@@ -5542,9 +6250,18 @@ test("LA2: exposure cache serves last-good in the soft-stale window (background 
   let clock = 1_800_000_000_000;
   let reads = 0;
   let failReads = false;
-  const cache = new LiveExposureCache({
-    listLiveExposureSignals: async () => { reads += 1; if (failReads) throw new Error("db down"); return []; },
-  }, 5_000, 10, () => clock);
+  const cache = new LiveExposureCache(
+    {
+      listLiveExposureSignals: async () => {
+        reads += 1;
+        if (failReads) throw new Error("db down");
+        return [];
+      },
+    },
+    5_000,
+    10,
+    () => clock,
+  );
   const { candidate } = liveCandidate(1_799_999_900_000);
 
   await cache.refresh();
@@ -5571,7 +6288,11 @@ test("LA2: exposure cache serves last-good in the soft-stale window (background 
 test("live exposure cache enforces submitted attempt cap from warmed attempts and observed signals", async () => {
   const now = 1_799_999_900_000;
   const { candidate } = liveCandidate(now);
-  const attempt = (id: number, action: "filled" | "failed" | "skipped", executionGroupId: string | null): DashboardSignal => ({
+  const attempt = (
+    id: number,
+    action: "filled" | "failed" | "skipped",
+    executionGroupId: string | null,
+  ): DashboardSignal => ({
     id,
     createdAt: new Date(now).toISOString(),
     updatedAt: new Date(now).toISOString(),
@@ -5593,20 +6314,28 @@ test("live exposure cache enforces submitted attempt cap from warmed attempts an
     polymarketFillPrice: null,
     executionGroupId,
   });
-  const cache = new LiveExposureCache({
-    listLiveExposureSignals: async () => [],
-    listLiveSubmittedAttemptSignals: async () => [
-      attempt(1, "filled", "group-1"),
-      attempt(2, "failed", "group-2"),
-      attempt(3, "skipped", null),
-    ],
-  }, 5_000, 10, () => now);
+  const cache = new LiveExposureCache(
+    {
+      listLiveExposureSignals: async () => [],
+      listLiveSubmittedAttemptSignals: async () => [
+        attempt(1, "filled", "group-1"),
+        attempt(2, "failed", "group-2"),
+        attempt(3, "skipped", null),
+      ],
+    },
+    5_000,
+    10,
+    () => now,
+  );
 
   await cache.refresh(now);
 
   assert.equal(await cache.liveSubmittedAttemptBlockReason(candidate, now, 3), null);
   cache.observeSignal(attempt(4, "failed", "group-4"));
-  assert.match(await cache.liveSubmittedAttemptBlockReason(candidate, now, 3) ?? "", /submitted attempt limit reached/);
+  assert.match(
+    (await cache.liveSubmittedAttemptBlockReason(candidate, now, 3)) ?? "",
+    /submitted attempt limit reached/,
+  );
 });
 
 test("live exposure cache blocks unresolved exact-exposure problems independently of hardlocks", async () => {
@@ -5637,14 +6366,19 @@ test("live exposure cache blocks unresolved exact-exposure problems independentl
     partialFill: true,
     executionGroupId: "group-partial",
   };
-  const cache = new LiveExposureCache({
-    listLiveExposureSignals: async () => [],
-    listLiveExactExposureSignals: async () => [partial],
-  }, 5_000, 10, () => now);
+  const cache = new LiveExposureCache(
+    {
+      listLiveExposureSignals: async () => [],
+      listLiveExactExposureSignals: async () => [partial],
+    },
+    5_000,
+    10,
+    () => now,
+  );
 
   await cache.refresh(now);
 
-  assert.match(await cache.liveExactExposureBlockReason(now) ?? "", /exact-exposure guard blocked/);
+  assert.match((await cache.liveExactExposureBlockReason(now)) ?? "", /exact-exposure guard blocked/);
 });
 
 test("live exposure cache blocks when recent execution quality is poor", async () => {
@@ -5676,10 +6410,15 @@ test("live exposure cache blocks when recent execution quality is poor", async (
     executionGroupId: `group-${id}`,
     executionTimings: { polymarketOrderRttMs: 2_500 },
   });
-  const cache = new LiveExposureCache({
-    listLiveExposureSignals: async () => [],
-    listLiveExecutionQualitySignals: async () => [1, 2, 3, 4, 5].map(miss),
-  }, 5_000, 10, () => now);
+  const cache = new LiveExposureCache(
+    {
+      listLiveExposureSignals: async () => [],
+      listLiveExecutionQualitySignals: async () => [1, 2, 3, 4, 5].map(miss),
+    },
+    5_000,
+    10,
+    () => now,
+  );
 
   await cache.refresh(now);
 
@@ -5721,10 +6460,15 @@ test("live exposure cache ignores old execution quality rows touched by later re
     partialFill: false,
     executionGroupId: `group-${id}`,
   });
-  const cache = new LiveExposureCache({
-    listLiveExposureSignals: async () => [],
-    listLiveExecutionQualitySignals: async () => [1, 2, 3, 4, 5].map(oldButTouched),
-  }, 5_000, 10, () => now);
+  const cache = new LiveExposureCache(
+    {
+      listLiveExposureSignals: async () => [],
+      listLiveExecutionQualitySignals: async () => [1, 2, 3, 4, 5].map(oldButTouched),
+    },
+    5_000,
+    10,
+    () => now,
+  );
 
   await cache.refresh(now);
 
@@ -5737,13 +6481,16 @@ test("live exposure cache ignores old execution quality rows touched by later re
   });
   assert.equal(status.sampleCount, 0);
   assert.equal(status.ok, true);
-  assert.equal(await cache.liveExecutionQualityBlockReason(candidate, now, {
-    enabled: true,
-    lookbackMs: 30 * 60 * 1_000,
-    sampleLimit: 50,
-    minSamples: 5,
-    minExactFillRate: 0.4,
-  }), null);
+  assert.equal(
+    await cache.liveExecutionQualityBlockReason(candidate, now, {
+      enabled: true,
+      lookbackMs: 30 * 60 * 1_000,
+      sampleLimit: 50,
+      minSamples: 5,
+      minExactFillRate: 0.4,
+    }),
+    null,
+  );
 });
 
 test("live executor hard-locks quarantined fills when exposure cap would be exceeded", async () => {
@@ -5901,8 +6648,16 @@ test("live executor does not lock when both parallel limit orders cancel with ze
   const executor = new LiveExecutor(
     config({ liveOrderSize: 5, liveParallelExecutionEnabled: true }),
     books,
-    new FakeVenueClient("kalshi", { status: "canceled", fillCount: 0, error: "kalshi limit_rest order canceled without exact fill" }),
-    new FakeVenueClient("polymarket", { status: "canceled", fillCount: 0, error: "polymarket limit_rest order canceled without exact fill" }),
+    new FakeVenueClient("kalshi", {
+      status: "canceled",
+      fillCount: 0,
+      error: "kalshi limit_rest order canceled without exact fill",
+    }),
+    new FakeVenueClient("polymarket", {
+      status: "canceled",
+      fillCount: 0,
+      error: "polymarket limit_rest order canceled without exact fill",
+    }),
     () => now,
     locks,
   );
@@ -5928,8 +6683,16 @@ test("live executor locks when aggressive limit cancellation cannot be verified"
   const executor = new LiveExecutor(
     config({ liveOrderSize: 5, liveParallelExecutionEnabled: true }),
     books,
-    new FakeVenueClient("kalshi", { status: "unknown", fillCount: 0, error: "kalshi limit_rest cancellation/final state unverified" }),
-    new FakeVenueClient("polymarket", { status: "canceled", fillCount: 0, error: "polymarket limit_rest order canceled without exact fill" }),
+    new FakeVenueClient("kalshi", {
+      status: "unknown",
+      fillCount: 0,
+      error: "kalshi limit_rest cancellation/final state unverified",
+    }),
+    new FakeVenueClient("polymarket", {
+      status: "canceled",
+      fillCount: 0,
+      error: "polymarket limit_rest order canceled without exact fill",
+    }),
     () => now,
     locks,
   );
@@ -6053,7 +6816,14 @@ test("live hot-path user stream outage bounded-retries before skipping without a
   }
   const monitor = new FlappingMonitor();
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 750, liveHotPathEnabled: true, livePretradeRetryAttempts: 2, livePretradeRetryDelayMs: 1 }),
+    config({
+      liveOrderSize: 5,
+      liveUserStreamsEnabled: true,
+      liveUserStreamPretradeGraceMs: 750,
+      liveHotPathEnabled: true,
+      livePretradeRetryAttempts: 2,
+      livePretradeRetryDelayMs: 1,
+    }),
     books,
     kalshi,
     polymarket,
@@ -6075,10 +6845,7 @@ test("live hot-path user stream outage bounded-retries before skipping without a
   assert.equal(locks.engageCalls, 0);
 });
 
-for (const preflightReason of [
-  "refreshing Polymarket user subscriptions",
-  "refreshing Kalshi user subscriptions",
-]) {
+for (const preflightReason of ["refreshing Polymarket user subscriptions", "refreshing Kalshi user subscriptions"]) {
   test(`live executor skips transient pre-trade subscription refresh without persistent lock: ${preflightReason}`, async () => {
     const now = 1_799_999_900_000;
     const { candidate, lower, higher } = liveCandidate(now);
@@ -6169,7 +6936,13 @@ test("live executor bounded-retries transient pre-trade user stream state before
   }
   const monitor = new ReconnectingMonitor();
   const executor = new LiveExecutor(
-    config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 0, livePretradeRetryAttempts: 2, livePretradeRetryDelayMs: 1 }),
+    config({
+      liveOrderSize: 5,
+      liveUserStreamsEnabled: true,
+      liveUserStreamPretradeGraceMs: 0,
+      livePretradeRetryAttempts: 2,
+      livePretradeRetryDelayMs: 1,
+    }),
     books,
     kalshi,
     polymarket,
@@ -6201,9 +6974,7 @@ test("live executor bounded-retries stale hot-path preflight cache before submit
 
     async preflightOrder(): Promise<string | null> {
       this.preflightCalls += 1;
-      return this.preflightCalls === 1
-        ? "Polymarket hot readiness cache is stale: age 6000ms exceeds 5000ms"
-        : null;
+      return this.preflightCalls === 1 ? "Polymarket hot readiness cache is stale: age 6000ms exceeds 5000ms" : null;
     }
   }
   const kalshi = new FakeVenueClient("kalshi");
@@ -6236,7 +7007,8 @@ test("live executor blocks persistent pre-trade reconciliation failures without 
   const polymarket = new FakeVenueClient("polymarket");
   const locks = new FakeLiveLockStore();
   const monitor = new FakeConfirmationMonitor();
-  monitor.preflightReason = "live reconciliation blocked: signal #7 has venue fills without private-stream confirmations";
+  monitor.preflightReason =
+    "live reconciliation blocked: signal #7 has venue fills without private-stream confirmations";
   const executor = new LiveExecutor(
     config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveUserStreamPretradeGraceMs: 0 }),
     books,
@@ -6300,7 +7072,11 @@ test("P1: a confirmation timeout does NOT lock when REST already evidenced both 
     // confirmation times out — the ~half of timeouts that actually completed both legs.
     monitor.resultStatus = "timeout";
     const executor = new LiveExecutor(
-      config({ liveOrderSize: 5, liveUserStreamsEnabled: true, liveConfirmationAcceptRestEvidence: acceptRestEvidence }),
+      config({
+        liveOrderSize: 5,
+        liveUserStreamsEnabled: true,
+        liveConfirmationAcceptRestEvidence: acceptRestEvidence,
+      }),
       books,
       new FakeVenueClient("kalshi"),
       new FakeVenueClient("polymarket"),
@@ -6352,7 +7128,11 @@ test("P1-gap: a FAK no-fill timeout that recovery verified (not_found) does NOT 
         fillCount: 0,
         fillPrice: null,
         error: "polymarket FAK postOrder failed: timeout of 2500ms exceeded",
-        metadata: { polymarketOrderType: "FAK", polymarketTimeoutRecoveryAttempted: true, polymarketTimeoutRecoveryStatus: "not_found" },
+        metadata: {
+          polymarketOrderType: "FAK",
+          polymarketTimeoutRecoveryAttempted: true,
+          polymarketTimeoutRecoveryStatus: "not_found",
+        },
       }),
       () => now,
       locks,
@@ -6395,7 +7175,12 @@ test("stream confirmation timeout does NOT lock when both legs are definitively 
       books,
       new FakeVenueClient("kalshi"), // hedge never submitted because the first leg fails
       // Polymarket FAK definitively rejected (no fill): both legs end flat, so there is no exposure.
-      new FakeVenueClient("polymarket", { status: "failed", fillCount: 0, fillPrice: null, error: "polymarket FAK postOrder failed: no orders found to match" }),
+      new FakeVenueClient("polymarket", {
+        status: "failed",
+        fillCount: 0,
+        fillPrice: null,
+        error: "polymarket FAK postOrder failed: no orders found to match",
+      }),
       () => now,
       locks,
       undefined,
@@ -6478,7 +7263,14 @@ test("live executor ignores persistent circuit breakers while auto-hardlocks are
   await locks.engageLock({ reason: "manual incident lock", executionGroupId: "prior-group" });
   const kalshi = new FakeVenueClient("kalshi");
   const polymarket = new FakeVenueClient("polymarket");
-  const executor = new LiveExecutor(config({ liveOrderSize: 5, liveAutoHardlocksEnabled: false }), books, kalshi, polymarket, () => now, locks);
+  const executor = new LiveExecutor(
+    config({ liveOrderSize: 5, liveAutoHardlocksEnabled: false }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+  );
 
   const result = await executor.execute(candidate);
 
@@ -6568,19 +7360,23 @@ test("live executor blocks Kalshi placement when Polymarket worker egress is geo
   books.setKalshiContracts([higher]);
   const kalshi = new FakeVenueClient("kalshi");
   let polymarketFactoryCalls = 0;
-  const polymarket = new PolymarketOrderClient(config({
-    polymarketSignatureType: 2,
-    polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
-  }), async () => {
-    polymarketFactoryCalls += 1;
-    throw new Error("geoblock preflight should stop before CLOB client construction");
-  }, async (checkedAt) => ({
-    blocked: true,
-    country: "US",
-    region: "NY",
-    checkedAt,
-    reason: "Polymarket CLOB trading blocked from worker egress",
-  }));
+  const polymarket = new PolymarketOrderClient(
+    config({
+      polymarketSignatureType: 2,
+      polymarketFunderAddress: "0xAC3b15cD52358c88c97C87FCB7fE67c1b9F0F2B0",
+    }),
+    async () => {
+      polymarketFactoryCalls += 1;
+      throw new Error("geoblock preflight should stop before CLOB client construction");
+    },
+    async (checkedAt) => ({
+      blocked: true,
+      country: "US",
+      region: "NY",
+      checkedAt,
+      reason: "Polymarket CLOB trading blocked from worker egress",
+    }),
+  );
   const executor = new LiveExecutor(config({ liveOrderSize: 5 }), books, kalshi, polymarket, () => now);
 
   const result = await executor.execute(candidate);
@@ -6608,16 +7404,24 @@ test("live executor skips stale or below-threshold capped live books before plac
   assert.equal(polymarket.placed.length, 0);
 
   const expensiveBooks = new BookStore();
-  expensiveBooks.setPolymarketContracts([{ ...lower, yesAsk: 0.48, yesAskLevels: [{ price: 0.48, size: 999 }], updatedAt: now }]);
-  expensiveBooks.setKalshiContracts([{ ...higher, noAsk: 0.48, noAskLevels: [{ price: 0.48, size: 999 }], updatedAt: now }]);
+  expensiveBooks.setPolymarketContracts([
+    { ...lower, yesAsk: 0.48, yesAskLevels: [{ price: 0.48, size: 999 }], updatedAt: now },
+  ]);
+  expensiveBooks.setKalshiContracts([
+    { ...higher, noAsk: 0.48, noAskLevels: [{ price: 0.48, size: 999 }], updatedAt: now },
+  ]);
   const expensiveExecutor = new LiveExecutor(config(), expensiveBooks, kalshi, polymarket, () => now);
   const expensive = await expensiveExecutor.execute(candidate);
   assert.equal(expensive.action, "skipped");
   assert.match(expensive.failureReason ?? "", /below threshold|slippage cap/);
 
   const rawEdgeOnlyBooks = new BookStore();
-  rawEdgeOnlyBooks.setPolymarketContracts([{ ...lower, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 999 }], updatedAt: now }]);
-  rawEdgeOnlyBooks.setKalshiContracts([{ ...higher, noAsk: 0.55, noAskLevels: [{ price: 0.55, size: 999 }], updatedAt: now }]);
+  rawEdgeOnlyBooks.setPolymarketContracts([
+    { ...lower, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 999 }], updatedAt: now },
+  ]);
+  rawEdgeOnlyBooks.setKalshiContracts([
+    { ...higher, noAsk: 0.55, noAskLevels: [{ price: 0.55, size: 999 }], updatedAt: now },
+  ]);
   const rawEdgeOnlyExecutor = new LiveExecutor(config(), rawEdgeOnlyBooks, kalshi, polymarket, () => now);
   const rawEdgeOnly = await rawEdgeOnlyExecutor.execute(candidate);
   assert.equal(rawEdgeOnly.action, "skipped");
@@ -6629,12 +7433,25 @@ test("live executor skips stale or below-threshold capped live books before plac
 test("live executor rejects dead-zone candidates and locks after one-sided fills", async () => {
   const now = 1_799_999_900_000;
   const deadZone = buildDeadZoneCandidate(
-    contract({ venue: "polymarket", contractId: "poly-dead", strike: 1500, noAsk: 0.4, noTokenId: "no-token", updatedAt: now }),
+    contract({
+      venue: "polymarket",
+      contractId: "poly-dead",
+      strike: 1500,
+      noAsk: 0.4,
+      noTokenId: "no-token",
+      updatedAt: now,
+    }),
     contract({ venue: "kalshi", contractId: "kalshi-dead", strike: 1502, yesAsk: 0.5, updatedAt: now }),
     0.05,
   );
   assert.ok(deadZone);
-  const deadZoneExecutor = new LiveExecutor(config(), undefined, new FakeVenueClient("kalshi"), new FakeVenueClient("polymarket"), () => now);
+  const deadZoneExecutor = new LiveExecutor(
+    config(),
+    undefined,
+    new FakeVenueClient("kalshi"),
+    new FakeVenueClient("polymarket"),
+    () => now,
+  );
   const blocked = await deadZoneExecutor.execute(deadZone);
   assert.equal(blocked.action, "failed");
   assert.match(blocked.failureReason ?? "", /protected-spread-only guard/);

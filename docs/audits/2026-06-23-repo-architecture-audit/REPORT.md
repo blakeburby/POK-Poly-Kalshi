@@ -7,12 +7,12 @@ outranks "refactor aggressively" wherever the two conflict.
 **Method.** Ten parallel read-only auditors covered folder structure, the two god-files, duplication,
 config/env, logging/errors, testing, docs/onboarding, dead code/debt, deps/build, and scalability/ops; a lead
 synthesizer reconciled them. **77 findings**: 3 Critical, 24 High, 29 Medium, 21 Low. Crucially, **62 of 77 are
-zero- or low-live-risk** — this is a strong system with *concentrated*, mostly-safe-to-fix debt, not a mess.
+zero- or low-live-risk** — this is a strong system with _concentrated_, mostly-safe-to-fix debt, not a mess.
 
 **Headline.** The single most important finding is structural and cheap: the **test suite was type-checked by
 nothing** (both tsconfigs excluded `tests/`, and `npm test` runs through `tsx` transpile-only). On a money
 system, the safety net for every change was itself unverified — and it had already silently drifted. Closing
-that gap is the prerequisite that makes every subsequent refactor *provably* non-breaking. **It is fixed in this
+that gap is the prerequisite that makes every subsequent refactor _provably_ non-breaking. **It is fixed in this
 pass.**
 
 ---
@@ -46,14 +46,14 @@ repo root
 - **The worker/dashboard seam** — a deliberate single facade (`app/lib/types.ts`); the two deployables don't
   bundle each other's code. Real architectural boundary.
 - **Operational maturity** — feed-silence watchdogs, 401 self-heal, loss-cap hardlock, versioned migrations,
-  documented "false blocker" reasoning, lockstep deploy discipline. The system demonstrably *learns* from
+  documented "false blocker" reasoning, lockstep deploy discipline. The system demonstrably _learns_ from
   incidents.
 - **The "peel pure helpers, keep the orchestrator" pattern already exists** in-repo (`venue-confirmations.ts`,
   `quote-quality.ts`, `fill-quality.ts`) — the house style for de-bloating the god files is proven; it just
   hasn't been applied to them yet.
 
-**Where the gap is widest:** the **type/test safety net under a money path**. The engineering *care* is high but
-applied *reactively* (fix-after-incident) rather than *structurally* (compiler/boot-time prevention): tests
+**Where the gap is widest:** the **type/test safety net under a money path**. The engineering _care_ is high but
+applied _reactively_ (fix-after-incident) rather than _structurally_ (compiler/boot-time prevention): tests
 weren't type-checked, secrets fail open (empty-string defaults), and a wrong account-model default passes the
 only guard. Closing Wave 0 (below) moves this dimension from below-bar to top-tier — cheaply.
 
@@ -91,34 +91,34 @@ restructuring happens behind re-export barrels so no import path or deploy step 
    ~30% of src and every duplication/coupling finding.
 3. **Duplication from missing base abstractions** — 4 WS clients reimplement one lifecycle; `roundPrice`/`waitMs`
    copied across both god files; the readiness/warm pattern repeats per venue.
-4. **Documentation describes *what*, never *where*** — no architecture/data-flow map, no env reference, host
+4. **Documentation describes _what_, never _where_** — no architecture/data-flow map, no env reference, host
    naming actively misleads operators.
 5. **No automated quality floor** — no CI, no linter/formatter; every gate is a developer remembering to run it.
 
 ## 4. Top 20 highest-impact improvements
 
-| # | Improvement | Sev | Risk | Effort | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1 | **Type-check the tests** (`tsconfig.tests.json` + `typecheck:test`) | Critical | none | quick | ✅ **done** |
-| 2 | Fix the already-drifted test config literals (missing fields) | Critical | low | med | ✅ **done** |
-| 3 | **CI pipeline** (typecheck src + tests + suite on every push/PR) | High | none | quick | ✅ **done** |
-| 4 | `ARCHITECTURE.md` — data-flow + module map + glossary | High | none | med | ✅ **done** |
-| 5 | `ENVIRONMENT.md` — every env key, type, default, purpose | High | none | med | ✅ **done** |
-| 6 | `CONTRIBUTING.md` + working local-run path | High | none | med | ✅ **done** |
-| 7 | Fix RUNBOOK host naming (Hostinger → AWS Lightsail) | High | none | quick | ✅ **done** |
-| 8 | **`validateConfig()` at boot** — fail fast on missing live secrets | High | med | med | proposed |
-| 9 | `POLYMARKET_SIGNATURE_TYPE` required-when-live (default contradicts prod) | High | low | quick | proposed |
-| 10 | Split `types.ts` into `src/types/` domain modules **behind a barrel** | High | low | med | proposed |
-| 11 | Consolidate `types/trading.ts` into `src/types/` (re-export shim first) | High | low | med | proposed |
-| 12 | Extract trade-path interfaces out of `live-clients.ts` → `order-types.ts` | High | none | quick | proposed |
-| 13 | Split `live-clients.ts` per-venue under `clients/` **behind a barrel** | High | low | med | proposed |
-| 14 | `ReconnectingWebSocketClient` base for the 4 WS clients | High | low | med | proposed |
-| 15 | **Typed `failureCode`** taxonomy → stop classifying money flow by error substrings | High | med | med | proposed |
-| 16 | **Graceful-shutdown drain** of in-flight executions before `pool.end()` | Critical | low | med | proposed |
-| 17 | `migrate.ts`: run each migration on a **pinned client**, not the pool | High | low | quick | proposed |
-| 18 | Split the 6,650-LOC god test file along source seams | High | low | major | proposed |
-| 19 | Sync `pok-worker.env.example` to all ~153 keys | High | none | quick | proposed |
-| 20 | Linter + formatter encoding invariants (no `process.env` outside config) | High | none | med | partial (prettier in) |
+| #   | Improvement                                                                        | Sev      | Risk | Effort | Status                |
+| --- | ---------------------------------------------------------------------------------- | -------- | ---- | ------ | --------------------- |
+| 1   | **Type-check the tests** (`tsconfig.tests.json` + `typecheck:test`)                | Critical | none | quick  | ✅ **done**           |
+| 2   | Fix the already-drifted test config literals (missing fields)                      | Critical | low  | med    | ✅ **done**           |
+| 3   | **CI pipeline** (typecheck src + tests + suite on every push/PR)                   | High     | none | quick  | ✅ **done**           |
+| 4   | `ARCHITECTURE.md` — data-flow + module map + glossary                              | High     | none | med    | ✅ **done**           |
+| 5   | `ENVIRONMENT.md` — every env key, type, default, purpose                           | High     | none | med    | ✅ **done**           |
+| 6   | `CONTRIBUTING.md` + working local-run path                                         | High     | none | med    | ✅ **done**           |
+| 7   | Fix RUNBOOK host naming (Hostinger → AWS Lightsail)                                | High     | none | quick  | ✅ **done**           |
+| 8   | **`validateConfig()` at boot** — fail fast on missing live secrets                 | High     | med  | med    | proposed              |
+| 9   | `POLYMARKET_SIGNATURE_TYPE` required-when-live (default contradicts prod)          | High     | low  | quick  | proposed              |
+| 10  | Split `types.ts` into `src/types/` domain modules **behind a barrel**              | High     | low  | med    | proposed              |
+| 11  | Consolidate `types/trading.ts` into `src/types/` (re-export shim first)            | High     | low  | med    | proposed              |
+| 12  | Extract trade-path interfaces out of `live-clients.ts` → `order-types.ts`          | High     | none | quick  | proposed              |
+| 13  | Split `live-clients.ts` per-venue under `clients/` **behind a barrel**             | High     | low  | med    | proposed              |
+| 14  | `ReconnectingWebSocketClient` base for the 4 WS clients                            | High     | low  | med    | proposed              |
+| 15  | **Typed `failureCode`** taxonomy → stop classifying money flow by error substrings | High     | med  | med    | proposed              |
+| 16  | **Graceful-shutdown drain** of in-flight executions before `pool.end()`            | Critical | low  | med    | proposed              |
+| 17  | `migrate.ts`: run each migration on a **pinned client**, not the pool              | High     | low  | quick  | proposed              |
+| 18  | Split the 6,650-LOC god test file along source seams                               | High     | low  | major  | proposed              |
+| 19  | Sync `pok-worker.env.example` to all ~153 keys                                     | High     | none | quick  | proposed              |
+| 20  | Linter + formatter encoding invariants (no `process.env` outside config)           | High     | none | med    | partial (prettier in) |
 
 ## 5. Quick wins (<30 min each)
 
@@ -176,28 +176,28 @@ restructuring happens behind re-export barrels so no import path or deploy step 
 
 ## 8. Files to move / rename / merge / split / delete
 
-| Action | Target | Risk | Note |
-| --- | --- | --- | --- |
-| ✅ delete | `docs/audits/.../lead-lag-calibration.err` | none | Committed error dump, not docs. **Done.** |
-| ✅ untrack | `next-env.d.ts` | low | Next.js-generated; churns lockstep diffs. **Done** (gitignored). |
-| split | `src/types.ts` → `src/types/{market,execution,scoring,dashboard}.ts` + barrel | low | Zero import churn. |
-| move | `types/trading.ts` → `src/types/trading.ts` (re-export shim first) | low | Eliminate the second type home. |
-| move | trade interfaces in `live-clients.ts:25-176` → `src/execution/order-types.ts` | none | Type-only, erased at compile. |
-| split | `live-clients.ts` → `execution/clients/*` + barrel | low | Four venue clients in one file. |
-| split | `src/ws/` add `reconnecting-client.ts` base | low | Dedup 4 WS lifecycles. |
-| merge | `roundPrice`/`waitMs` (dup in both god files) → `execution/num-utils.ts` | low | Money-rounding primitive must not diverge. |
-| split | `live-execution.test.ts` (6,650 LOC) → per-source test files | low | Unreviewable; mirror source seams. |
-| rename | `tests/dashboard-ui.test.tsx` → `.test.ts` under `tests/dashboard/` | low | `.tsx` but tests only pure fns. |
-| consider | `src/dashboard` → `src/api`, `src/trading` → `src/reporting` | low | Names mislead vs contents (defer; churns many imports). |
-| keep | `Dockerfile.worker` / `.dockerignore` | — | Audit flagged as orphaned, but **do not delete** unverified on a live repo; confirm no fallback deploy uses it first. |
-| n/a | `account-snapshot.json` | — | Audit thought it was committed; it is **already gitignored** (local-only). No action. |
+| Action     | Target                                                                        | Risk | Note                                                                                                                  |
+| ---------- | ----------------------------------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------- |
+| ✅ delete  | `docs/audits/.../lead-lag-calibration.err`                                    | none | Committed error dump, not docs. **Done.**                                                                             |
+| ✅ untrack | `next-env.d.ts`                                                               | low  | Next.js-generated; churns lockstep diffs. **Done** (gitignored).                                                      |
+| split      | `src/types.ts` → `src/types/{market,execution,scoring,dashboard}.ts` + barrel | low  | Zero import churn.                                                                                                    |
+| move       | `types/trading.ts` → `src/types/trading.ts` (re-export shim first)            | low  | Eliminate the second type home.                                                                                       |
+| move       | trade interfaces in `live-clients.ts:25-176` → `src/execution/order-types.ts` | none | Type-only, erased at compile.                                                                                         |
+| split      | `live-clients.ts` → `execution/clients/*` + barrel                            | low  | Four venue clients in one file.                                                                                       |
+| split      | `src/ws/` add `reconnecting-client.ts` base                                   | low  | Dedup 4 WS lifecycles.                                                                                                |
+| merge      | `roundPrice`/`waitMs` (dup in both god files) → `execution/num-utils.ts`      | low  | Money-rounding primitive must not diverge.                                                                            |
+| split      | `live-execution.test.ts` (6,650 LOC) → per-source test files                  | low  | Unreviewable; mirror source seams.                                                                                    |
+| rename     | `tests/dashboard-ui.test.tsx` → `.test.ts` under `tests/dashboard/`           | low  | `.tsx` but tests only pure fns.                                                                                       |
+| consider   | `src/dashboard` → `src/api`, `src/trading` → `src/reporting`                  | low  | Names mislead vs contents (defer; churns many imports).                                                               |
+| keep       | `Dockerfile.worker` / `.dockerignore`                                         | —    | Audit flagged as orphaned, but **do not delete** unverified on a live repo; confirm no fallback deploy uses it first. |
+| n/a        | `account-snapshot.json`                                                       | —    | Audit thought it was committed; it is **already gitignored** (local-only). No action.                                 |
 
 ## 9. Corrections to the raw audit
 
 Two raw findings were over-stated and are noted for accuracy: (a) `account-snapshot.json` is **already
 local-only** (gitignored), not committed; (b) the "7 raw `console.*` in src" are **all legitimate** — the
 logger's own sink (`logger.ts:26`) and an intentional CLOB-log-muting helper (`live-clients.ts:332-347`) — not
-style drift. The linter recommendation still stands (to *prevent* future `console.*`/`process.env` leaks), but
+style drift. The linter recommendation still stands (to _prevent_ future `console.*`/`process.env` leaks), but
 there is nothing to clean up today.
 
 ## 10. Implemented in this pass (all zero/low live-risk)

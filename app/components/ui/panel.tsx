@@ -17,17 +17,10 @@ const toneDot: Record<StatusTone, string> = {
   info: "bg-cyan",
 };
 
-export function Panel({
-  className,
-  children,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+export function Panel({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-md border border-line bg-surface",
-        className,
-      )}
+      className={cn("flex min-h-0 flex-col overflow-hidden rounded-md border border-line bg-surface", className)}
       {...props}
     >
       {children}
@@ -51,20 +44,9 @@ export function PanelHeader({
   pulse?: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        "flex h-8 shrink-0 items-center gap-2 border-b border-line bg-surface-2/60 px-3",
-        className,
-      )}
-    >
+    <div className={cn("flex h-8 shrink-0 items-center gap-2 border-b border-line bg-surface-2/60 px-3", className)}>
       {dot ? (
-        <span
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            toneDot[dot],
-            pulse && dot === "live" && "heartbeat",
-          )}
-        />
+        <span className={cn("size-1.5 shrink-0 rounded-full", toneDot[dot], pulse && dot === "live" && "heartbeat")} />
       ) : null}
       <span
         className="min-w-0 truncate font-mono text-[10.5px] font-medium uppercase tracking-[0.12em] text-fg-secondary"
@@ -77,11 +59,7 @@ export function PanelHeader({
   );
 }
 
-export function PanelBody({
-  className,
-  children,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+export function PanelBody({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cn("min-h-0 flex-1 p-3", className)} {...props}>
       {children}

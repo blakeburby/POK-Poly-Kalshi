@@ -50,8 +50,24 @@ function readiness(): LiveExecutionReadiness {
       ready: true,
       reason: null,
       confirmTimeoutMs: 2_500,
-      kalshi: { enabled: true, connected: true, subscribed: true, reason: null, lastConnectedAt: now, lastEventAt: now, lastError: null },
-      polymarket: { enabled: true, connected: true, subscribed: true, reason: null, lastConnectedAt: now, lastEventAt: now, lastError: null },
+      kalshi: {
+        enabled: true,
+        connected: true,
+        subscribed: true,
+        reason: null,
+        lastConnectedAt: now,
+        lastEventAt: now,
+        lastError: null,
+      },
+      polymarket: {
+        enabled: true,
+        connected: true,
+        subscribed: true,
+        reason: null,
+        lastConnectedAt: now,
+        lastEventAt: now,
+        lastError: null,
+      },
       lastUserStreamEventAt: now,
       confirmationLagMs: 10,
     },
@@ -63,7 +79,15 @@ function readiness(): LiveExecutionReadiness {
     circuitBreakerReason: null,
     circuitBreaker: null,
     kalshi: { configured: true, ready: true, reason: null, balance: 20, allowance: null, lastCheckedAt: now },
-    polymarket: { configured: true, ready: true, reason: null, balance: 30, allowance: 30, lastCheckedAt: now, collateralBalanceNormalized: 30 },
+    polymarket: {
+      configured: true,
+      ready: true,
+      reason: null,
+      balance: 30,
+      allowance: 30,
+      lastCheckedAt: now,
+      collateralBalanceNormalized: 30,
+    },
     lastAttempt: null,
   };
 }
@@ -72,47 +96,52 @@ test("trading activity store returns per-platform live history and portfolio dat
   const db = {
     query: async <T = Record<string, unknown>>(_sql: string, values?: unknown[]) => {
       const platform = values?.[0];
-      const rows = platform === "kalshi"
-        ? [{
-            id: 1,
-            created_at: new Date(now - 1_000),
-            execution_group_id: "group",
-            venue: "kalshi",
-            client_order_id: "kalshi-client",
-            venue_order_id: "kalshi-order",
-            event_type: "fill",
-            asset_id: null,
-            market_id: "KXBTC15M",
-            side: "no",
-            status: "filled",
-            fill_count: 5,
-            remaining_count: 0,
-            fill_price: 0.51,
-            fee: 0,
-            exchange_ts: new Date(now - 1_000),
-            received_at: new Date(now - 950),
-            raw: {},
-          }]
-        : [{
-            id: 2,
-            created_at: new Date(now - 900),
-            execution_group_id: "group",
-            venue: "polymarket",
-            client_order_id: "poly-client",
-            venue_order_id: "poly-order",
-            event_type: "trade",
-            asset_id: "token-yes",
-            market_id: "btc-updown-15m",
-            side: "BUY",
-            status: "matched",
-            fill_count: 5,
-            remaining_count: 0,
-            fill_price: 0.41,
-            fee: 0,
-            exchange_ts: new Date(now - 900),
-            received_at: new Date(now - 850),
-            raw: {},
-          }];
+      const rows =
+        platform === "kalshi"
+          ? [
+              {
+                id: 1,
+                created_at: new Date(now - 1_000),
+                execution_group_id: "group",
+                venue: "kalshi",
+                client_order_id: "kalshi-client",
+                venue_order_id: "kalshi-order",
+                event_type: "fill",
+                asset_id: null,
+                market_id: "KXBTC15M",
+                side: "no",
+                status: "filled",
+                fill_count: 5,
+                remaining_count: 0,
+                fill_price: 0.51,
+                fee: 0,
+                exchange_ts: new Date(now - 1_000),
+                received_at: new Date(now - 950),
+                raw: {},
+              },
+            ]
+          : [
+              {
+                id: 2,
+                created_at: new Date(now - 900),
+                execution_group_id: "group",
+                venue: "polymarket",
+                client_order_id: "poly-client",
+                venue_order_id: "poly-order",
+                event_type: "trade",
+                asset_id: "token-yes",
+                market_id: "btc-updown-15m",
+                side: "BUY",
+                status: "matched",
+                fill_count: 5,
+                remaining_count: 0,
+                fill_price: 0.41,
+                fee: 0,
+                exchange_ts: new Date(now - 900),
+                received_at: new Date(now - 850),
+                raw: {},
+              },
+            ];
       return {
         rows: rows as unknown as T[],
       };
@@ -142,7 +171,10 @@ test("trading activity store keeps rolling account value samples for wallet pnl 
   const second = await store.getPlatformActivity("kalshi", { now: now + 1_000, readiness: secondReadiness });
 
   assert.equal(first.sparkline.at(-1)?.value, 20);
-  assert.equal(second.sparkline.some((point) => point.value === 20), true);
+  assert.equal(
+    second.sparkline.some((point) => point.value === 20),
+    true,
+  );
   assert.equal(second.sparkline.at(-1)?.value, 22.5);
   assert.equal(second.portfolio.dayChangeDollars, 2.5);
   assert.equal(second.portfolio.dayChangePercent, 0.125);
@@ -160,28 +192,37 @@ test("trading activity store ignores zero placeholder sparkline points once acco
   secondReadiness.kalshi.balance = 109.41;
   const second = await store.getPlatformActivity("kalshi", { now: now + 1_000, readiness: secondReadiness });
 
-  assert.equal(first.sparkline.every((point) => point.value === 0), true);
-  assert.equal(second.sparkline.some((point) => point.value === 0), false);
+  assert.equal(
+    first.sparkline.every((point) => point.value === 0),
+    true,
+  );
+  assert.equal(
+    second.sparkline.some((point) => point.value === 0),
+    false,
+  );
   assert.equal(second.sparkline.at(-1)?.value, 109.41);
   assert.equal(second.portfolio.dayChangeDollars, 0);
   assert.equal(second.portfolio.dayChangePercent, 0);
 });
 
 test("venue stream events normalize into safe trading activity events", () => {
-  const event = tradingActivityEventFromVenueEvent({
-    venue: "polymarket",
-    clientOrderId: "client",
-    venueOrderId: "order",
-    eventType: "trade",
-    marketId: "btc-updown-15m",
-    side: "BUY",
-    status: "matched",
-    fillCount: 5,
-    fillPrice: 0.39,
-    exchangeTimestampMs: now - 2_000,
-    receivedAtMs: now - 1_900,
-    raw: { status: "matched" },
-  }, now);
+  const event = tradingActivityEventFromVenueEvent(
+    {
+      venue: "polymarket",
+      clientOrderId: "client",
+      venueOrderId: "order",
+      eventType: "trade",
+      marketId: "btc-updown-15m",
+      side: "BUY",
+      status: "matched",
+      fillCount: 5,
+      fillPrice: 0.39,
+      exchangeTimestampMs: now - 2_000,
+      receivedAtMs: now - 1_900,
+      raw: { status: "matched" },
+    },
+    now,
+  );
 
   assert.equal(event.platform, "polymarket");
   assert.equal(event.row?.activity, "Buy");
@@ -197,61 +238,85 @@ test("kalshi trading activity normalizes fixed-point account portfolio fields", 
       platform: "kalshi",
       connectionStatus: "live",
       lastUpdatedAt: now,
-      portfolio: { platform: "kalshi", portfolioValue: null, cashValue: null, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: now },
+      portfolio: {
+        platform: "kalshi",
+        portfolioValue: null,
+        cashValue: null,
+        dayChangeDollars: null,
+        dayChangePercent: null,
+        lastUpdatedAt: now,
+      },
       positions: [],
       openOrders: [],
       history: [],
-      sparkline: [{ timestamp: now - 1_000, value: 0 }, { timestamp: now, value: 0 }],
+      sparkline: [
+        { timestamp: now - 1_000, value: 0 },
+        { timestamp: now, value: 0 },
+      ],
     };
     const fetchFn: typeof fetch = (async (input, init) => {
       assert.ok(init?.signal, "Kalshi account requests should be abortable");
       const url = new URL(String(input));
       if (url.pathname.endsWith("/portfolio/balance")) {
-        return new Response(JSON.stringify({
-          balance: 1234,
-          portfolio_value: 5678,
-          updated_ts: now / 1_000,
-        }));
+        return new Response(
+          JSON.stringify({
+            balance: 1234,
+            portfolio_value: 5678,
+            updated_ts: now / 1_000,
+          }),
+        );
       }
       if (url.pathname.endsWith("/portfolio/positions")) {
-        return new Response(JSON.stringify({
-          market_positions: [{
-            ticker: "KXBTC15M-26MAY120015-15",
-            position_fp: "20.00",
-            market_exposure_dollars: "10.1000",
-            last_updated_ts: new Date(now - 1_000).toISOString(),
-          }],
-        }));
+        return new Response(
+          JSON.stringify({
+            market_positions: [
+              {
+                ticker: "KXBTC15M-26MAY120015-15",
+                position_fp: "20.00",
+                market_exposure_dollars: "10.1000",
+                last_updated_ts: new Date(now - 1_000).toISOString(),
+              },
+            ],
+          }),
+        );
       }
       if (url.pathname.endsWith("/portfolio/orders")) {
-        return new Response(JSON.stringify({
-          orders: [{
-            order_id: "kalshi-open",
-            ticker: "KXBTC15M-26MAY120015-15",
-            action: "buy",
-            outcome_side: "no",
-            status: "resting",
-            remaining_count_fp: "3.00",
-            yes_price_dollars: "0.5800",
-            no_price_dollars: "0.4200",
-            last_update_time: new Date(now - 500).toISOString(),
-          }],
-        }));
+        return new Response(
+          JSON.stringify({
+            orders: [
+              {
+                order_id: "kalshi-open",
+                ticker: "KXBTC15M-26MAY120015-15",
+                action: "buy",
+                outcome_side: "no",
+                status: "resting",
+                remaining_count_fp: "3.00",
+                yes_price_dollars: "0.5800",
+                no_price_dollars: "0.4200",
+                last_update_time: new Date(now - 500).toISOString(),
+              },
+            ],
+          }),
+        );
       }
       if (url.pathname.endsWith("/portfolio/fills")) {
-        return new Response(JSON.stringify({
-          fills: [{
-            fill_id: "kalshi-fill",
-            order_id: "kalshi-order",
-            ticker: "KXBTC15M-26MAY120015-15",
-            action: "buy",
-            outcome_side: "no",
-            count_fp: "5.00",
-            yes_price_dollars: "0.4800",
-            no_price_dollars: "0.5200",
-            created_time: new Date(now - 2_000).toISOString(),
-          }],
-        }));
+        return new Response(
+          JSON.stringify({
+            fills: [
+              {
+                fill_id: "kalshi-fill",
+                order_id: "kalshi-order",
+                ticker: "KXBTC15M-26MAY120015-15",
+                action: "buy",
+                outcome_side: "no",
+                count_fp: "5.00",
+                yes_price_dollars: "0.4800",
+                no_price_dollars: "0.5200",
+                created_time: new Date(now - 2_000).toISOString(),
+              },
+            ],
+          }),
+        );
       }
       throw new Error(`unexpected URL ${url.toString()}`);
     }) as typeof fetch;
@@ -291,34 +356,50 @@ test("polymarket trading activity uses account positions instead of inferred eve
     platform: "polymarket",
     connectionStatus: "live",
     lastUpdatedAt: now,
-    portfolio: { platform: "polymarket", portfolioValue: 999, cashValue: 999, dayChangeDollars: -999, dayChangePercent: -0.9, lastUpdatedAt: now },
-    positions: [{
-      id: "bad-inferred-token",
-      market: "bad event id",
-      outcome: "BUY",
-      shares: 99,
-      value: 99,
-      averagePrice: 1,
-      updatedAt: now,
-    }],
+    portfolio: {
+      platform: "polymarket",
+      portfolioValue: 999,
+      cashValue: 999,
+      dayChangeDollars: -999,
+      dayChangePercent: -0.9,
+      lastUpdatedAt: now,
+    },
+    positions: [
+      {
+        id: "bad-inferred-token",
+        market: "bad event id",
+        outcome: "BUY",
+        shares: 99,
+        value: 99,
+        averagePrice: 1,
+        updatedAt: now,
+      },
+    ],
     openOrders: [],
     history: [],
-    sparkline: [{ timestamp: now - 1_000, value: 999 }, { timestamp: now, value: 999 }],
+    sparkline: [
+      { timestamp: now - 1_000, value: 999 },
+      { timestamp: now, value: 999 },
+    ],
   };
   const fetchFn: typeof fetch = (async (input) => {
     const url = new URL(String(input));
     assert.equal(url.searchParams.get("user"), wallet);
     if (url.pathname === "/positions") {
-      return new Response(JSON.stringify([{
-        asset: "real-token",
-        title: "Bitcoin Up or Down",
-        outcome: "YES",
-        size: 7,
-        currentValue: 3.5,
-        avgPrice: 0.5,
-        cashPnl: 1.2,
-        realizedPnl: 0.3,
-      }]));
+      return new Response(
+        JSON.stringify([
+          {
+            asset: "real-token",
+            title: "Bitcoin Up or Down",
+            outcome: "YES",
+            size: 7,
+            currentValue: 3.5,
+            avgPrice: 0.5,
+            cashPnl: 1.2,
+            realizedPnl: 0.3,
+          },
+        ]),
+      );
     }
     if (url.pathname === "/value") return new Response(JSON.stringify([{ user: wallet, value: 3.5 }]));
     if (url.pathname === "/activity") return new Response(JSON.stringify([]));
@@ -329,21 +410,24 @@ test("polymarket trading activity uses account positions instead of inferred eve
     now,
     fetchFn,
     history: [],
-    getPolymarketClient: async () => ({
-      getBalanceAllowance: async () => ({ balance: "4570000", allowance: "10000000" }),
-      getOpenOrders: async () => [{
-        id: "open-real",
-        market: "real-market",
-        asset_id: "real-token",
-        side: "BUY",
-        original_size: "5",
-        size_matched: "2",
-        price: "0.4",
-        outcome: "YES",
-        status: "live",
-        created_at: Math.floor(now / 1_000),
-      }],
-    } as never),
+    getPolymarketClient: async () =>
+      ({
+        getBalanceAllowance: async () => ({ balance: "4570000", allowance: "10000000" }),
+        getOpenOrders: async () => [
+          {
+            id: "open-real",
+            market: "real-market",
+            asset_id: "real-token",
+            side: "BUY",
+            original_size: "5",
+            size_matched: "2",
+            price: "0.4",
+            outcome: "YES",
+            status: "live",
+            created_at: Math.floor(now / 1_000),
+          },
+        ],
+      }) as never,
   });
 
   assert.equal(result.connectionStatus, "live");
@@ -364,11 +448,21 @@ test("polymarket trading activity degrades to CLOB cash when the data-api is dow
     platform: "polymarket",
     connectionStatus: "live",
     lastUpdatedAt: now,
-    portfolio: { platform: "polymarket", portfolioValue: null, cashValue: null, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: now },
+    portfolio: {
+      platform: "polymarket",
+      portfolioValue: null,
+      cashValue: null,
+      dayChangeDollars: null,
+      dayChangePercent: null,
+      lastUpdatedAt: now,
+    },
     positions: [],
     openOrders: [],
     history: [],
-    sparkline: [{ timestamp: now - 1_000, value: 0 }, { timestamp: now, value: 0 }],
+    sparkline: [
+      { timestamp: now - 1_000, value: 0 },
+      { timestamp: now, value: 0 },
+    ],
   };
   // Every data-api endpoint (/positions, /value, /activity) fails transiently — this must NOT collapse the
   // whole venue to null, because the authoritative CLOB collateral balance still succeeds.
@@ -378,10 +472,11 @@ test("polymarket trading activity degrades to CLOB cash when the data-api is dow
     now,
     fetchFn,
     history: [],
-    getPolymarketClient: async () => ({
-      getBalanceAllowance: async () => ({ balance: "12340000", allowance: "10000000" }),
-      getOpenOrders: async () => [],
-    } as never),
+    getPolymarketClient: async () =>
+      ({
+        getBalanceAllowance: async () => ({ balance: "12340000", allowance: "10000000" }),
+        getOpenOrders: async () => [],
+      }) as never,
   });
   assert.equal(result.portfolio.cashValue, 12.34); // CLOB collateral balance survived the data-api outage
   assert.equal(result.portfolio.portfolioValue, 12.34); // venue total = cash (no positions) — NOT null
@@ -394,11 +489,21 @@ test("polymarket trading activity reports unavailable (null) only when every sou
     platform: "polymarket",
     connectionStatus: "live",
     lastUpdatedAt: now,
-    portfolio: { platform: "polymarket", portfolioValue: null, cashValue: null, dayChangeDollars: null, dayChangePercent: null, lastUpdatedAt: now },
+    portfolio: {
+      platform: "polymarket",
+      portfolioValue: null,
+      cashValue: null,
+      dayChangeDollars: null,
+      dayChangePercent: null,
+      lastUpdatedAt: now,
+    },
     positions: [],
     openOrders: [],
     history: [],
-    sparkline: [{ timestamp: now - 1_000, value: 0 }, { timestamp: now, value: 0 }],
+    sparkline: [
+      { timestamp: now - 1_000, value: 0 },
+      { timestamp: now, value: 0 },
+    ],
   };
   const fetchFn: typeof fetch = (async () => new Response("err", { status: 503 })) as typeof fetch;
   const result = await accountBackedPlatformActivity("polymarket", fallback, {
@@ -407,10 +512,13 @@ test("polymarket trading activity reports unavailable (null) only when every sou
     fetchFn,
     history: [],
     readiness: null,
-    getPolymarketClient: async () => ({
-      getBalanceAllowance: async () => { throw new Error("clob down"); },
-      getOpenOrders: async () => [],
-    } as never),
+    getPolymarketClient: async () =>
+      ({
+        getBalanceAllowance: async () => {
+          throw new Error("clob down");
+        },
+        getOpenOrders: async () => [],
+      }) as never,
   });
   // A total wipeout reports null (so the UI shows "unavailable" / carry-forward engages), never a fake $0
   // that would corrupt the combined total and the equity curve.

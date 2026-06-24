@@ -72,40 +72,46 @@ export class PortfolioEquityStore {
   constructor(private readonly db: Queryable) {}
 
   async record(input: PortfolioEquitySampleInput): Promise<void> {
-    await this.db.query(`
+    await this.db.query(
+      `
       INSERT INTO portfolio_equity_snapshots (
         sampled_at_ms, kalshi_value, polymarket_value, combined_value,
         kalshi_cash, polymarket_cash, source
       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [
-      Math.round(input.sampledAtMs),
-      input.kalshiValue,
-      input.polymarketValue,
-      input.combinedValue,
-      input.kalshiCash,
-      input.polymarketCash,
-      input.source ?? "sampled",
-    ]);
-  }
-
-  /** Bulk insert for the optional realized-P&L backfill; idempotent for reconstructed rows. */
-  async recordMany(inputs: PortfolioEquitySampleInput[]): Promise<void> {
-    for (const input of inputs) {
-      await this.db.query(`
-        INSERT INTO portfolio_equity_snapshots (
-          sampled_at_ms, kalshi_value, polymarket_value, combined_value,
-          kalshi_cash, polymarket_cash, source
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT DO NOTHING
-      `, [
+    `,
+      [
         Math.round(input.sampledAtMs),
         input.kalshiValue,
         input.polymarketValue,
         input.combinedValue,
         input.kalshiCash,
         input.polymarketCash,
-        input.source ?? "reconstructed",
-      ]);
+        input.source ?? "sampled",
+      ],
+    );
+  }
+
+  /** Bulk insert for the optional realized-P&L backfill; idempotent for reconstructed rows. */
+  async recordMany(inputs: PortfolioEquitySampleInput[]): Promise<void> {
+    for (const input of inputs) {
+      await this.db.query(
+        `
+        INSERT INTO portfolio_equity_snapshots (
+          sampled_at_ms, kalshi_value, polymarket_value, combined_value,
+          kalshi_cash, polymarket_cash, source
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT DO NOTHING
+      `,
+        [
+          Math.round(input.sampledAtMs),
+          input.kalshiValue,
+          input.polymarketValue,
+          input.combinedValue,
+          input.kalshiCash,
+          input.polymarketCash,
+          input.source ?? "reconstructed",
+        ],
+      );
     }
   }
 
@@ -122,7 +128,8 @@ export class PortfolioEquityStore {
    */
   async listSince(sinceMs: number, maxPoints: number): Promise<PortfolioEquityPoint[]> {
     const cap = Math.max(1, Math.floor(maxPoints));
-    const result = await this.db.query<{ sampled_at_ms: string | number; combined_value: string | number }>(`
+    const result = await this.db.query<{ sampled_at_ms: string | number; combined_value: string | number }>(
+      `
       WITH ranged AS (
         SELECT sampled_at_ms, id, kalshi_value, polymarket_value, combined_value
         FROM portfolio_equity_snapshots
@@ -169,14 +176,18 @@ export class PortfolioEquityStore {
       FROM ranked
       WHERE rn = 1
       ORDER BY sampled_at_ms ASC
-    `, [Math.round(sinceMs), cap]);
+    `,
+      [Math.round(sinceMs), cap],
+    );
     return result.rows
       .map((row) => ({ t: numberFrom(row.sampled_at_ms) ?? 0, v: numberFrom(row.combined_value) ?? 0 }))
       .filter((p) => Number.isFinite(p.t));
   }
 
   async earliestSampledAtMs(): Promise<number | null> {
-    const result = await this.db.query<{ lo: string | number | null }>(`SELECT MIN(sampled_at_ms) AS lo FROM portfolio_equity_snapshots`);
+    const result = await this.db.query<{ lo: string | number | null }>(
+      `SELECT MIN(sampled_at_ms) AS lo FROM portfolio_equity_snapshots`,
+    );
     return numberFrom(result.rows[0]?.lo);
   }
 
@@ -187,6 +198,8 @@ export class PortfolioEquityStore {
 
   /** Retention: drop live samples older than `beforeMs` (keep reconstructed history). */
   async prune(beforeMs: number): Promise<void> {
-    await this.db.query(`DELETE FROM portfolio_equity_snapshots WHERE source = 'sampled' AND sampled_at_ms < $1`, [Math.round(beforeMs)]);
+    await this.db.query(`DELETE FROM portfolio_equity_snapshots WHERE source = 'sampled' AND sampled_at_ms < $1`, [
+      Math.round(beforeMs),
+    ]);
   }
 }

@@ -3,7 +3,11 @@ import type { VenueOrderEventInput } from "../db/venue-order-events";
 import type { LiveExecutionReadiness, Venue } from "../types";
 import type { AppConfig } from "../config";
 import { accountBackedPlatformActivity } from "./account-sources";
-import { defaultPolymarketClientFactory, resetPolymarketApiCredsMemo, type PolymarketClobLike } from "../execution/live-clients";
+import {
+  defaultPolymarketClientFactory,
+  resetPolymarketApiCredsMemo,
+  type PolymarketClobLike,
+} from "../execution/live-clients";
 import type {
   TradingActivityEvent,
   TradingActivitySide,
@@ -96,7 +100,9 @@ function sanitizeAccountValuePoints(points: TradingSparklinePoint[], now: number
 }
 
 function shouldSeedAccountHistory(activity: TradingPlatformActivity): boolean {
-  return isFiniteNumber(activity.portfolio.dayChangeDollars) && Math.abs(activity.portfolio.dayChangeDollars) > 0.000001;
+  return (
+    isFiniteNumber(activity.portfolio.dayChangeDollars) && Math.abs(activity.portfolio.dayChangeDollars) > 0.000001
+  );
 }
 
 function portfolioWithAccountValueChange(
@@ -105,7 +111,7 @@ function portfolioWithAccountValueChange(
 ): TradingPortfolioSummary {
   const latestValue = isFiniteNumber(portfolio.portfolioValue)
     ? portfolio.portfolioValue
-    : points.at(-1)?.value ?? null;
+    : (points.at(-1)?.value ?? null);
   if (!isFiniteNumber(latestValue)) return portfolio;
 
   const baseline = points[0]?.value ?? latestValue;
@@ -135,12 +141,10 @@ function hasFill(status: string | null | undefined, fillCount: number | null): b
   return FILLED_STATUSES.has(statusKey(status));
 }
 
-function marketNameFromEvent(event: Pick<VenueOrderEventRow, "market_id" | "asset_id" | "venue_order_id" | "client_order_id">): string {
-  return event.market_id
-    ?? event.asset_id
-    ?? event.venue_order_id
-    ?? event.client_order_id
-    ?? "Live market";
+function marketNameFromEvent(
+  event: Pick<VenueOrderEventRow, "market_id" | "asset_id" | "venue_order_id" | "client_order_id">,
+): string {
+  return event.market_id ?? event.asset_id ?? event.venue_order_id ?? event.client_order_id ?? "Live market";
 }
 
 function outcomeFromEvent(side: string | null | undefined, assetId?: string | null): string {
@@ -179,7 +183,7 @@ function historyRowFromDbEvent(event: VenueOrderEventRow): TradingHistoryRow | n
 function openOrderFromDbEvent(event: VenueOrderEventRow): TradingOpenOrder | null {
   if (!OPEN_STATUSES.has(statusKey(event.status))) return null;
   const remaining = toNumber(event.remaining_count);
-  const shares = remaining == null || remaining <= 0 ? toNumber(event.fill_count) ?? 0 : remaining;
+  const shares = remaining == null || remaining <= 0 ? (toNumber(event.fill_count) ?? 0) : remaining;
   if (shares <= 0) return null;
   const price = toNumber(event.fill_price);
   return {
@@ -220,7 +224,8 @@ function buildPositions(history: TradingHistoryRow[]): TradingPosition[] {
       current.boughtShares += row.shares;
     }
     current.position.averagePrice = current.boughtShares > 0 ? current.grossCost / current.boughtShares : null;
-    current.position.value = current.position.averagePrice == null ? null : current.position.shares * current.position.averagePrice;
+    current.position.value =
+      current.position.averagePrice == null ? null : current.position.shares * current.position.averagePrice;
     byMarket.set(key, current);
   }
   return [...byMarket.values()]
@@ -244,7 +249,13 @@ function buildSparkline(history: TradingHistoryRow[], cashValue: number | null, 
   return points;
 }
 
-function portfolioFromReadiness(platform: TradingPlatform, readiness: LiveExecutionReadiness | null | undefined, positions: TradingPosition[], history: TradingHistoryRow[], now: number): TradingPortfolioSummary {
+function portfolioFromReadiness(
+  platform: TradingPlatform,
+  readiness: LiveExecutionReadiness | null | undefined,
+  positions: TradingPosition[],
+  history: TradingHistoryRow[],
+  now: number,
+): TradingPortfolioSummary {
   const venueReadiness = platform === "kalshi" ? readiness?.kalshi : readiness?.polymarket;
   const cashValue = venueReadiness?.collateralBalanceNormalized ?? venueReadiness?.balance ?? null;
   const positionValue = positions.reduce((total, position) => total + (position.value ?? 0), 0);
@@ -252,16 +263,17 @@ function portfolioFromReadiness(platform: TradingPlatform, readiness: LiveExecut
   const dayChangeDollars = history
     .filter((row) => row.timeMs >= now - 24 * 60 * 60_000)
     .reduce((total, row) => total + (row.value ?? 0), 0);
-  const basis = portfolioValue == null || Math.abs(portfolioValue - dayChangeDollars) < 0.000001
-    ? null
-    : portfolioValue - dayChangeDollars;
+  const basis =
+    portfolioValue == null || Math.abs(portfolioValue - dayChangeDollars) < 0.000001
+      ? null
+      : portfolioValue - dayChangeDollars;
   return {
     platform,
     portfolioValue,
     cashValue,
     dayChangeDollars,
     dayChangePercent: basis == null ? null : dayChangeDollars / Math.abs(basis),
-    lastUpdatedAt: venueReadiness?.lastCheckedAt ?? (history[0]?.timeMs ?? null),
+    lastUpdatedAt: venueReadiness?.lastCheckedAt ?? history[0]?.timeMs ?? null,
   };
 }
 
@@ -303,7 +315,10 @@ export class TradingActivityStore {
   };
   // "Latest available" per-venue account value, carried forward when a live fetch is unavailable so the
   // combined total stays Kalshi + Polymarket (and the equity curve does not collapse to one venue).
-  private readonly lastKnownAccountValue: Record<TradingPlatform, { portfolioValue: number; cashValue: number | null; positions: TradingPosition[]; at: number } | null> = {
+  private readonly lastKnownAccountValue: Record<
+    TradingPlatform,
+    { portfolioValue: number; cashValue: number | null; positions: TradingPosition[]; at: number } | null
+  > = {
     kalshi: null,
     polymarket: null,
   };
@@ -319,7 +334,10 @@ export class TradingActivityStore {
     private readonly fetchFn: typeof fetch = fetch,
   ) {}
 
-  async getPlatformActivity(platform: TradingPlatform, options: TradingActivityOptions = {}): Promise<TradingPlatformActivity> {
+  async getPlatformActivity(
+    platform: TradingPlatform,
+    options: TradingActivityOptions = {},
+  ): Promise<TradingPlatformActivity> {
     const now = options.now ?? Date.now();
     // Cache only the account-backed (config) path — that is the one doing the expensive multi-call upstream
     // fetch that needs to stay off the dashboard poll hot path. The db-only/readiness path is cheap and
@@ -327,7 +345,8 @@ export class TradingActivityStore {
     const cached = this.activityCache[platform];
     if (this.config && cached && now - cached.at < ACCOUNT_ACTIVITY_CACHE_MS) return cached.value;
     const limit = options.limit ?? 250;
-    const result = await this.db.query<VenueOrderEventRow>(`
+    const result = await this.db.query<VenueOrderEventRow>(
+      `
       SELECT
         id, created_at, execution_group_id, venue, client_order_id, venue_order_id,
         event_type, asset_id, market_id, side, status,
@@ -336,12 +355,16 @@ export class TradingActivityStore {
       WHERE venue = $1
       ORDER BY COALESCE(exchange_ts, received_at, created_at) DESC, id DESC
       LIMIT $2
-    `, [platform, limit]);
+    `,
+      [platform, limit],
+    );
     const history = result.rows
       .map(historyRowFromDbEvent)
       .filter((row): row is TradingHistoryRow => row != null)
       .slice(0, 100);
-    const openOrders = dedupeOpenOrders(result.rows.map(openOrderFromDbEvent).filter((order): order is TradingOpenOrder => order != null));
+    const openOrders = dedupeOpenOrders(
+      result.rows.map(openOrderFromDbEvent).filter((order): order is TradingOpenOrder => order != null),
+    );
     const positions = buildPositions(history);
     const portfolio = portfolioFromReadiness(platform, options.readiness, positions, history, now);
     const fallback: TradingPlatformActivity = {
@@ -364,7 +387,10 @@ export class TradingActivityStore {
           getPolymarketClient: () => this.getPolymarketClient(),
           // On a Polymarket 401 (stale L2 creds), drop the dashboard client + the shared creds memo so the
           // next account refresh re-derives — the dashboard counterpart of the trading client's self-heal.
-          onAuthError: () => { this.polymarketClientPromise = null; resetPolymarketApiCredsMemo(); },
+          onAuthError: () => {
+            this.polymarketClientPromise = null;
+            resetPolymarketApiCredsMemo();
+          },
         })
       : fallback;
     const carried = this.applyLastKnownAccountValue(activity, now);
@@ -418,10 +444,14 @@ export class TradingActivityStore {
   private getPolymarketClient(): Promise<PolymarketClobLike> {
     if (!this.config) throw new Error("Polymarket account client requires worker config");
     if (!this.polymarketClientPromise) {
-      const pending = defaultPolymarketClientFactory(this.config).then((bundle) => "client" in bundle ? bundle.client : bundle);
+      const pending = defaultPolymarketClientFactory(this.config).then((bundle) =>
+        "client" in bundle ? bundle.client : bundle,
+      );
       // Never cache a rejected client promise (e.g. a transient api-key derive timeout): clear it on failure
       // so the next account refresh retries fresh instead of being poisoned for the process lifetime.
-      pending.catch(() => { if (this.polymarketClientPromise === pending) this.polymarketClientPromise = null; });
+      pending.catch(() => {
+        if (this.polymarketClientPromise === pending) this.polymarketClientPromise = null;
+      });
       this.polymarketClientPromise = pending;
     }
     return this.polymarketClientPromise;
@@ -455,27 +485,32 @@ function dedupeOpenOrders(orders: TradingOpenOrder[]): TradingOpenOrder[] {
   return [...byId.values()].sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
-export function tradingActivityEventFromVenueEvent(event: VenueOrderEventInput, now = Date.now()): TradingActivityEvent {
+export function tradingActivityEventFromVenueEvent(
+  event: VenueOrderEventInput,
+  now = Date.now(),
+): TradingActivityEvent {
   const platform = normalizePlatform(event.venue);
   const shares = event.fillCount ?? 0;
   const price = event.fillPrice ?? null;
   const activity = normalizeSide(event.side);
   const hasHistory = hasFill(event.eventType ?? event.status, shares);
   const timeMs = event.exchangeTimestampMs ?? event.receivedAtMs ?? now;
-  const row: TradingHistoryRow | null = hasHistory && shares > 0
-    ? {
-        id: event.venueOrderId ?? event.clientOrderId ?? `${platform}-${timeMs}`,
-        activity,
-        marketName: event.marketId ?? event.assetId ?? event.venueOrderId ?? event.clientOrderId ?? "Live market",
-        outcome: outcomeFromEvent(event.side, event.assetId),
-        shares,
-    value: price == null ? null : activity === "Buy" ? -roundCurrency(shares * price) : roundCurrency(shares * price),
-        timeMs,
-        venueOrderId: event.venueOrderId ?? null,
-        clientOrderId: event.clientOrderId ?? null,
-        status: event.status,
-      }
-    : null;
+  const row: TradingHistoryRow | null =
+    hasHistory && shares > 0
+      ? {
+          id: event.venueOrderId ?? event.clientOrderId ?? `${platform}-${timeMs}`,
+          activity,
+          marketName: event.marketId ?? event.assetId ?? event.venueOrderId ?? event.clientOrderId ?? "Live market",
+          outcome: outcomeFromEvent(event.side, event.assetId),
+          shares,
+          value:
+            price == null ? null : activity === "Buy" ? -roundCurrency(shares * price) : roundCurrency(shares * price),
+          timeMs,
+          venueOrderId: event.venueOrderId ?? null,
+          clientOrderId: event.clientOrderId ?? null,
+          status: event.status,
+        }
+      : null;
   return {
     platform,
     receivedAt: now,

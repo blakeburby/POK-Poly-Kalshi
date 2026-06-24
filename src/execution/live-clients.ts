@@ -21,7 +21,13 @@ import type { AppConfig } from "../config";
 import { roundPrice } from "./num-utils";
 import { getKalshiHeaders } from "../kalshi/auth";
 import { KalshiFixOrderSession, type KalshiFixOrderExecution, type KalshiFixOrderInput } from "../kalshi/fix";
-import type { ArbLeg, LiveKalshiHedgeTimeInForce, LiveOrderPlacementMode, Venue, VenueExecutionReadiness } from "../types";
+import type {
+  ArbLeg,
+  LiveKalshiHedgeTimeInForce,
+  LiveOrderPlacementMode,
+  Venue,
+  VenueExecutionReadiness,
+} from "../types";
 
 export interface LiveOrderContext {
   executionGroupId: string;
@@ -116,7 +122,11 @@ export interface VenueOrderClient {
   readonly venue: Venue;
   preflightOrder?(leg: ArbLeg, context: LiveOrderContext): Promise<string | null>;
   placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult>;
-  recoverTimedOutOrder?(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null>;
+  recoverTimedOutOrder?(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+  ): Promise<VenueOrderResult | null>;
   // C1 (default-off): reduce an existing one-sided fill toward flat with a loss-bounded opposing order.
   // Optional — live venue SELL adapters are the documented final enablement step; absent on BUY-only
   // clients today, so the executor falls through to the unchanged quarantine/hardlock path.
@@ -129,12 +139,28 @@ export interface PolymarketClobLike {
   getOrderBook(tokenID: string): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">>;
   getTickSize?(tokenID: string): Promise<TickSize | string>;
   getNegRisk?(tokenID: string): Promise<boolean>;
-  createOrder(order: { tokenID: string; price: number; size: number; side: Side; metadata?: string }, options: { tickSize: TickSize; negRisk?: boolean }): Promise<SignedOrder>;
-  createMarketOrder?(order: { tokenID: string; price: number; amount: number; side: Side; orderType?: OrderType.FOK | OrderType.FAK; metadata?: string }, options: { tickSize: TickSize; negRisk?: boolean }): Promise<SignedOrder>;
+  createOrder(
+    order: { tokenID: string; price: number; size: number; side: Side; metadata?: string },
+    options: { tickSize: TickSize; negRisk?: boolean },
+  ): Promise<SignedOrder>;
+  createMarketOrder?(
+    order: {
+      tokenID: string;
+      price: number;
+      amount: number;
+      side: Side;
+      orderType?: OrderType.FOK | OrderType.FAK;
+      metadata?: string;
+    },
+    options: { tickSize: TickSize; negRisk?: boolean },
+  ): Promise<SignedOrder>;
   postOrder(order: SignedOrder, orderType?: OrderType, postOnly?: boolean, deferExec?: boolean): Promise<unknown>;
   cancelOrder?(payload: { orderID: string }): Promise<unknown>;
   getOrder?(orderID: string): Promise<unknown>;
-  getOpenOrders?(params?: { id?: string; market?: string; asset_id?: string }, onlyFirstPage?: boolean): Promise<unknown[]>;
+  getOpenOrders?(
+    params?: { id?: string; market?: string; asset_id?: string },
+    onlyFirstPage?: boolean,
+  ): Promise<unknown[]>;
   getTrades?(params?: { market?: string; asset_id?: string }, onlyFirstPage?: boolean): Promise<unknown[]>;
   getBalanceAllowance(params?: { asset_type: AssetType; token_id?: string }): Promise<BalanceAllowanceResponse>;
   updateBalanceAllowance(params?: { asset_type: AssetType; token_id?: string }): Promise<void>;
@@ -193,7 +219,7 @@ function finiteOrNull(value: unknown): number | null {
 }
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value != null && typeof value === "object" ? value as Record<string, unknown> : null;
+  return value != null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 function normalizedCollateralAmount(value: number | null): number | null {
@@ -225,8 +251,8 @@ export function sanitizeError(error: unknown): string {
       // "Converting circular structure to JSON" (a socket got serialized upstream). Surface the code/status
       // so the real cause (timeout=ECONNABORTED/ETIMEDOUT, auth=401, etc.) is never masked.
       const code = (error as { code?: unknown }).code;
-      const status = (error as { response?: { status?: unknown } }).response?.status
-        ?? (error as { status?: unknown }).status;
+      const status =
+        (error as { response?: { status?: unknown } }).response?.status ?? (error as { status?: unknown }).status;
       const tags = [typeof code === "string" ? code : null, status != null ? `status=${status}` : null].filter(Boolean);
       if (tags.length > 0) message = `${message} (${tags.join(" ")})`;
     } else {
@@ -281,7 +307,7 @@ export async function checkPolymarketGeoblock(
       };
     }
 
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     const blocked = payload.blocked;
     const country = stringOrNull(payload.country);
     const region = stringOrNull(payload.region);
@@ -313,10 +339,9 @@ export async function checkPolymarketGeoblock(
   }
 }
 
-function geoblockReadinessFields(status: PolymarketGeoblockStatus | null): Pick<
-  VenueExecutionReadiness,
-  "geoblockBlocked" | "geoblockCountry" | "geoblockRegion" | "geoblockCheckedAt"
-> {
+function geoblockReadinessFields(
+  status: PolymarketGeoblockStatus | null,
+): Pick<VenueExecutionReadiness, "geoblockBlocked" | "geoblockCountry" | "geoblockRegion" | "geoblockCheckedAt"> {
   return {
     geoblockBlocked: status?.blocked ?? null,
     geoblockCountry: status?.country ?? null,
@@ -379,7 +404,10 @@ function kalshiBalanceEndpoint(config: AppConfig): { url: URL; signPath: string 
   return { url, signPath: `${url.pathname}${url.search}` };
 }
 
-function firstFiniteRecordValue(record: Record<string, unknown>, keys: string[]): { key: string; value: number } | null {
+function firstFiniteRecordValue(
+  record: Record<string, unknown>,
+  keys: string[],
+): { key: string; value: number } | null {
   for (const key of keys) {
     const value = finiteOrNull(record[key]);
     if (value != null) return { key, value };
@@ -387,7 +415,11 @@ function firstFiniteRecordValue(record: Record<string, unknown>, keys: string[])
   return null;
 }
 
-function kalshiCashBalanceFromPayload(payload: Record<string, unknown>): { balance: number | null; rawBalance: number | null; rawField: string | null } {
+function kalshiCashBalanceFromPayload(payload: Record<string, unknown>): {
+  balance: number | null;
+  rawBalance: number | null;
+  rawField: string | null;
+} {
   const record = recordOrNull(payload.balance) ?? payload;
   const dollars = firstFiniteRecordValue(record, [
     "available_balance_dollars",
@@ -486,9 +518,7 @@ function kalshiOrderRecord(payload: Record<string, unknown>): Record<string, unk
 
 function kalshiOrderRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
   const orders = Array.isArray(payload.orders) ? payload.orders : [];
-  return orders
-    .map((order) => recordOrNull(order))
-    .filter((order): order is Record<string, unknown> => order != null);
+  return orders.map((order) => recordOrNull(order)).filter((order): order is Record<string, unknown> => order != null);
 }
 
 function kalshiFillCount(record: Record<string, unknown>): number | null {
@@ -538,22 +568,36 @@ function normalizeKalshiUiSession(raw: unknown): KalshiUiQuickOrderSession | nul
     marketIds: stringRecordOrNull(record.marketIds) ?? undefined,
     marketIdByTicker: stringRecordOrNull(record.marketIdByTicker) ?? undefined,
     markets: Array.isArray(record.markets)
-      ? record.markets.map((market) => recordOrNull(market)).filter((market): market is Record<string, unknown> => market != null)
+      ? record.markets
+          .map((market) => recordOrNull(market))
+          .filter((market): market is Record<string, unknown> => market != null)
       : undefined,
     allowStaticMarketIdMap: record.allowStaticMarketIdMap === true,
   };
 }
 
-export function readKalshiUiQuickOrderSession(path: string): { session: KalshiUiQuickOrderSession | null; reason: string | null } {
+export function readKalshiUiQuickOrderSession(path: string): {
+  session: KalshiUiQuickOrderSession | null;
+  reason: string | null;
+} {
   const trimmedPath = path.trim();
   if (!trimmedPath) return { session: null, reason: "KALSHI_UI_SESSION_PATH is required for UI Quick Order mode" };
   try {
-    if (!existsSync(trimmedPath)) return { session: null, reason: `Kalshi UI session file not found at ${trimmedPath}` };
+    if (!existsSync(trimmedPath))
+      return { session: null, reason: `Kalshi UI session file not found at ${trimmedPath}` };
     const stat = statSync(trimmedPath);
     if (!stat.isFile()) return { session: null, reason: "Kalshi UI session path is not a file" };
-    if ((stat.mode & 0o077) !== 0) return { session: null, reason: "Kalshi UI session file must not be readable, writable, or executable by group/other" };
+    if ((stat.mode & 0o077) !== 0)
+      return {
+        session: null,
+        reason: "Kalshi UI session file must not be readable, writable, or executable by group/other",
+      };
     const session = normalizeKalshiUiSession(JSON.parse(readFileSync(trimmedPath, "utf8")));
-    if (!session) return { session: null, reason: "Kalshi UI session file must include userId, csrfToken, and cookie or x-aws-waf-token header" };
+    if (!session)
+      return {
+        session: null,
+        reason: "Kalshi UI session file must include userId, csrfToken, and cookie or x-aws-waf-token header",
+      };
     return { session, reason: null };
   } catch (error) {
     return { session: null, reason: `Kalshi UI session file could not be read: ${sanitizeError(error)}` };
@@ -665,16 +709,28 @@ function kalshiUiDollars(record: Record<string, unknown>, dollarKeys: string[], 
 
 export function kalshiUiFillPrice(record: Record<string, unknown>): number | null {
   const fillCount = kalshiUiFillCount(record);
-  const takerCost = kalshiUiDollars(record, ["taker_fill_cost_dollars", "maker_fill_cost_dollars"], ["taker_fill_cost", "maker_fill_cost"]);
+  const takerCost = kalshiUiDollars(
+    record,
+    ["taker_fill_cost_dollars", "maker_fill_cost_dollars"],
+    ["taker_fill_cost", "maker_fill_cost"],
+  );
   if (fillCount != null && fillCount > 0 && takerCost != null) return roundPrice(takerCost / fillCount);
   return kalshiUiDollars(record, ["average_fill_price", "price_dollars"], ["price"]);
 }
 
 export function kalshiUiFee(record: Record<string, unknown>): number | null {
-  return kalshiUiDollars(record, ["average_fee_paid", "taker_fees_dollars", "maker_fees_dollars"], ["taker_fees", "maker_fees"]);
+  return kalshiUiDollars(
+    record,
+    ["average_fee_paid", "taker_fees_dollars", "maker_fees_dollars"],
+    ["taker_fees", "maker_fees"],
+  );
 }
 
-export function kalshiUiOrderStatus(record: Record<string, unknown>, fillCount: number | null, requestedSize: number): string {
+export function kalshiUiOrderStatus(
+  record: Record<string, unknown>,
+  fillCount: number | null,
+  requestedSize: number,
+): string {
   if (isExactFillCount(fillCount, requestedSize)) return "filled";
   const status = String(record.status ?? "").trim();
   const remaining = kalshiUiRemainingCount(record);
@@ -717,14 +773,19 @@ export class KalshiOrderClient implements VenueOrderClient {
   readonly venue = "kalshi" as const;
   private cachedReadiness: VenueExecutionReadiness | null = null;
 
-  constructor(private readonly config: AppConfig, private readonly fetchFn: typeof fetch = fetch) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly fetchFn: typeof fetch = fetch,
+  ) {}
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
     return this.checkReadiness(now, {
-      requiredCollateral: roundPrice(Math.max(
-        this.config.liveOrderSize + this.config.liveCollateralBufferDollars,
-        this.config.liveKalshiMinCashDollars,
-      )),
+      requiredCollateral: roundPrice(
+        Math.max(
+          this.config.liveOrderSize + this.config.liveCollateralBufferDollars,
+          this.config.liveKalshiMinCashDollars,
+        ),
+      ),
     });
   }
 
@@ -740,9 +801,10 @@ export class KalshiOrderClient implements VenueOrderClient {
     now = Date.now(),
     options: { force?: boolean; requiredCollateral?: number } = {},
   ): Promise<VenueExecutionReadiness> {
-    const requiredCollateral = options.requiredCollateral == null
-      ? undefined
-      : roundPrice(Math.max(options.requiredCollateral, this.config.liveKalshiMinCashDollars));
+    const requiredCollateral =
+      options.requiredCollateral == null
+        ? undefined
+        : roundPrice(Math.max(options.requiredCollateral, this.config.liveKalshiMinCashDollars));
     const configured = requireKalshiConfigured(now);
     if (!configured.ready || requiredCollateral == null) {
       const readiness = { ...configured, requiredCollateral };
@@ -752,10 +814,10 @@ export class KalshiOrderClient implements VenueOrderClient {
 
     const cachedRequiredCollateral = this.cachedReadiness?.requiredCollateral ?? 0;
     if (
-      !options.force
-      && this.cachedReadiness
-      && cachedRequiredCollateral + 1e-9 >= requiredCollateral
-      && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000
+      !options.force &&
+      this.cachedReadiness &&
+      cachedRequiredCollateral + 1e-9 >= requiredCollateral &&
+      now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000
     ) {
       return this.cachedReadiness;
     }
@@ -768,11 +830,12 @@ export class KalshiOrderClient implements VenueOrderClient {
       });
       const text = await response.text();
       if (!response.ok) throw new Error(`Kalshi balance query failed ${response.status}: ${sanitizeError(text)}`);
-      const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+      const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
       const { balance, rawBalance, rawField } = kalshiCashBalanceFromPayload(payload);
-      const reason = balance == null || balance + 1e-9 < requiredCollateral
-        ? `Kalshi cash balance ${balance ?? 0} is below required operating cash ${requiredCollateral}`
-        : null;
+      const reason =
+        balance == null || balance + 1e-9 < requiredCollateral
+          ? `Kalshi cash balance ${balance ?? 0} is below required operating cash ${requiredCollateral}`
+          : null;
       const readiness: VenueExecutionReadiness = {
         configured: true,
         ready: reason == null,
@@ -803,7 +866,9 @@ export class KalshiOrderClient implements VenueOrderClient {
   }
 
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
-    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const requiredCollateral =
+      context.requiredCollateral ??
+      roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
     // LA1: reuse the warm readiness cache (skipping the ~150ms Kalshi balance RTT, and naturally de-duping the
     // executor's second preflight) ONLY when the cache is fresh (kept hot by the warm loop) AND the last-seen
     // balance clears the required collateral by a safety margin. On a thin account or a stale cache we force a
@@ -814,12 +879,13 @@ export class KalshiOrderClient implements VenueOrderClient {
     const cached = this.cachedReadiness;
     const freshMs = Math.max(2_000, this.config.liveHotPathWarmIntervalMs * 2);
     const balanceMargin = Math.max(this.config.liveCollateralBufferDollars, requiredCollateral * 0.1);
-    const canReuseCache = cached != null
-      && cached.ready === true
-      && cached.balance != null
-      && cached.balance + 1e-9 >= requiredCollateral + balanceMargin
-      && (cached.requiredCollateral ?? 0) + 1e-9 >= requiredCollateral
-      && now - (cached.lastCheckedAt ?? 0) < freshMs;
+    const canReuseCache =
+      cached != null &&
+      cached.ready === true &&
+      cached.balance != null &&
+      cached.balance + 1e-9 >= requiredCollateral + balanceMargin &&
+      (cached.requiredCollateral ?? 0) + 1e-9 >= requiredCollateral &&
+      now - (cached.lastCheckedAt ?? 0) < freshMs;
     const readiness = await this.checkReadiness(now, {
       requiredCollateral,
       force: !canReuseCache,
@@ -835,7 +901,9 @@ export class KalshiOrderClient implements VenueOrderClient {
     const buildStartedAt = Date.now();
     try {
       const { url, signPath } = kalshiOrderEndpoint(this.config);
-      const bodyTemplate = buildKalshiV2OrderBody(leg, context, { hedgeTimeInForce: this.config.liveKalshiHedgeTimeInForce });
+      const bodyTemplate = buildKalshiV2OrderBody(leg, context, {
+        hedgeTimeInForce: this.config.liveKalshiHedgeTimeInForce,
+      });
       const signStartedAt = Date.now();
       const headers = getKalshiHeaders("POST", signPath, signStartedAt.toString());
       const signedAt = Date.now();
@@ -869,25 +937,31 @@ export class KalshiOrderClient implements VenueOrderClient {
   }
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
-    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
-    const readiness = context.preflight?.kalshiReadiness
-      && context.preflight.kalshiRequiredCollateral != null
-      && context.preflight.kalshiRequiredCollateral + 1e-9 >= requiredCollateral
-      ? context.preflight.kalshiReadiness
-      : await this.checkReadiness(context.requestedAt ?? Date.now(), {
-        force: true,
-        requiredCollateral,
-      });
+    const requiredCollateral =
+      context.requiredCollateral ??
+      roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const readiness =
+      context.preflight?.kalshiReadiness &&
+      context.preflight.kalshiRequiredCollateral != null &&
+      context.preflight.kalshiRequiredCollateral + 1e-9 >= requiredCollateral
+        ? context.preflight.kalshiReadiness
+        : await this.checkReadiness(context.requestedAt ?? Date.now(), {
+            force: true,
+            requiredCollateral,
+          });
     if (!readiness.ready) throw new Error(readiness.reason ?? "Kalshi execution is not configured");
 
     const requestedAt = context.requestedAt ?? Date.now();
     const prepared = context.preflight?.kalshiPreparedOrder;
     const preparedAgeMs = prepared == null ? null : Math.max(0, requestedAt - prepared.preparedAt);
-    let preparedFallbackReason = prepared == null
-      ? context.preflight?.kalshiPreparedOrderFallbackReason ?? "missing"
-      : preparedKalshiFallbackReason(prepared, leg, context, requestedAt, this.config.liveKalshiPrearmMaxAgeMs);
+    let preparedFallbackReason =
+      prepared == null
+        ? (context.preflight?.kalshiPreparedOrderFallbackReason ?? "missing")
+        : preparedKalshiFallbackReason(prepared, leg, context, requestedAt, this.config.liveKalshiPrearmMaxAgeMs);
     const preparedUsable = prepared != null && preparedFallbackReason == null;
-    let endpoint = preparedUsable ? { url: new URL(prepared.url), signPath: prepared.signPath } : kalshiOrderEndpoint(this.config);
+    let endpoint = preparedUsable
+      ? { url: new URL(prepared.url), signPath: prepared.signPath }
+      : kalshiOrderEndpoint(this.config);
     let body: Record<string, string | boolean>;
     let headers: Record<string, string>;
     let pricePatchMs: number | null = null;
@@ -915,7 +989,7 @@ export class KalshiOrderClient implements VenueOrderClient {
     });
     const respondedAt = Date.now();
     const text = await response.text();
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     if (!response.ok) throw new Error(`Kalshi order failed ${response.status}: ${sanitizeError(text)}`);
 
     const record = kalshiOrderRecord(payload);
@@ -941,7 +1015,8 @@ export class KalshiOrderClient implements VenueOrderClient {
         kalshiInitialFillCount: fillCount,
         limitRestMs: isLimitRestMode(context) ? limitRestMs(context) : null,
         kalshiPreparedUsed: preparedUsable && preparedFallbackReason == null,
-        kalshiPreparedFallbackReason: preparedUsable && preparedFallbackReason == null ? null : preparedFallbackReason ?? "not_prepared",
+        kalshiPreparedFallbackReason:
+          preparedUsable && preparedFallbackReason == null ? null : (preparedFallbackReason ?? "not_prepared"),
         kalshiPrearmAgeMs: preparedAgeMs,
         kalshiPrearmMs: prepared?.buildMs ?? null,
         kalshiPrearmSignMs: prepared?.signMs ?? null,
@@ -1056,7 +1131,8 @@ export class KalshiOrderClient implements VenueOrderClient {
         : `kalshi limit_rest order canceled without exact fill (${exactFillError(this.venue, fillCount, context.size) ?? "final fill did not match requested size"})`;
     return {
       ...initialResult,
-      clientOrderId: record == null ? initialResult.clientOrderId : String(record.client_order_id ?? initialResult.clientOrderId),
+      clientOrderId:
+        record == null ? initialResult.clientOrderId : String(record.client_order_id ?? initialResult.clientOrderId),
       orderId: record?.order_id == null ? initialResult.orderId : String(record.order_id),
       status,
       fillPrice: record ? kalshiFillPrice(record, leg) : initialResult.fillPrice,
@@ -1078,7 +1154,11 @@ export class KalshiOrderClient implements VenueOrderClient {
     };
   }
 
-  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+  async recoverTimedOutOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+  ): Promise<VenueOrderResult | null> {
     const record = await this.findRecentOrderByClientOrderId(leg.contractId, context.clientOrderId);
     if (!record) {
       return {
@@ -1090,20 +1170,29 @@ export class KalshiOrderClient implements VenueOrderClient {
         },
       };
     }
-    return this.resultFromKalshiRecord(leg, context, record, {
-      ...timedOutResult,
-      metadata: {
-        ...timedOutResult.metadata,
-        kalshiTimeoutRecoveryAttempted: true,
-        kalshiTimeoutRecoveryStatus: "found_by_client_order_id",
+    return this.resultFromKalshiRecord(
+      leg,
+      context,
+      record,
+      {
+        ...timedOutResult,
+        metadata: {
+          ...timedOutResult.metadata,
+          kalshiTimeoutRecoveryAttempted: true,
+          kalshiTimeoutRecoveryStatus: "found_by_client_order_id",
+        },
       },
-    }, {
-      cancelStatus: "not_needed",
-      finalFillSource: "timeout_recovery_query",
-    });
+      {
+        cancelStatus: "not_needed",
+        finalFillSource: "timeout_recovery_query",
+      },
+    );
   }
 
-  private async findRecentOrderByClientOrderId(ticker: string, clientOrderId: string): Promise<Record<string, unknown> | null> {
+  private async findRecentOrderByClientOrderId(
+    ticker: string,
+    clientOrderId: string,
+  ): Promise<Record<string, unknown> | null> {
     const statuses: Array<string | null> = [null, "executed", "resting", "canceled"];
     const seenUrls = new Set<string>();
     for (const status of statuses) {
@@ -1135,7 +1224,7 @@ export class KalshiOrderClient implements VenueOrderClient {
     });
     const text = await response.text();
     if (!response.ok) throw new Error(`Kalshi orders query failed ${response.status}: ${sanitizeError(text)}`);
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     return kalshiOrderRecords(payload);
   }
 
@@ -1151,7 +1240,7 @@ export class KalshiOrderClient implements VenueOrderClient {
     });
     const text = await response.text();
     if (!response.ok) throw new Error(`Kalshi order query failed ${response.status}: ${sanitizeError(text)}`);
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     return kalshiOrderRecord(payload);
   }
 
@@ -1179,10 +1268,16 @@ export interface KalshiFixOrderSessionLike {
 
 function kalshiFixFillPrice(execution: KalshiFixOrderExecution, leg: ArbLeg): number | null {
   if (execution.averageYesBookPrice == null) return null;
-  return leg.direction === "yes" ? roundPrice(execution.averageYesBookPrice) : roundPrice(1 - execution.averageYesBookPrice);
+  return leg.direction === "yes"
+    ? roundPrice(execution.averageYesBookPrice)
+    : roundPrice(1 - execution.averageYesBookPrice);
 }
 
-function kalshiFixResultError(execution: KalshiFixOrderExecution, fillPrice: number | null, context: LiveOrderContext): string | null {
+function kalshiFixResultError(
+  execution: KalshiFixOrderExecution,
+  fillPrice: number | null,
+  context: LiveOrderContext,
+): string | null {
   if (execution.ambiguous) {
     return `Kalshi FIX ambiguous execution state${execution.text ? `: ${execution.text}` : ""}`;
   }
@@ -1203,18 +1298,20 @@ export class KalshiFixOrderClient implements VenueOrderClient {
     session?: KalshiFixOrderSessionLike,
   ) {
     this.publicClient = new KalshiOrderClient({ ...config, liveKalshiPrearmEnabled: false }, fetchFn);
-    this.session = session ?? new KalshiFixOrderSession({
-      host: config.kalshiFixHost,
-      port: config.kalshiFixPort,
-      senderCompId: config.kalshiFixSenderCompId || process.env.KALSHI_API_KEY_ID?.trim() || "",
-      targetCompId: config.kalshiFixTargetCompId,
-      heartbeatSeconds: config.kalshiFixHeartbeatSeconds,
-      connectTimeoutMs: config.kalshiFixConnectTimeoutMs,
-      orderResponseTimeoutMs: config.kalshiFixOrderResponseTimeoutMs,
-      useDollars: config.kalshiFixUseDollars,
-      enableIocCancelReport: config.kalshiFixEnableIocCancelReport,
-      preserveOriginalOrderQty: config.kalshiFixPreserveOriginalOrderQty,
-    });
+    this.session =
+      session ??
+      new KalshiFixOrderSession({
+        host: config.kalshiFixHost,
+        port: config.kalshiFixPort,
+        senderCompId: config.kalshiFixSenderCompId || process.env.KALSHI_API_KEY_ID?.trim() || "",
+        targetCompId: config.kalshiFixTargetCompId,
+        heartbeatSeconds: config.kalshiFixHeartbeatSeconds,
+        connectTimeoutMs: config.kalshiFixConnectTimeoutMs,
+        orderResponseTimeoutMs: config.kalshiFixOrderResponseTimeoutMs,
+        useDollars: config.kalshiFixUseDollars,
+        enableIocCancelReport: config.kalshiFixEnableIocCancelReport,
+        preserveOriginalOrderQty: config.kalshiFixPreserveOriginalOrderQty,
+      });
   }
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
@@ -1243,7 +1340,8 @@ export class KalshiFixOrderClient implements VenueOrderClient {
       return {
         ...publicReadiness,
         ready: false,
-        reason: "Kalshi FIX IOC mode blocks explicit LIVE_KALSHI_ORDER_GROUP_ID because Kalshi FIX NewOrderSingle order-group attachment is not documented",
+        reason:
+          "Kalshi FIX IOC mode blocks explicit LIVE_KALSHI_ORDER_GROUP_ID because Kalshi FIX NewOrderSingle order-group attachment is not documented",
         lastCheckedAt: now,
       };
     }
@@ -1252,7 +1350,7 @@ export class KalshiFixOrderClient implements VenueOrderClient {
       ...publicReadiness,
       configured: publicReadiness.configured,
       ready: publicReadiness.ready && fixReadiness.ready,
-      reason: fixReadiness.ready ? null : fixReadiness.reason ?? "Kalshi FIX session is not ready",
+      reason: fixReadiness.ready ? null : (fixReadiness.reason ?? "Kalshi FIX session is not ready"),
       lastCheckedAt: now,
     };
   }
@@ -1266,10 +1364,12 @@ export class KalshiFixOrderClient implements VenueOrderClient {
     // kalshi_first_exact stages the reliable integer Kalshi leg FIRST; allowing it over the persistent FIX
     // session (Phase B #9 prerequisite) lets the FIX ExecutionReport double as the first-leg confirmation and
     // skips per-order TLS. Inert until KALSHI_HEDGE_ORDER_MODE=fix_ioc + LIVE_ORDER_PLACEMENT_MODE=kalshi_first_exact.
-    return mode === "polymarket_first_exact"
-      || mode === "kalshi_first_exact"
-      || mode === "parallel_quick"
-      || mode === "parallel_market";
+    return (
+      mode === "polymarket_first_exact" ||
+      mode === "kalshi_first_exact" ||
+      mode === "parallel_quick" ||
+      mode === "parallel_market"
+    );
   }
 
   async preflightOrder(_leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
@@ -1282,20 +1382,25 @@ export class KalshiFixOrderClient implements VenueOrderClient {
       kalshiReadiness: readiness,
       kalshiRequiredCollateral: readiness.requiredCollateral ?? context.requiredCollateral,
     };
-    return readiness.ready ? null : readiness.reason ?? "Kalshi FIX IOC readiness failed";
+    return readiness.ready ? null : (readiness.reason ?? "Kalshi FIX IOC readiness failed");
   }
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     if (!this.supportsPlacementMode(context.placementMode)) {
-      throw new Error("Kalshi FIX IOC mode is only supported for polymarket_first_exact, kalshi_first_exact, parallel_market, or parallel_quick");
+      throw new Error(
+        "Kalshi FIX IOC mode is only supported for polymarket_first_exact, kalshi_first_exact, parallel_market, or parallel_quick",
+      );
     }
     const requestedAt = context.requestedAt ?? Date.now();
-    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
-    const readiness = context.preflight?.kalshiReadiness?.ready
-      && context.preflight.kalshiRequiredCollateral != null
-      && context.preflight.kalshiRequiredCollateral + 1e-9 >= requiredCollateral
-      ? context.preflight.kalshiReadiness
-      : await this.readiness(requestedAt);
+    const requiredCollateral =
+      context.requiredCollateral ??
+      roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const readiness =
+      context.preflight?.kalshiReadiness?.ready &&
+      context.preflight.kalshiRequiredCollateral != null &&
+      context.preflight.kalshiRequiredCollateral + 1e-9 >= requiredCollateral
+        ? context.preflight.kalshiReadiness
+        : await this.readiness(requestedAt);
     if (!readiness.ready) throw new Error(readiness.reason ?? "Kalshi FIX IOC readiness failed");
 
     const execution = await this.session.placeOrder({
@@ -1349,7 +1454,11 @@ export class KalshiFixOrderClient implements VenueOrderClient {
     };
   }
 
-  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+  async recoverTimedOutOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+  ): Promise<VenueOrderResult | null> {
     return this.publicClient.recoverTimedOutOrder(leg, context, {
       ...timedOutResult,
       metadata: {
@@ -1366,7 +1475,10 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
   private readonly publicClient: KalshiOrderClient;
   private readonly marketIdCache = new Map<string, KalshiUiMarketIdResolution>();
 
-  constructor(private readonly config: AppConfig, private readonly fetchFn: typeof fetch = fetch) {
+  constructor(
+    private readonly config: AppConfig,
+    private readonly fetchFn: typeof fetch = fetch,
+  ) {
     this.publicClient = new KalshiOrderClient(config, fetchFn);
   }
 
@@ -1439,7 +1551,9 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     if (!this.supportsPlacementMode(context.placementMode)) {
-      throw new Error("Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges or parallel_quick synchronized dispatch");
+      throw new Error(
+        "Kalshi UI Quick Order mode is only supported for polymarket_first_exact hedges or parallel_quick synchronized dispatch",
+      );
     }
     const requestedAt = context.requestedAt ?? Date.now();
     const readiness = context.preflight?.kalshiReadiness?.ready
@@ -1449,14 +1563,15 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
 
     const { session, reason } = readKalshiUiQuickOrderSession(this.config.kalshiUiSessionPath);
     if (!session) throw new Error(reason ?? "Kalshi UI session is unavailable");
-    const resolution = context.preflight?.kalshiUiMarketId && context.preflight.kalshiUiMarketTicker === leg.contractId
-      ? {
-        marketId: context.preflight.kalshiUiMarketId,
-        ticker: context.preflight.kalshiUiMarketTicker,
-        resolvedAt: context.preflight.kalshiUiMarketIdResolvedAt ?? requestedAt,
-        source: context.preflight.kalshiUiMarketIdSource ?? "preflight",
-      }
-      : await this.resolveMarketId(leg.contractId, session, context.signal);
+    const resolution =
+      context.preflight?.kalshiUiMarketId && context.preflight.kalshiUiMarketTicker === leg.contractId
+        ? {
+            marketId: context.preflight.kalshiUiMarketId,
+            ticker: context.preflight.kalshiUiMarketTicker,
+            resolvedAt: context.preflight.kalshiUiMarketIdResolvedAt ?? requestedAt,
+            source: context.preflight.kalshiUiMarketIdSource ?? "preflight",
+          }
+        : await this.resolveMarketId(leg.contractId, session, context.signal);
     const body = buildKalshiUiQuickOrderBody(leg, context, resolution.marketId);
     const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/orders`);
     const response = await this.fetchFn(url, {
@@ -1467,7 +1582,7 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     });
     const respondedAt = Date.now();
     const text = await response.text();
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     if (!response.ok) throw new Error(`Kalshi UI Quick Order failed ${response.status}: ${sanitizeError(text)}`);
 
     const initialRecord = kalshiUiOrderRecord(payload);
@@ -1493,18 +1608,23 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     });
   }
 
-  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+  async recoverTimedOutOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+  ): Promise<VenueOrderResult | null> {
     const { session } = readKalshiUiQuickOrderSession(this.config.kalshiUiSessionPath);
     if (!session) return null;
     try {
-      const resolution = context.preflight?.kalshiUiMarketId && context.preflight.kalshiUiMarketTicker === leg.contractId
-        ? {
-          marketId: context.preflight.kalshiUiMarketId,
-          ticker: context.preflight.kalshiUiMarketTicker,
-          resolvedAt: context.preflight.kalshiUiMarketIdResolvedAt ?? Date.parse(timedOutResult.requestedAt),
-          source: context.preflight.kalshiUiMarketIdSource ?? "preflight",
-        }
-        : await this.resolveMarketId(leg.contractId, session, context.signal);
+      const resolution =
+        context.preflight?.kalshiUiMarketId && context.preflight.kalshiUiMarketTicker === leg.contractId
+          ? {
+              marketId: context.preflight.kalshiUiMarketId,
+              ticker: context.preflight.kalshiUiMarketTicker,
+              resolvedAt: context.preflight.kalshiUiMarketIdResolvedAt ?? Date.parse(timedOutResult.requestedAt),
+              source: context.preflight.kalshiUiMarketIdSource ?? "preflight",
+            }
+          : await this.resolveMarketId(leg.contractId, session, context.signal);
       const recovered = await this.findRecentUiOrder(session, leg, context, resolution);
       if (!recovered) {
         return {
@@ -1540,7 +1660,11 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     }
   }
 
-  private async resolveMarketId(ticker: string, session: KalshiUiQuickOrderSession, signal?: AbortSignal): Promise<KalshiUiMarketIdResolution> {
+  private async resolveMarketId(
+    ticker: string,
+    session: KalshiUiQuickOrderSession,
+    signal?: AbortSignal,
+  ): Promise<KalshiUiMarketIdResolution> {
     const now = Date.now();
     const cached = this.marketIdCache.get(ticker);
     if (cached && now - cached.resolvedAt <= Math.max(0, this.config.kalshiUiMarketIdCacheTtlMs)) return cached;
@@ -1564,7 +1688,10 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     signal?: AbortSignal,
   ): Promise<KalshiUiMarketIdResolution | null> {
     const eventTicker = eventTickerFromKalshiMarketTicker(ticker);
-    const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/event_positions/${encodeURIComponent(eventTicker)}`);
+    const url = kalshiUiUrl(
+      this.config,
+      `/v1/users/${encodeURIComponent(session.userId)}/event_positions/${encodeURIComponent(eventTicker)}`,
+    );
     const response = await this.fetchFn(url, {
       method: "GET",
       headers: kalshiUiHeaders(session),
@@ -1575,7 +1702,7 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
       if (response.status === 404) return null;
       throw new Error(`Kalshi UI event-position lookup failed ${response.status}: ${sanitizeError(text)}`);
     }
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     for (const row of kalshiUiMarketPositionRecords(payload)) {
       const marketTicker = stringOrNull(row.market_ticker ?? row.marketTicker ?? row.ticker);
       const marketId = stringOrNull(row.market_id ?? row.marketId ?? row.id);
@@ -1586,8 +1713,15 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     return null;
   }
 
-  private async fetchUiOrder(session: KalshiUiQuickOrderSession, orderId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
-    const url = kalshiUiUrl(this.config, `/v1/users/${encodeURIComponent(session.userId)}/orders/${encodeURIComponent(orderId)}`);
+  private async fetchUiOrder(
+    session: KalshiUiQuickOrderSession,
+    orderId: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const url = kalshiUiUrl(
+      this.config,
+      `/v1/users/${encodeURIComponent(session.userId)}/orders/${encodeURIComponent(orderId)}`,
+    );
     const response = await this.fetchFn(url, {
       method: "GET",
       headers: kalshiUiHeaders(session),
@@ -1595,7 +1729,7 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     });
     const text = await response.text();
     if (!response.ok) throw new Error(`Kalshi UI order query failed ${response.status}: ${sanitizeError(text)}`);
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     return kalshiUiOrderRecord(payload);
   }
 
@@ -1616,7 +1750,7 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     });
     const text = await response.text();
     if (!response.ok) throw new Error(`Kalshi UI orders query failed ${response.status}: ${sanitizeError(text)}`);
-    const payload = text ? JSON.parse(text) as Record<string, unknown> : {};
+    const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     const matches = kalshiUiOrderRecords(payload).filter((record) => {
       const marketId = stringOrNull(record.market_id ?? record.marketId);
       const marketTicker = stringOrNull(record.market_ticker ?? record.marketTicker ?? record.ticker);
@@ -1624,12 +1758,14 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
       const userSide = stringOrNull(record.user_side ?? record.userSide ?? record.side);
       const orderType = stringOrNull(record.order_type ?? record.orderType);
       const created = kalshiUiExchangeTimestampMs(record);
-      return marketId === resolution.marketId
-        && (!marketTicker || marketTicker === leg.contractId)
-        && (!orderAction || orderAction === "buy")
-        && (!userSide || userSide === leg.direction)
-        && (!orderType || orderType === "market")
-        && (created == null || created + 1_000 >= requestedAt);
+      return (
+        marketId === resolution.marketId &&
+        (!marketTicker || marketTicker === leg.contractId) &&
+        (!orderAction || orderAction === "buy") &&
+        (!userSide || userSide === leg.direction) &&
+        (!orderType || orderType === "market") &&
+        (created == null || created + 1_000 >= requestedAt)
+      );
     });
     return matches.length === 1 ? matches[0] : null;
   }
@@ -1656,9 +1792,7 @@ export class KalshiUiQuickOrderClient implements VenueOrderClient {
     const exchangeTimestampMs = kalshiUiExchangeTimestampMs(record);
     const capBreached = fillPrice != null && fillPrice > context.maxBuyPrice + 0.000001;
     const exactFillErrorText = exactFillError(this.venue, fillCount, context.size);
-    const status = capBreached
-      ? "unknown"
-      : kalshiUiOrderStatus(record, fillCount, context.size);
+    const status = capBreached ? "unknown" : kalshiUiOrderStatus(record, fillCount, context.size);
     const error = capBreached
       ? `Kalshi UI Quick Order safety breach: fill price ${fillPrice?.toFixed(4)} exceeded hedge cap ${context.maxBuyPrice.toFixed(4)}`
       : exactFillErrorText;
@@ -1737,14 +1871,18 @@ export function polymarketApiCredsFromConfig(config: AppConfig): ApiKeyCreds | n
   };
 }
 
-export async function deriveOrCreatePolymarketApiCreds(client: PolymarketApiKeyProvider): Promise<{ creds: ApiKeyCreds; source: "derived" | "created" }> {
+export async function deriveOrCreatePolymarketApiCreds(
+  client: PolymarketApiKeyProvider,
+): Promise<{ creds: ApiKeyCreds; source: "derived" | "created" }> {
   try {
     return { creds: await client.deriveApiKey(), source: "derived" };
   } catch (deriveError) {
     try {
       return { creds: await client.createApiKey(), source: "created" };
     } catch (createError) {
-      throw new Error(`Could not derive or create api key: derive failed: ${sanitizeError(deriveError)}; create failed: ${sanitizeError(createError)}`);
+      throw new Error(
+        `Could not derive or create api key: derive failed: ${sanitizeError(deriveError)}; create failed: ${sanitizeError(createError)}`,
+      );
     }
   }
 }
@@ -1762,7 +1900,10 @@ function polymarketOrderType(value: string): OrderType.FOK | OrderType.FAK {
   return value === "FAK" ? OrderType.FAK : OrderType.FOK;
 }
 
-function polymarketImmediateOrderType(configuredValue: string, context: LiveOrderContext): OrderType.FOK | OrderType.FAK {
+function polymarketImmediateOrderType(
+  configuredValue: string,
+  context: LiveOrderContext,
+): OrderType.FOK | OrderType.FAK {
   if (context.placementMode === "parallel_market") return OrderType.FAK;
   if (context.placementMode === "parallel_quick") return OrderType.FAK;
   if (context.placementMode === "polymarket_first_exact") return OrderType.FAK;
@@ -1773,7 +1914,7 @@ function polymarketImmediateOrderType(configuredValue: string, context: LiveOrde
 }
 
 function signedOrderRecord(order: SignedOrder | null | undefined): Record<string, unknown> | null {
-  return order == null ? null : order as unknown as Record<string, unknown>;
+  return order == null ? null : (order as unknown as Record<string, unknown>);
 }
 
 function signedOrderSalt(order: SignedOrder | null | undefined): string | null {
@@ -1805,16 +1946,19 @@ function preflightSignedOrderFallbackReason(
   ttlMs: number,
 ): string | null {
   if (!preflight?.polymarketSignedOrder) return "missing";
-  const ageMs = preflight.polymarketSignedOrderCreatedAt == null
-    ? Number.POSITIVE_INFINITY
-    : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
+  const ageMs =
+    preflight.polymarketSignedOrderCreatedAt == null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
   if (ageMs > ttlMs) return `expired_${ageMs}ms`;
   if (preflight.polymarketSignedOrderTokenId !== tokenId) return "token_changed";
   if (preflight.polymarketSignedOrderKind !== kind) return "kind_changed";
   if (preflight.polymarketSignedOrderType !== orderType) return "order_type_changed";
   if (Math.abs((preflight.polymarketSignedOrderPrice ?? Number.NaN) - price) > 0.000001) return "price_changed";
-  if (kind === "market" && Math.abs((preflight.polymarketSignedOrderSpend ?? Number.NaN) - spend) > 0.000001) return "spend_changed";
-  if (kind === "share_limit" && Math.abs((preflight.polymarketSignedOrderSize ?? Number.NaN) - size) > 0.000001) return "size_changed";
+  if (kind === "market" && Math.abs((preflight.polymarketSignedOrderSpend ?? Number.NaN) - spend) > 0.000001)
+    return "spend_changed";
+  if (kind === "share_limit" && Math.abs((preflight.polymarketSignedOrderSize ?? Number.NaN) - size) > 0.000001)
+    return "size_changed";
   return null;
 }
 
@@ -1842,9 +1986,9 @@ function isLimitRestMode(context: LiveOrderContext): boolean {
 }
 
 function polymarketSignedOrderKind(context: LiveOrderContext): "market" | "share_limit" {
-  return context.placementMode === "polymarket_first_exact"
-    || context.placementMode === "parallel_quick"
-    || context.placementMode === "kalshi_first_exact"
+  return context.placementMode === "polymarket_first_exact" ||
+    context.placementMode === "parallel_quick" ||
+    context.placementMode === "kalshi_first_exact"
     ? "share_limit"
     : "market";
 }
@@ -1855,7 +1999,8 @@ function kalshiTimeInForce(
 ): "good_till_canceled" | "immediate_or_cancel" | "fill_or_kill" {
   if (isLimitRestMode(context)) return "good_till_canceled";
   if (context.placementMode === "parallel_market") return "immediate_or_cancel";
-  if (context.placementMode === "polymarket_first_exact" || context.placementMode === "parallel_quick") return hedgeTimeInForce;
+  if (context.placementMode === "polymarket_first_exact" || context.placementMode === "parallel_quick")
+    return hedgeTimeInForce;
   return "fill_or_kill";
 }
 
@@ -1905,9 +2050,10 @@ function polymarketTradeGroups(
 ): Array<{ orderId: string; fillCount: number; fillPrice: number | null; tradeCount: number }> {
   const groups = new Map<string, { fillCount: number; notional: number; tradeCount: number }>();
   for (const trade of trades) {
-    const orderId = stringOrNull(trade.taker_order_id)
-      ?? stringOrNull(recordOrNull(Array.isArray(trade.maker_orders) ? trade.maker_orders[0] : null)?.order_id)
-      ?? `trade:${stringOrNull(trade.id) ?? randomUUID()}`;
+    const orderId =
+      stringOrNull(trade.taker_order_id) ??
+      stringOrNull(recordOrNull(Array.isArray(trade.maker_orders) ? trade.maker_orders[0] : null)?.order_id) ??
+      `trade:${stringOrNull(trade.id) ?? randomUUID()}`;
     const size = finiteOrNull(trade.size) ?? 0;
     const price = finiteOrNull(trade.price) ?? 0;
     const group = groups.get(orderId) ?? { fillCount: 0, notional: 0, tradeCount: 0 };
@@ -1930,7 +2076,10 @@ function polymarketTradeMatchesOrder(trade: Record<string, unknown>, orderId: st
   return makerOrders.some((order) => recordOrNull(order)?.order_id === orderId);
 }
 
-function polymarketTradeFill(trades: Array<Record<string, unknown>>, orderId: string): { fillCount: number | null; fillPrice: number | null; tradeCount: number } {
+function polymarketTradeFill(
+  trades: Array<Record<string, unknown>>,
+  orderId: string,
+): { fillCount: number | null; fillPrice: number | null; tradeCount: number } {
   const matching = trades.filter((trade) => polymarketTradeMatchesOrder(trade, orderId));
   if (matching.length === 0) return { fillCount: null, fillPrice: null, tradeCount: 0 };
   let size = 0;
@@ -1990,7 +2139,9 @@ async function withExtendedAxiosTimeout<T>(timeoutMs: number, fn: () => Promise<
   }
 }
 
-export async function resolvePolymarketApiCreds(config: AppConfig): Promise<{ creds: ApiKeyCreds; source: PolymarketCredentialsSource }> {
+export async function resolvePolymarketApiCreds(
+  config: AppConfig,
+): Promise<{ creds: ApiKeyCreds; source: PolymarketCredentialsSource }> {
   if (!config.polymarketPrivateKey) throw new Error("POLYMARKET_PRIVATE_KEY is required for live trading");
   const configuredCreds = polymarketApiCredsFromConfig(config);
   if (configuredCreds) return { creds: configuredCreds, source: "configured" as const };
@@ -2056,11 +2207,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
   readonly venue = "polymarket" as const;
   private clientPromise: Promise<PolymarketClobLike | PolymarketClobClientBundle> | null = null;
   private cachedReadiness: VenueExecutionReadiness | null = null;
-  private readonly orderBookCache = new Map<string, { checkedAt: number; book: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk"> }>();
+  private readonly orderBookCache = new Map<
+    string,
+    { checkedAt: number; book: Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk"> }
+  >();
 
   constructor(
     private readonly config: AppConfig,
-    private readonly clientFactory: (config: AppConfig) => Promise<PolymarketClobLike | PolymarketClobClientBundle> = defaultPolymarketClientFactory,
+    private readonly clientFactory: (
+      config: AppConfig,
+    ) => Promise<PolymarketClobLike | PolymarketClobClientBundle> = defaultPolymarketClientFactory,
     private readonly geoblockChecker: PolymarketGeoblockChecker = (now) => checkPolymarketGeoblock(config, fetch, now),
   ) {}
 
@@ -2070,16 +2226,23 @@ export class PolymarketOrderClient implements VenueOrderClient {
 
   async warm(options: { now?: number; tokenIds?: string[]; requiredCollateral?: number } = {}): Promise<void> {
     const now = options.now ?? Date.now();
-    const requiredCollateral = options.requiredCollateral ?? roundPrice(this.config.liveOrderSize + this.config.liveCollateralBufferDollars);
-    const ageMs = this.cachedReadiness?.lastCheckedAt == null ? Number.POSITIVE_INFINITY : now - this.cachedReadiness.lastCheckedAt;
+    const requiredCollateral =
+      options.requiredCollateral ?? roundPrice(this.config.liveOrderSize + this.config.liveCollateralBufferDollars);
+    const ageMs =
+      this.cachedReadiness?.lastCheckedAt == null ? Number.POSITIVE_INFINITY : now - this.cachedReadiness.lastCheckedAt;
     const readiness = await this.checkReadiness(now, {
-      force: this.config.liveHotPathEnabled && this.cachedReadiness != null && ageMs > Math.max(250, this.config.liveHotPathCacheMaxAgeMs / 2),
+      force:
+        this.config.liveHotPathEnabled &&
+        this.cachedReadiness != null &&
+        ageMs > Math.max(250, this.config.liveHotPathCacheMaxAgeMs / 2),
       requiredCollateral,
     });
     if (this.config.liveHotPathEnabled) this.cachedReadiness = readiness;
     if (!readiness.ready) return;
     const bundle = await this.client();
-    await (bundle.client as unknown as { resolveVersion?: (forceUpdate?: boolean) => Promise<number> }).resolveVersion?.();
+    await (
+      bundle.client as unknown as { resolveVersion?: (forceUpdate?: boolean) => Promise<number> }
+    ).resolveVersion?.();
     await Promise.all((options.tokenIds ?? []).map((tokenId) => this.warmTokenMetadata(bundle.client, tokenId, now)));
   }
 
@@ -2100,15 +2263,19 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const useCache = !options.force;
     const cachedRequiredCollateral = this.cachedReadiness?.requiredCollateral ?? 0;
     if (
-      useCache
-      && this.cachedReadiness?.ready
-      && cachedRequiredCollateral + 1e-9 >= requiredCollateral
-      && now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000
+      useCache &&
+      this.cachedReadiness?.ready &&
+      cachedRequiredCollateral + 1e-9 >= requiredCollateral &&
+      now - (this.cachedReadiness.lastCheckedAt ?? 0) < 30_000
     ) {
       return this.cachedReadiness;
     }
     if (!this.config.polymarketPrivateKey) {
-      const readiness = configuredReadiness(false, "POLYMARKET_PRIVATE_KEY is required for signing live Polymarket orders", now);
+      const readiness = configuredReadiness(
+        false,
+        "POLYMARKET_PRIVATE_KEY is required for signing live Polymarket orders",
+        now,
+      );
       if (useCache) this.cachedReadiness = readiness;
       return readiness;
     }
@@ -2162,16 +2329,22 @@ export class PolymarketOrderClient implements VenueOrderClient {
     try {
       const bundle = await this.client();
       let clobBalanceSynced: boolean | null = null;
-      let balanceAllowance = await withMutedPolymarketClientLogs(async () => bundle.client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }));
+      let balanceAllowance = await withMutedPolymarketClientLogs(async () =>
+        bundle.client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }),
+      );
       const rawBalance = finiteOrNull(balanceAllowance.balance);
       const firstRawAllowance = finiteOrNull(balanceAllowance.allowance);
       let balance = normalizedCollateralAmount(rawBalance);
       let allowance = normalizedCollateralAmount(firstRawAllowance);
       if (balance == null || balance <= 0 || allowance == null) {
         try {
-          await withMutedPolymarketClientLogs(async () => bundle.client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL }));
+          await withMutedPolymarketClientLogs(async () =>
+            bundle.client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL }),
+          );
           clobBalanceSynced = true;
-          balanceAllowance = await withMutedPolymarketClientLogs(async () => bundle.client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }));
+          balanceAllowance = await withMutedPolymarketClientLogs(async () =>
+            bundle.client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL }),
+          );
           balance = normalizedCollateralAmount(finiteOrNull(balanceAllowance.balance));
           allowance = normalizedCollateralAmount(finiteOrNull(balanceAllowance.allowance));
         } catch {
@@ -2236,20 +2409,22 @@ export class PolymarketOrderClient implements VenueOrderClient {
 
   async placeOrder(leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
     if (!leg.tokenId) throw new Error("Polymarket token id is required for live trading");
-    const readiness = context.preflight?.polymarketReadiness
-      && context.preflight.polymarketRequiredCollateral != null
-      && context.requiredCollateral != null
-      && context.preflight.polymarketRequiredCollateral + 1e-9 >= context.requiredCollateral
-      ? context.preflight.polymarketReadiness
-      : await this.checkReadiness(context.requestedAt ?? Date.now(), {
-        force: true,
-        requiredCollateral: context.requiredCollateral,
-      });
+    const readiness =
+      context.preflight?.polymarketReadiness &&
+      context.preflight.polymarketRequiredCollateral != null &&
+      context.requiredCollateral != null &&
+      context.preflight.polymarketRequiredCollateral + 1e-9 >= context.requiredCollateral
+        ? context.preflight.polymarketReadiness
+        : await this.checkReadiness(context.requestedAt ?? Date.now(), {
+            force: true,
+            requiredCollateral: context.requiredCollateral,
+          });
     if (!readiness.ready) throw new Error(readiness.reason ?? "Polymarket live readiness failed");
     const tokenId = leg.tokenId;
     const requestedAt = context.requestedAt ?? Date.now();
     const { client } = await this.client();
-    const book = context.preflight?.polymarketOrderBook ?? await this.getOrderBook(tokenId, context.requestedAt ?? Date.now());
+    const book =
+      context.preflight?.polymarketOrderBook ?? (await this.getOrderBook(tokenId, context.requestedAt ?? Date.now()));
     const minOrderSize = finiteOrNull(book.min_order_size);
     if (minOrderSize != null && minOrderSize > context.size) {
       throw new Error(`Polymarket min order size ${minOrderSize} exceeds configured live order size ${context.size}`);
@@ -2264,9 +2439,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const worstPrice = roundPrice(context.maxBuyPrice);
     const signedOrderKind = polymarketSignedOrderKind(context);
     const preflight = context.preflight;
-    const preflightSignedOrderAgeMs = preflight?.polymarketSignedOrderCreatedAt == null
-      ? Number.POSITIVE_INFINITY
-      : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
+    const preflightSignedOrderAgeMs =
+      preflight?.polymarketSignedOrderCreatedAt == null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, requestedAt - preflight.polymarketSignedOrderCreatedAt);
     const preflightFallbackReason = preflightSignedOrderFallbackReason(
       preflight,
       tokenId,
@@ -2278,36 +2454,42 @@ export class PolymarketOrderClient implements VenueOrderClient {
       requestedAt,
       this.config.livePolymarketSignedOrderTtlMs,
     );
-    const preflightSignedOrder = preflightFallbackReason == null ? preflight?.polymarketSignedOrder ?? null : null;
+    const preflightSignedOrder = preflightFallbackReason == null ? (preflight?.polymarketSignedOrder ?? null) : null;
     if (!preflightSignedOrder && signedOrderKind === "market" && !client.createMarketOrder) {
       throw new Error(`Polymarket market ${orderType} order creation is not supported by the configured CLOB client`);
     }
     const signStartedAt = Date.now();
-    const signedOrder = preflightSignedOrder ?? (signedOrderKind === "share_limit"
-      ? await client.createOrder({
-        tokenID: tokenId,
-        price: worstPrice,
-        size: context.size,
-        side: Side.BUY,
-        metadata: metadataFromClientOrderId(context.clientOrderId),
-      }, {
-        tickSize: book.tick_size as TickSize,
-        negRisk: Boolean(book.neg_risk),
-      })
-      : await client.createMarketOrder!({
-        tokenID: tokenId,
-        price: worstPrice,
-        amount: requestedSpend,
-        side: Side.BUY,
-        orderType,
-        metadata: metadataFromClientOrderId(context.clientOrderId),
-      }, {
-        tickSize: book.tick_size as TickSize,
-        negRisk: Boolean(book.neg_risk),
-      }));
-    const signMs = preflightSignedOrder
-      ? preflight?.polymarketSignMs ?? 0
-      : Math.max(0, Date.now() - signStartedAt);
+    const signedOrder =
+      preflightSignedOrder ??
+      (signedOrderKind === "share_limit"
+        ? await client.createOrder(
+            {
+              tokenID: tokenId,
+              price: worstPrice,
+              size: context.size,
+              side: Side.BUY,
+              metadata: metadataFromClientOrderId(context.clientOrderId),
+            },
+            {
+              tickSize: book.tick_size as TickSize,
+              negRisk: Boolean(book.neg_risk),
+            },
+          )
+        : await client.createMarketOrder!(
+            {
+              tokenID: tokenId,
+              price: worstPrice,
+              amount: requestedSpend,
+              side: Side.BUY,
+              orderType,
+              metadata: metadataFromClientOrderId(context.clientOrderId),
+            },
+            {
+              tickSize: book.tick_size as TickSize,
+              negRisk: Boolean(book.neg_risk),
+            },
+          ));
+    const signMs = preflightSignedOrder ? (preflight?.polymarketSignMs ?? 0) : Math.max(0, Date.now() - signStartedAt);
     const postStartedAt = Date.now();
     let payload: unknown;
     try {
@@ -2377,7 +2559,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const makingAmount = finiteOrNull(response.makingAmount);
     const fillCount = success && filledStatus ? takingAmount : 0;
     const filledMakingAmount = success && filledStatus ? makingAmount : null;
-    const fillPrice = filledMakingAmount != null && fillCount != null && fillCount > 0 ? roundPrice(filledMakingAmount / fillCount) : null;
+    const fillPrice =
+      filledMakingAmount != null && fillCount != null && fillCount > 0
+        ? roundPrice(filledMakingAmount / fillCount)
+        : null;
     const responseError = sanitizeError(response.errorMsg ?? response.error ?? "unknown");
     const fillError = !success
       ? `polymarket ${orderType} order rejected: ${responseError}`
@@ -2388,7 +2573,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       ? status || "failed"
       : !filledStatus
         ? status || "unfilled"
-        : fillError ? "unexpected_fill_count" : String(response.status ?? ((fillCount ?? 0) >= context.size ? "filled" : "unfilled"));
+        : fillError
+          ? "unexpected_fill_count"
+          : String(response.status ?? ((fillCount ?? 0) >= context.size ? "filled" : "unfilled"));
     this.cachedReadiness = null;
     return {
       venue: this.venue,
@@ -2434,16 +2621,19 @@ export class PolymarketOrderClient implements VenueOrderClient {
     if (!leg.tokenId) throw new Error("Polymarket token id is required for live trading");
     const worstPrice = roundPrice(context.maxBuyPrice);
     const signStartedAt = Date.now();
-    const signedOrder = await client.createOrder({
-      tokenID: leg.tokenId,
-      price: worstPrice,
-      size: context.size,
-      side: Side.BUY,
-      metadata: metadataFromClientOrderId(context.clientOrderId),
-    }, {
-      tickSize: book.tick_size as TickSize,
-      negRisk: Boolean(book.neg_risk),
-    });
+    const signedOrder = await client.createOrder(
+      {
+        tokenID: leg.tokenId,
+        price: worstPrice,
+        size: context.size,
+        side: Side.BUY,
+        metadata: metadataFromClientOrderId(context.clientOrderId),
+      },
+      {
+        tickSize: book.tick_size as TickSize,
+        negRisk: Boolean(book.neg_risk),
+      },
+    );
     const signMs = Math.max(0, Date.now() - signStartedAt);
     const payload = await withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, OrderType.GTC, false));
     const response = payload as Record<string, unknown>;
@@ -2453,15 +2643,18 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const takingAmount = finiteOrNull(response.takingAmount);
     const makingAmount = finiteOrNull(response.makingAmount);
     const initialFillCount = success && polymarketFilledStatus(initialStatus) ? takingAmount : 0;
-    const initialFillPrice = initialFillCount != null && initialFillCount > 0 && makingAmount != null
-      ? roundPrice(makingAmount / initialFillCount)
-      : null;
+    const initialFillPrice =
+      initialFillCount != null && initialFillCount > 0 && makingAmount != null
+        ? roundPrice(makingAmount / initialFillCount)
+        : null;
     const initialResult: VenueOrderResult = {
       venue: this.venue,
       clientOrderId: context.clientOrderId,
       orderId,
       status: success
-        ? isExactFillCount(initialFillCount, context.size) ? "filled" : initialStatus || "live"
+        ? isExactFillCount(initialFillCount, context.size)
+          ? "filled"
+          : initialStatus || "live"
         : initialStatus || "failed",
       fillPrice: initialFillPrice,
       fillCount: initialFillCount,
@@ -2582,26 +2775,29 @@ export class PolymarketOrderClient implements VenueOrderClient {
     let tradesError: string | null = null;
     if (orderId && client.getTrades) {
       try {
-        trades = (await withMutedPolymarketClientLogs(() => client.getTrades!({ asset_id: String(finalOrder?.asset_id ?? "") || undefined }, true)))
+        trades = (
+          await withMutedPolymarketClientLogs(() =>
+            client.getTrades!({ asset_id: String(finalOrder?.asset_id ?? "") || undefined }, true),
+          )
+        )
           .map((trade) => recordOrNull(trade))
           .filter((trade): trade is Record<string, unknown> => trade != null);
       } catch (error) {
         tradesError = sanitizeError(error);
       }
     }
-    const tradeFill = orderId ? polymarketTradeFill(trades, orderId) : { fillCount: null, fillPrice: null, tradeCount: 0 };
+    const tradeFill = orderId
+      ? polymarketTradeFill(trades, orderId)
+      : { fillCount: null, fillPrice: null, tradeCount: 0 };
     const orderFillCount = finiteOrNull(finalOrder?.size_matched);
     const fillCount = orderFillCount ?? tradeFill.fillCount ?? initialResult.fillCount;
     const fillPrice = tradeFill.fillPrice ?? finiteOrNull(finalOrder?.price) ?? initialResult.fillPrice;
-    const finalStatus = String(finalOrder?.status ?? "").trim() || (metadata.cancelStatus === "canceled" ? "canceled" : "unknown");
+    const finalStatus =
+      String(finalOrder?.status ?? "").trim() || (metadata.cancelStatus === "canceled" ? "canceled" : "unknown");
     const exactFill = isExactFillCount(fillCount, context.size);
     const hasOpenOrder = openOrders.length > 0 || ["live", "open", "delayed"].includes(finalStatus.toLowerCase());
     const cancelVerified = metadata.cancelStatus === "canceled" || metadata.cancelStatus === "not_needed";
-    const status = exactFill
-      ? "filled"
-      : !cancelVerified || hasOpenOrder || openOrdersError
-        ? "unknown"
-        : finalStatus;
+    const status = exactFill ? "filled" : !cancelVerified || hasOpenOrder || openOrdersError ? "unknown" : finalStatus;
     const error = exactFill
       ? null
       : status === "unknown"
@@ -2631,12 +2827,16 @@ export class PolymarketOrderClient implements VenueOrderClient {
     };
   }
 
-  async recoverTimedOutOrder(leg: ArbLeg, context: LiveOrderContext, timedOutResult: VenueOrderResult): Promise<VenueOrderResult | null> {
+  async recoverTimedOutOrder(
+    leg: ArbLeg,
+    context: LiveOrderContext,
+    timedOutResult: VenueOrderResult,
+  ): Promise<VenueOrderResult | null> {
     if (!leg.tokenId) return null;
     const { client } = await this.client();
     const submittedAtMs = Number.isFinite(Date.parse(timedOutResult.requestedAt))
       ? Date.parse(timedOutResult.requestedAt)
-      : context.requestedAt ?? Date.now();
+      : (context.requestedAt ?? Date.now());
     const deadline = Date.now() + Math.max(0, this.config.liveFinalRecoveryTimeoutMs);
     const pollMs = Math.max(25, this.config.liveFinalRecoveryPollMs);
     let attempts = 0;
@@ -2673,8 +2873,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
         // FAK as the zero-exposure no-fill it is, instead of leaving a benign no-fill stream-confirmation
         // timeout to falsely trip the breaker (the recurring lock-24/25/26 false positive). Inert unless that
         // flag is on (its only consumer); additive to persisted metadata otherwise.
-        polymarketOrderType: timedOutResult.metadata?.polymarketOrderType
-          ?? polymarketImmediateOrderType(this.config.polymarketOrderType, context),
+        polymarketOrderType:
+          timedOutResult.metadata?.polymarketOrderType ??
+          polymarketImmediateOrderType(this.config.polymarketOrderType, context),
         polymarketTimeoutRecoveryAttempted: true,
         polymarketTimeoutRecoveryStatus: lastStatus,
         polymarketTimeoutRecoveryAttempts: attempts,
@@ -2710,8 +2911,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
     const orderFillCount = finiteOrNull(order?.size_matched ?? order?.takingAmount);
     const fillCount = orderFillCount ?? tradeFill.fillCount ?? timedOutResult.fillCount;
     const fillPrice = tradeFill.fillPrice ?? finiteOrNull(order?.price) ?? timedOutResult.fillPrice;
-    const finalStatus = String(order?.status ?? "").trim()
-      || (tradeFill.tradeCount > 0 ? "matched" : openOrders.records.length > 0 ? "live" : "unknown");
+    const finalStatus =
+      String(order?.status ?? "").trim() ||
+      (tradeFill.tradeCount > 0 ? "matched" : openOrders.records.length > 0 ? "live" : "unknown");
     if (order == null && tradeFill.tradeCount === 0 && openOrders.records.length === 0) return null;
     return this.polymarketRecoveredResult(context, timedOutResult, {
       orderId: timedOutResult.orderId,
@@ -2720,7 +2922,8 @@ export class PolymarketOrderClient implements VenueOrderClient {
       status: finalStatus,
       submittedAtMs,
       attempts,
-      recoveryStatus: tradeFill.tradeCount > 0 ? "found_by_order_trades" : order ? "found_by_order_id" : "found_open_order",
+      recoveryStatus:
+        tradeFill.tradeCount > 0 ? "found_by_order_trades" : order ? "found_by_order_id" : "found_open_order",
       metadata: {
         polymarketTimeoutRecoveryOrderStatus: finalStatus,
         polymarketTimeoutRecoveryOrderError: orderError,
@@ -2742,12 +2945,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
   ): Promise<VenueOrderResult | null> {
     if (!leg.tokenId) return null;
     const trades = await this.fetchPolymarketTrades(client, leg.tokenId);
-    const matchingTrades = trades.records.filter((trade) => polymarketTradeIsRecentBuyForToken(
-      trade,
-      leg.tokenId!,
-      submittedAtMs,
-      roundPrice(context.maxBuyPrice),
-    ));
+    const matchingTrades = trades.records.filter((trade) =>
+      polymarketTradeIsRecentBuyForToken(trade, leg.tokenId!, submittedAtMs, roundPrice(context.maxBuyPrice)),
+    );
     const groups = polymarketTradeGroups(matchingTrades);
     if (groups.length === 1) {
       const group = groups[0]!;
@@ -2764,8 +2964,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
           polymarketTimeoutRecoveryTradesError: trades.error,
           polymarketTimeoutRecoveryMatchedTradeGroups: groups.length,
           polymarketTimeoutRecoverySignedOrderSalt: timedOutResult.metadata?.polymarketSignedOrderSalt ?? null,
-          polymarketTimeoutRecoverySignedOrderMakerAmount: timedOutResult.metadata?.polymarketSignedOrderMakerAmount ?? null,
-          polymarketTimeoutRecoverySignedOrderTakerAmount: timedOutResult.metadata?.polymarketSignedOrderTakerAmount ?? null,
+          polymarketTimeoutRecoverySignedOrderMakerAmount:
+            timedOutResult.metadata?.polymarketSignedOrderMakerAmount ?? null,
+          polymarketTimeoutRecoverySignedOrderTakerAmount:
+            timedOutResult.metadata?.polymarketSignedOrderTakerAmount ?? null,
         },
       });
     }
@@ -2803,7 +3005,8 @@ export class PolymarketOrderClient implements VenueOrderClient {
         metadata: {
           ...timedOutResult.metadata,
           polymarketTimeoutRecoveryAttempted: true,
-          polymarketTimeoutRecoveryStatus: matchingOpenOrders.length === 1 ? "found_open_order" : "ambiguous_open_orders",
+          polymarketTimeoutRecoveryStatus:
+            matchingOpenOrders.length === 1 ? "found_open_order" : "ambiguous_open_orders",
           polymarketTimeoutRecoveryAttempts: attempts,
           polymarketTimeoutRecoveryOpenOrderCount: matchingOpenOrders.length,
           polymarketTimeoutRecoveryOpenOrdersError: openOrders.error,
@@ -2877,7 +3080,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
       fillCount: recovery.fillCount,
       fillPrice: recovery.fillPrice,
       respondedAt: isoFromMs(Date.now()),
-      error: exact ? null : `polymarket timeout recovery found non-exact fill (${fillError ?? "no exact fill evidence"})`,
+      error: exact
+        ? null
+        : `polymarket timeout recovery found non-exact fill (${fillError ?? "no exact fill evidence"})`,
       metadata: {
         ...timedOutResult.metadata,
         polymarketTimeoutRecoveryAttempted: true,
@@ -2893,7 +3098,9 @@ export class PolymarketOrderClient implements VenueOrderClient {
 
   async preflightOrder(leg: ArbLeg, context: LiveOrderContext): Promise<string | null> {
     if (!leg.tokenId) return "Polymarket token id is required for live trading";
-    const requiredCollateral = context.requiredCollateral ?? roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const requiredCollateral =
+      context.requiredCollateral ??
+      roundPrice(context.size * context.maxBuyPrice + this.config.liveCollateralBufferDollars);
     const now = context.requestedAt ?? Date.now();
     const readiness = this.config.liveHotPathEnabled
       ? this.cachedHotReadiness(now, requiredCollateral)
@@ -2923,28 +3130,35 @@ export class PolymarketOrderClient implements VenueOrderClient {
         if (signedOrderKind === "market" && !client.createMarketOrder) {
           return `Polymarket market ${orderType} order creation is not supported by the configured CLOB client`;
         }
-        const signedOrder = signedOrderKind === "share_limit"
-          ? await client.createOrder({
-            tokenID: leg.tokenId,
-            price: roundPrice(context.maxBuyPrice),
-            size: context.size,
-            side: Side.BUY,
-            metadata: metadataFromClientOrderId(context.clientOrderId),
-          }, {
-            tickSize: book.tick_size as TickSize,
-            negRisk: Boolean(book.neg_risk),
-          })
-          : await client.createMarketOrder!({
-            tokenID: leg.tokenId,
-            price: roundPrice(context.maxBuyPrice),
-            amount: polymarketMarketBuySpend(context),
-            side: Side.BUY,
-            orderType,
-            metadata: metadataFromClientOrderId(context.clientOrderId),
-          }, {
-            tickSize: book.tick_size as TickSize,
-            negRisk: Boolean(book.neg_risk),
-          });
+        const signedOrder =
+          signedOrderKind === "share_limit"
+            ? await client.createOrder(
+                {
+                  tokenID: leg.tokenId,
+                  price: roundPrice(context.maxBuyPrice),
+                  size: context.size,
+                  side: Side.BUY,
+                  metadata: metadataFromClientOrderId(context.clientOrderId),
+                },
+                {
+                  tickSize: book.tick_size as TickSize,
+                  negRisk: Boolean(book.neg_risk),
+                },
+              )
+            : await client.createMarketOrder!(
+                {
+                  tokenID: leg.tokenId,
+                  price: roundPrice(context.maxBuyPrice),
+                  amount: polymarketMarketBuySpend(context),
+                  side: Side.BUY,
+                  orderType,
+                  metadata: metadataFromClientOrderId(context.clientOrderId),
+                },
+                {
+                  tickSize: book.tick_size as TickSize,
+                  negRisk: Boolean(book.neg_risk),
+                },
+              );
         const signMs = Math.max(0, Date.now() - signStartedAt);
         context.preflight = {
           ...context.preflight,
@@ -2988,21 +3202,23 @@ export class PolymarketOrderClient implements VenueOrderClient {
       // path stays non-blocking. Requires cached.ready (creds derived + geoblock cleared at warm time). Flag off
       // restores the strict warmed-coverage skip. Over-estimation is harmless: Polymarket is the cancelable FAK
       // first leg, so an under-funded order FAK-misses (no fill, no one-sided exposure) rather than mis-hedging.
-      const balanceCovers = this.config.liveHotReadinessBalanceCoverageEnabled
-        && cached.ready === true
-        && cached.balance != null
-        && cached.balance > 0
-        && cached.balance + 1e-9 >= requiredCollateral
-        && (cached.allowance == null || cached.allowance + 1e-9 >= requiredCollateral);
+      const balanceCovers =
+        this.config.liveHotReadinessBalanceCoverageEnabled &&
+        cached.ready === true &&
+        cached.balance != null &&
+        cached.balance > 0 &&
+        cached.balance + 1e-9 >= requiredCollateral &&
+        (cached.allowance == null || cached.allowance + 1e-9 >= requiredCollateral);
       if (!balanceCovers) {
         // Name the real blocker: a genuine funding shortfall (cache ready, but the actual last-seen
         // balance/allowance can't cover this size) vs the plain warmed-coverage skip (flag off, or cache not
         // ready) — so the skip reason isn't misread as a cache-sizing artifact when the wallet is underfunded.
-        const fundingShortfall = this.config.liveHotReadinessBalanceCoverageEnabled
-          && cached.ready === true
-          && (cached.balance == null
-            || cached.balance + 1e-9 < requiredCollateral
-            || (cached.allowance != null && cached.allowance + 1e-9 < requiredCollateral));
+        const fundingShortfall =
+          this.config.liveHotReadinessBalanceCoverageEnabled &&
+          cached.ready === true &&
+          (cached.balance == null ||
+            cached.balance + 1e-9 < requiredCollateral ||
+            (cached.allowance != null && cached.allowance + 1e-9 < requiredCollateral));
         return {
           ...cached,
           ready: false,
@@ -3016,7 +3232,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
     return cached;
   }
 
-  private cachedHotOrderBook(tokenId: string, now: number): Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk"> | null {
+  private cachedHotOrderBook(
+    tokenId: string,
+    now: number,
+  ): Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk"> | null {
     const cached = this.orderBookCache.get(tokenId);
     if (!cached) return null;
     const maxAgeMs = Math.max(30_000, this.config.liveHotPathCacheMaxAgeMs);
@@ -3045,7 +3264,10 @@ export class PolymarketOrderClient implements VenueOrderClient {
     resetPolymarketApiCredsMemo();
   }
 
-  private async getOrderBook(tokenId: string, now = Date.now()): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">> {
+  private async getOrderBook(
+    tokenId: string,
+    now = Date.now(),
+  ): Promise<Pick<OrderBookSummary, "min_order_size" | "tick_size" | "neg_risk">> {
     const cached = this.orderBookCache.get(tokenId);
     if (cached && now - cached.checkedAt < 30_000) return cached.book;
     const { client } = await this.client();
@@ -3060,7 +3282,12 @@ function asPolymarketClientBundle(value: PolymarketClobLike | PolymarketClobClie
   return { client: value, credentialsSource: "configured" };
 }
 
-export function failedVenueResult(venue: Venue, clientOrderId: string, error: unknown, requestedAt: number): VenueOrderResult {
+export function failedVenueResult(
+  venue: Venue,
+  clientOrderId: string,
+  error: unknown,
+  requestedAt: number,
+): VenueOrderResult {
   return {
     venue,
     clientOrderId,

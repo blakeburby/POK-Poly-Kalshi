@@ -6,10 +6,27 @@ import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
-import type { ArbCandidate, BinaryContract, DashboardAnalytics, DashboardLogEntry, DashboardLatencySnapshot, DashboardSignal, DashboardSnapshot, LiveExecutionReadiness, PolymarketDiagnostics } from "../types";
+import type {
+  ArbCandidate,
+  BinaryContract,
+  DashboardAnalytics,
+  DashboardLogEntry,
+  DashboardLatencySnapshot,
+  DashboardSignal,
+  DashboardSnapshot,
+  LiveExecutionReadiness,
+  PolymarketDiagnostics,
+} from "../types";
 import { emptyTradingActivity } from "../trading/activity";
 import { trimSignalForTransport, recentSignalsSignature } from "./signal-transport";
-import type { TradingActivityEvent, TradingActivitySnapshot, TradingPlatform, TradingPlatformActivity, VenuePnlSnapshot, EquityCurveSnapshot } from "../../types/trading";
+import type {
+  TradingActivityEvent,
+  TradingActivitySnapshot,
+  TradingPlatform,
+  TradingPlatformActivity,
+  VenuePnlSnapshot,
+  EquityCurveSnapshot,
+} from "../../types/trading";
 
 interface SignalReader {
   listRecentSignals(limit?: number): Promise<DashboardSignal[]>;
@@ -31,12 +48,19 @@ export interface DashboardRuntime {
   getPolymarketDiagnostics?: (now: number) => PolymarketDiagnostics;
   getLatencySnapshot?: (now: number, snapshotBuildMs: number) => DashboardLatencySnapshot;
   getExecutionReadiness?: (now: number) => LiveExecutionReadiness | Promise<LiveExecutionReadiness>;
-  getTradingActivity?: (now: number, readiness?: LiveExecutionReadiness) => TradingActivitySnapshot | Promise<TradingActivitySnapshot>;
+  getTradingActivity?: (
+    now: number,
+    readiness?: LiveExecutionReadiness,
+  ) => TradingActivitySnapshot | Promise<TradingActivitySnapshot>;
   getVenuePnl?: (now: number) => VenuePnlSnapshot | Promise<VenuePnlSnapshot>;
   getEquityCurve?: (now: number) => EquityCurveSnapshot | Promise<EquityCurveSnapshot>;
   /** Dashboard-only equity sampler hook; called when a fresh trading-activity value is built. */
   recordEquitySample?: (activity: TradingActivitySnapshot, now: number) => void;
-  getTradingPlatformActivity?: (platform: TradingPlatform, now: number, readiness?: LiveExecutionReadiness) => TradingPlatformActivity | Promise<TradingPlatformActivity>;
+  getTradingPlatformActivity?: (
+    platform: TradingPlatform,
+    now: number,
+    readiness?: LiveExecutionReadiness,
+  ) => TradingPlatformActivity | Promise<TradingPlatformActivity>;
   subscribeTradingActivityEvents?: (listener: (event: TradingActivityEvent) => void) => () => void;
   /**
    * Wakes open realtime streams the instant a real trade is written so the ledger updates in ~network RTT
@@ -83,7 +107,10 @@ function heavyRefreshMs(runtime: DashboardRuntime): number {
 // payload instead of the full book (which had ballooned to hundreds of levels). Display-only: live EXECUTION
 // reads the BookStore directly (runtime.books.snapshot() in the executor), never this trimmed JSON.
 const SNAPSHOT_MAX_BOOK_LEVELS = 25;
-function trimBookSnapshot(books: { kalshi: BinaryContract[]; polymarket: BinaryContract[] }): { kalshi: BinaryContract[]; polymarket: BinaryContract[] } {
+function trimBookSnapshot(books: { kalshi: BinaryContract[]; polymarket: BinaryContract[] }): {
+  kalshi: BinaryContract[];
+  polymarket: BinaryContract[];
+} {
   const cap = (c: BinaryContract): BinaryContract => ({
     ...c,
     yesAskLevels: c.yesAskLevels?.slice(0, SNAPSHOT_MAX_BOOK_LEVELS),
@@ -113,7 +140,11 @@ export function dashboardRequestAuthorized(headers: IncomingMessage["headers"], 
   return scheme?.toLowerCase() === "bearer" && typeof value === "string" && safeEqual(value, token);
 }
 
-async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardSignal[]> {
+async function cachedRecentSignals(
+  runtime: DashboardRuntime,
+  now: number,
+  cache?: DashboardSnapshotCache,
+): Promise<DashboardSignal[]> {
   const cached = cache?.recentSignals;
   if (cached && now - cached.refreshedAt < runtime.config.dashboardSignalRefreshMs) {
     return cached.value;
@@ -125,7 +156,11 @@ async function cachedRecentSignals(runtime: DashboardRuntime, now: number, cache
   return value;
 }
 
-async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<DashboardAnalytics> {
+async function cachedAnalytics(
+  runtime: DashboardRuntime,
+  now: number,
+  cache?: DashboardSnapshotCache,
+): Promise<DashboardAnalytics> {
   // Cache BOTH the live-analytics path and the DB-fallback path. Previously the getAnalytics path returned
   // uncached on EVERY poll, recomputing hourly/daily/weekly aggregates per request and adding steady CPU.
   const cached = cache?.analytics;
@@ -138,13 +173,14 @@ async function cachedAnalytics(runtime: DashboardRuntime, now: number, cache?: D
     if (cache) cache.analytics = { refreshedAt: now, value: live };
     return live;
   }
-  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ?? Promise.resolve([]));
+  const analyticsSignals = await (runtime.signals.listFilledSignalsSince?.(oldestAnalyticsSinceMs(now), 10_000) ??
+    Promise.resolve([]));
   const value = buildDashboardAnalytics(analyticsSignals, now, {
     mode: "fallback_db",
     lastUpdatedAt: analyticsSignals
       .map((signal) => new Date(signal.updatedAt).getTime())
       .filter((timestamp) => Number.isFinite(timestamp))
-      .reduce<number | null>((latest, timestamp) => latest == null ? timestamp : Math.max(latest, timestamp), null),
+      .reduce<number | null>((latest, timestamp) => (latest == null ? timestamp : Math.max(latest, timestamp)), null),
     lastDbReconciledAt: now,
     computeMs: 0,
     sourceSignalCount: analyticsSignals.length,
@@ -183,7 +219,11 @@ function venuePnlRefreshMs(runtime: DashboardRuntime): number {
   return Math.max(heavyRefreshMs(runtime), 30_000);
 }
 
-async function cachedVenuePnl(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<VenuePnlSnapshot | undefined> {
+async function cachedVenuePnl(
+  runtime: DashboardRuntime,
+  now: number,
+  cache?: DashboardSnapshotCache,
+): Promise<VenuePnlSnapshot | undefined> {
   if (!runtime.getVenuePnl) return undefined;
   const cached = cache?.venuePnl;
   if (cached && now - cached.refreshedAt < venuePnlRefreshMs(runtime)) {
@@ -207,7 +247,11 @@ function equityCurveRefreshMs(runtime: DashboardRuntime): number {
   return Math.max(heavyRefreshMs(runtime), 30_000);
 }
 
-async function cachedEquityCurve(runtime: DashboardRuntime, now: number, cache?: DashboardSnapshotCache): Promise<EquityCurveSnapshot | undefined> {
+async function cachedEquityCurve(
+  runtime: DashboardRuntime,
+  now: number,
+  cache?: DashboardSnapshotCache,
+): Promise<EquityCurveSnapshot | undefined> {
   if (!runtime.getEquityCurve) return undefined;
   const cached = cache?.equityCurve;
   if (cached && now - cached.refreshedAt < equityCurveRefreshMs(runtime)) {
@@ -318,22 +362,29 @@ function buildHealth(runtime: DashboardRuntime): DashboardSnapshot["health"] {
   };
 }
 
-function sortedCandidates(runtime: DashboardRuntime, now: number): { liveCandidates: ArbCandidate[]; syntheticStructures: ArbCandidate[] } {
+function sortedCandidates(
+  runtime: DashboardRuntime,
+  now: number,
+): { liveCandidates: ArbCandidate[]; syntheticStructures: ArbCandidate[] } {
   const paired = enumerateCandidates(
     runtime.books.getPolymarketContracts(runtime.config.staleBookMs, now),
     runtime.books.getKalshiContracts(runtime.config.staleBookMs, now),
     runtime.config.minProfitDollars,
   );
-  const liveCandidates = paired.executable.sort((left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs);
+  const liveCandidates = paired.executable.sort(
+    (left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs,
+  );
   const syntheticStructures = [...paired.executable, ...paired.rejected].sort((left, right) => {
     const classificationRank = (candidate: ArbCandidate): number => {
       if (candidate.risk?.classification === "true_arbitrage") return 0;
       if (candidate.risk?.classification === "guaranteed_below_threshold") return 1;
       return 2;
     };
-    return classificationRank(left) - classificationRank(right)
-      || (right.risk?.worstCaseProfit ?? right.guaranteedProfit) - (left.risk?.worstCaseProfit ?? left.guaranteedProfit)
-      || left.expiryMs - right.expiryMs;
+    return (
+      classificationRank(left) - classificationRank(right) ||
+      (right.risk?.worstCaseProfit ?? right.guaranteedProfit) - (left.risk?.worstCaseProfit ?? left.guaranteedProfit) ||
+      left.expiryMs - right.expiryMs
+    );
   });
   return { liveCandidates, syntheticStructures };
 }
@@ -344,7 +395,11 @@ function sortedCandidates(runtime: DashboardRuntime, now: number): { liveCandida
  * health. Deliberately omits the heavy DB/venue reads (recentSignals, analytics,
  * tradingActivity, logs) which the dashboard polls on a slower cadence.
  */
-export async function createLiveSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<Partial<DashboardSnapshot>> {
+export async function createLiveSnapshot(
+  runtime: DashboardRuntime,
+  now = Date.now(),
+  cache?: DashboardSnapshotCache,
+): Promise<Partial<DashboardSnapshot>> {
   const startedAt = Date.now();
   const books = trimBookSnapshot(runtime.books.snapshot());
   const scannerStatus = runtime.getScannerStatus();
@@ -370,7 +425,11 @@ export async function createLiveSnapshot(runtime: DashboardRuntime, now = Date.n
   };
 }
 
-export async function createDashboardSnapshot(runtime: DashboardRuntime, now = Date.now(), cache?: DashboardSnapshotCache): Promise<DashboardSnapshot> {
+export async function createDashboardSnapshot(
+  runtime: DashboardRuntime,
+  now = Date.now(),
+  cache?: DashboardSnapshotCache,
+): Promise<DashboardSnapshot> {
   const snapshotStartedAt = Date.now();
   const books = trimBookSnapshot(runtime.books.snapshot());
   const scannerStatus = runtime.getScannerStatus();
@@ -431,14 +490,22 @@ async function writeLive(response: ServerResponse, runtime: DashboardRuntime): P
   sendJson(response, 200, await createLiveSnapshot(runtime, Date.now(), sharedSnapshotCache));
 }
 
-async function writeTradingActivity(response: ServerResponse, runtime: DashboardRuntime, platform: TradingPlatform | null): Promise<void> {
+async function writeTradingActivity(
+  response: ServerResponse,
+  runtime: DashboardRuntime,
+  platform: TradingPlatform | null,
+): Promise<void> {
   const now = Date.now();
   const readiness = await runtime.getExecutionReadiness?.(now);
   if (platform && runtime.getTradingPlatformActivity) {
     sendJson(response, 200, await runtime.getTradingPlatformActivity(platform, now, readiness));
     return;
   }
-  sendJson(response, 200, runtime.getTradingActivity ? await runtime.getTradingActivity(now, readiness) : emptyTradingActivity(now));
+  sendJson(
+    response,
+    200,
+    runtime.getTradingActivity ? await runtime.getTradingActivity(now, readiness) : emptyTradingActivity(now),
+  );
 }
 
 async function writeStream(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
@@ -451,7 +518,9 @@ async function writeStream(response: ServerResponse, runtime: DashboardRuntime):
 
   const send = async (): Promise<void> => {
     try {
-      response.write(formatSseEvent("snapshot", await createDashboardSnapshot(runtime, Date.now(), sharedSnapshotCache)));
+      response.write(
+        formatSseEvent("snapshot", await createDashboardSnapshot(runtime, Date.now(), sharedSnapshotCache)),
+      );
     } catch (error) {
       response.write(formatSseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
     }
@@ -551,13 +620,19 @@ async function writeLiveStream(response: ServerResponse, runtime: DashboardRunti
   let ticking = false;
   let rerun = false;
   const runTick = async (): Promise<void> => {
-    if (ticking) { rerun = true; return; }
+    if (ticking) {
+      rerun = true;
+      return;
+    }
     ticking = true;
     try {
       await tick();
     } finally {
       ticking = false;
-      if (rerun) { rerun = false; void runTick(); }
+      if (rerun) {
+        rerun = false;
+        void runTick();
+      }
     }
   };
   await runTick();
@@ -601,10 +676,16 @@ export async function handleDashboardRequest(
       response.end();
       return true;
     }
-    const authed = realtimeTokenValid(url.searchParams.get("token"), runtime.config.dashboardRealtimeSecret)
-      || (!!runtime.config.dashboardApiToken && dashboardRequestAuthorized(request.headers, runtime.config.dashboardApiToken));
+    const authed =
+      realtimeTokenValid(url.searchParams.get("token"), runtime.config.dashboardRealtimeSecret) ||
+      (!!runtime.config.dashboardApiToken &&
+        dashboardRequestAuthorized(request.headers, runtime.config.dashboardApiToken));
     if (!authed) {
-      response.writeHead(401, { "Content-Type": "application/json", "Access-Control-Allow-Origin": origin || "*", Vary: "Origin" });
+      response.writeHead(401, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": origin || "*",
+        Vary: "Origin",
+      });
       response.end(JSON.stringify({ error: "unauthorized" }));
       return true;
     }
@@ -612,7 +693,13 @@ export async function handleDashboardRequest(
     return true;
   }
 
-  if (pathname !== "/dashboard/snapshot" && pathname !== "/dashboard/live" && pathname !== "/dashboard/stream" && pathname !== "/trading/activity") return false;
+  if (
+    pathname !== "/dashboard/snapshot" &&
+    pathname !== "/dashboard/live" &&
+    pathname !== "/dashboard/stream" &&
+    pathname !== "/trading/activity"
+  )
+    return false;
 
   if (!runtime.config.dashboardApiToken) {
     sendJson(response, 503, { error: "dashboard_token_not_configured" });

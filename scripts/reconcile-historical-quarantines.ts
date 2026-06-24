@@ -106,7 +106,8 @@ function parseArgs(argv: string[]): Args {
     snapshotUrl: "http://127.0.0.1:8080/dashboard/snapshot",
     minExpiredMs: 60 * 60_000,
     recentOrderLookbackMs: 24 * 60 * 60_000,
-    reason: "operator reconciled historical expired quarantine after supported API evidence showed no active locks, no open orders, no future unresolved exposure, and no current positive-value venue positions",
+    reason:
+      "operator reconciled historical expired quarantine after supported API evidence showed no active locks, no open orders, no future unresolved exposure, and no current positive-value venue positions",
   };
 
   for (const arg of argv) {
@@ -150,7 +151,7 @@ function round(value: number): number {
 }
 
 function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 
 function asArray(value: unknown): JsonRecord[] {
@@ -162,18 +163,17 @@ function stringSet(values: Array<string | null | undefined>): Set<string> {
 }
 
 function positionValue(position: JsonRecord): number {
-  return numberFrom(position.value)
-    ?? numberFrom(position.positionValueDollars)
-    ?? numberFrom(position.currentValue)
-    ?? numberFrom(position.marketValue)
-    ?? 0;
+  return (
+    numberFrom(position.value) ??
+    numberFrom(position.positionValueDollars) ??
+    numberFrom(position.currentValue) ??
+    numberFrom(position.marketValue) ??
+    0
+  );
 }
 
 function positionShares(position: JsonRecord): number {
-  return numberFrom(position.shares)
-    ?? numberFrom(position.quantity)
-    ?? numberFrom(position.count)
-    ?? 0;
+  return numberFrom(position.shares) ?? numberFrom(position.quantity) ?? numberFrom(position.count) ?? 0;
 }
 
 function positionMatchesTarget(position: JsonRecord, targetIds: Set<string>): boolean {
@@ -190,16 +190,20 @@ function positionMatchesTarget(position: JsonRecord, targetIds: Set<string>): bo
     position.asset_id,
     position.tokenId,
     position.token_id,
-  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
   return candidates.some((value) => targetIds.has(value));
 }
 
 function targetPositivePositions(venue: JsonRecord, targetIds: Set<string>): JsonRecord[] | null {
   if (!Array.isArray(venue.positions)) return null;
-  return asArray(venue.positions).filter((position) => (
-    positionMatchesTarget(position, targetIds)
-    && (positionValue(position) > 0.01 || (positionValue(position) === 0 && positionShares(position) > 0 && position.value == null))
-  ));
+  return asArray(venue.positions).filter(
+    (position) =>
+      positionMatchesTarget(position, targetIds) &&
+      (positionValue(position) > 0.01 ||
+        (positionValue(position) === 0 && positionShares(position) > 0 && position.value == null)),
+  );
 }
 
 function dateIso(value: Date | string | null | undefined): string | null {
@@ -270,14 +274,16 @@ function summarizeRows(rows: QuarantineRow[]): JsonRecord {
     const reason = byReason.get(reasonKey) ?? { count: 0, exposure: 0, newestCreatedAt: null };
     reason.count += 1;
     reason.exposure += rowExposureDollars;
-    if (rowCreatedAt && (!reason.newestCreatedAt || rowCreatedAt > reason.newestCreatedAt)) reason.newestCreatedAt = rowCreatedAt;
+    if (rowCreatedAt && (!reason.newestCreatedAt || rowCreatedAt > reason.newestCreatedAt))
+      reason.newestCreatedAt = rowCreatedAt;
     byReason.set(reasonKey, reason);
 
     const statusKey = `${row.action}|${row.kalshi_status ?? "null"}|${row.polymarket_status ?? "null"}`;
     const status = byStatus.get(statusKey) ?? { count: 0, exposure: 0, newestCreatedAt: null };
     status.count += 1;
     status.exposure += rowExposureDollars;
-    if (rowCreatedAt && (!status.newestCreatedAt || rowCreatedAt > status.newestCreatedAt)) status.newestCreatedAt = rowCreatedAt;
+    if (rowCreatedAt && (!status.newestCreatedAt || rowCreatedAt > status.newestCreatedAt))
+      status.newestCreatedAt = rowCreatedAt;
     byStatus.set(statusKey, status);
   }
 
@@ -291,23 +297,27 @@ function summarizeRows(rows: QuarantineRow[]): JsonRecord {
     oldestExpiryAt: oldestExpiryMs == null ? null : new Date(oldestExpiryMs).toISOString(),
     newestExpiryMs,
     newestExpiryAt: newestExpiryMs == null ? null : new Date(newestExpiryMs).toISOString(),
-    byReason: [...byReason.entries()].map(([reason, value]) => ({
-      reason,
-      count: value.count,
-      exposureDollars: round(value.exposure),
-      newestCreatedAt: value.newestCreatedAt,
-    })).sort((left, right) => right.count - left.count || right.exposureDollars - left.exposureDollars),
-    byStatus: [...byStatus.entries()].map(([key, value]) => {
-      const [action, kalshiStatus, polymarketStatus] = key.split("|");
-      return {
-        action,
-        kalshiStatus: kalshiStatus === "null" ? null : kalshiStatus,
-        polymarketStatus: polymarketStatus === "null" ? null : polymarketStatus,
+    byReason: [...byReason.entries()]
+      .map(([reason, value]) => ({
+        reason,
         count: value.count,
         exposureDollars: round(value.exposure),
         newestCreatedAt: value.newestCreatedAt,
-      };
-    }).sort((left, right) => right.count - left.count || right.exposureDollars - left.exposureDollars),
+      }))
+      .sort((left, right) => right.count - left.count || right.exposureDollars - left.exposureDollars),
+    byStatus: [...byStatus.entries()]
+      .map(([key, value]) => {
+        const [action, kalshiStatus, polymarketStatus] = key.split("|");
+        return {
+          action,
+          kalshiStatus: kalshiStatus === "null" ? null : kalshiStatus,
+          polymarketStatus: polymarketStatus === "null" ? null : polymarketStatus,
+          count: value.count,
+          exposureDollars: round(value.exposure),
+          newestCreatedAt: value.newestCreatedAt,
+        };
+      })
+      .sort((left, right) => right.count - left.count || right.exposureDollars - left.exposureDollars),
   };
 }
 
@@ -317,7 +327,7 @@ async function fetchJson(url: string, token?: string): Promise<unknown> {
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`${new URL(url).pathname} failed ${response.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) as unknown : {};
+  return text ? (JSON.parse(text) as unknown) : {};
 }
 
 function summarizePosition(position: JsonRecord): JsonRecord {
@@ -345,8 +355,13 @@ function summarizePlatform(value: unknown): JsonRecord {
   const platform = asRecord(value);
   const positions = asArray(platform.positions);
   const openOrders = asArray(platform.openOrders);
-  const positionValueDollars = positions.reduce((total, position) => total + Math.abs(numberFrom(position.value) ?? 0), 0);
-  const unknownValuePositionCount = positions.filter((position) => numberFrom(position.shares) != null && numberFrom(position.value) == null).length;
+  const positionValueDollars = positions.reduce(
+    (total, position) => total + Math.abs(numberFrom(position.value) ?? 0),
+    0,
+  );
+  const unknownValuePositionCount = positions.filter(
+    (position) => numberFrom(position.shares) != null && numberFrom(position.value) == null,
+  ).length;
   return {
     connectionStatus: platform.connectionStatus ?? null,
     positionCount: positions.length,
@@ -374,7 +389,8 @@ function summarizeSnapshot(snapshotPayload: unknown): JsonRecord {
   const userStreams = asRecord(execution.userStreams);
   const tradingActivity = asRecord(snapshot.tradingActivity);
   return {
-    generatedAt: numberFrom(snapshot.generatedAt) == null ? null : new Date(numberFrom(snapshot.generatedAt) ?? 0).toISOString(),
+    generatedAt:
+      numberFrom(snapshot.generatedAt) == null ? null : new Date(numberFrom(snapshot.generatedAt) ?? 0).toISOString(),
     health: {
       ok: health.ok ?? null,
       arbEnabled: health.arbEnabled ?? null,
@@ -457,7 +473,8 @@ async function loadQuarantineRows(client: Queryable): Promise<QuarantineRow[]> {
 async function dbGuardEvidence(client: Queryable, now: number, recentOrderLookbackMs: number): Promise<JsonRecord> {
   const [locks, futureExposure, latestEvents] = await Promise.all([
     client.query<ActiveLocksRow>("SELECT COUNT(*)::INT AS count FROM live_execution_locks WHERE cleared_at IS NULL"),
-    client.query<FutureExposureRow>(`
+    client.query<FutureExposureRow>(
+      `
       SELECT COUNT(*)::INT AS count,
              COALESCE(SUM(COALESCE(kalshi_fill_count, 0) + COALESCE(polymarket_fill_count, 0)), 0) AS filled_shares
       FROM cross_venue_arb_signals
@@ -472,8 +489,11 @@ async function dbGuardEvidence(client: Queryable, now: number, recentOrderLookba
           OR kalshi_status IN ($3, $4)
           OR polymarket_status IN ($3, $4)
         )
-    `, [now, "filled", "unknown", "unexpected_fill_count"]),
-    client.query<LatestOrderEventRow>(`
+    `,
+      [now, "filled", "unknown", "unexpected_fill_count"],
+    ),
+    client.query<LatestOrderEventRow>(
+      `
       WITH latest AS (
         SELECT DISTINCT ON (COALESCE(venue_order_id, client_order_id))
                COALESCE(venue_order_id, client_order_id) AS order_key,
@@ -488,7 +508,9 @@ async function dbGuardEvidence(client: Queryable, now: number, recentOrderLookba
       )
       SELECT venue, status, remaining_count, received_at
       FROM latest
-    `, [now - recentOrderLookbackMs]),
+    `,
+      [now - recentOrderLookbackMs],
+    ),
   ]);
 
   const openOrderCandidates = latestEvents.rows.filter((row) => {
@@ -539,8 +561,10 @@ function guardFailures(evidence: {
   if (execution.circuitBreakerLocked !== false) failures.push("execution.circuitBreakerLocked is not false");
   if (reconciliation.clean !== true) failures.push("execution.reconciliation.clean is not true");
   if (Number(evidence.db.activeLocks ?? 0) !== 0) failures.push("active live_execution_locks exist");
-  if (Number(evidence.db.futureUnresolvedExposureSignals ?? 0) !== 0) failures.push("future unresolved exposure signals exist");
-  if (Number(evidence.db.recentOpenOrderCandidates ?? 0) !== 0) failures.push("recent worker-managed open order candidates exist");
+  if (Number(evidence.db.futureUnresolvedExposureSignals ?? 0) !== 0)
+    failures.push("future unresolved exposure signals exist");
+  if (Number(evidence.db.recentOpenOrderCandidates ?? 0) !== 0)
+    failures.push("recent worker-managed open order candidates exist");
   if (kalshi.connectionStatus !== "live") failures.push("Kalshi account source is not live");
   if (polymarket.connectionStatus !== "live") failures.push("Polymarket account source is not live");
   if (Number(kalshi.openOrders ?? 0) !== 0) failures.push("Kalshi open orders are not zero");
@@ -553,7 +577,8 @@ function guardFailures(evidence: {
   }
   if (polymarketTargetPositions == null) {
     if (Number(polymarket.positiveValuePositions ?? 0) !== 0) failures.push("Polymarket has positive-value positions");
-    if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0) failures.push("Polymarket has positions with unknown value");
+    if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0)
+      failures.push("Polymarket has positions with unknown value");
     if (Number(polymarket.positionValueDollars ?? 0) > 0.01) failures.push("Polymarket position value is positive");
   } else if (polymarketTargetPositions.length > 0) {
     failures.push("Polymarket has positive-value positions for unresolved quarantine markets");
@@ -582,7 +607,8 @@ function resolutionForRow(row: QuarantineRow, evidence: JsonRecord): JsonRecord 
       target: compactRow(row),
       global: evidence,
     },
-    notes: "Historical expired quarantine reconciled for readiness; original action, status, failure, fill, and risk_quarantine fields were preserved.",
+    notes:
+      "Historical expired quarantine reconciled for readiness; original action, status, failure, fill, and risk_quarantine fields were preserved.",
   };
 }
 
@@ -607,7 +633,8 @@ async function applyResolution(
 
     for (const row of lockedRows) {
       const resolution = resolutionForRow(row, evidence);
-      const result = await client.query<{ id: string }>(`
+      const result = await client.query<{ id: string }>(
+        `
         UPDATE cross_venue_arb_signals
         SET reconciliation_resolved_at = $2::TIMESTAMPTZ,
             reconciliation_resolution_reason = $3,
@@ -616,7 +643,9 @@ async function applyResolution(
           AND reconciliation_resolved_at IS NULL
           AND risk_quarantined_at IS NOT NULL
         RETURNING id::TEXT
-      `, [row.id, resolvedAt, reason, JSON.stringify(resolution)]);
+      `,
+        [row.id, resolvedAt, reason, JSON.stringify(resolution)],
+      );
       if (result.rows[0]?.id) updatedIds.push(result.rows[0].id);
     }
 
@@ -701,14 +730,20 @@ async function main(): Promise<void> {
     if (args.apply) {
       if (failures.length > 0) {
         const reportPath = await writeReport(args.outDir, report);
-        console.log(JSON.stringify({
-          mode: "apply",
-          safeToApply: false,
-          unresolvedQuarantineCount: rows.length,
-          unresolvedQuarantineExposureDollars: rowSummary.exposureDollars,
-          failures,
-          reportPath,
-        }, null, 2));
+        console.log(
+          JSON.stringify(
+            {
+              mode: "apply",
+              safeToApply: false,
+              unresolvedQuarantineCount: rows.length,
+              unresolvedQuarantineExposureDollars: rowSummary.exposureDollars,
+              failures,
+              reportPath,
+            },
+            null,
+            2,
+          ),
+        );
         throw new Error(`Refusing to apply historical quarantine reconciliation: ${failures.join("; ")}`);
       }
       report.applyResult = await applyResolution(pool, rows, generatedAt, args.reason, evidence);
@@ -734,10 +769,15 @@ async function main(): Promise<void> {
   } catch (error) {
     if (report && !report.reportWriteFailed) {
       try {
-        const reportPath = await writeReport(args.outDir, { ...report, fatalError: error instanceof Error ? error.message : String(error) });
+        const reportPath = await writeReport(args.outDir, {
+          ...report,
+          fatalError: error instanceof Error ? error.message : String(error),
+        });
         console.error(`Wrote failure report to ${reportPath}`);
       } catch (writeError) {
-        console.error(`Failed to write reconciliation report: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
+        console.error(
+          `Failed to write reconciliation report: ${writeError instanceof Error ? writeError.message : String(writeError)}`,
+        );
       }
     }
     throw error;

@@ -12,7 +12,9 @@ export async function GET(request: Request): Promise<Response> {
   const platform = rawPlatform === "kalshi" || rawPlatform === "polymarket" ? rawPlatform : null;
   if (rawPlatform && !platform) return Response.json({ error: "invalid_platform" }, { status: 400 });
   try {
-    return Response.json(platform ? await fetchTradingActivity(platform as TradingPlatform) : await fetchTradingActivity());
+    return Response.json(
+      platform ? await fetchTradingActivity(platform as TradingPlatform) : await fetchTradingActivity(),
+    );
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 });
   }

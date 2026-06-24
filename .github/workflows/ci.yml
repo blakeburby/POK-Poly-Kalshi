@@ -40,9 +40,8 @@ jobs:
         run: npm test
 
   format:
-    name: prettier (advisory)
+    name: prettier
     runs-on: ubuntu-latest
-    continue-on-error: true # informational until the existing tree is formatted once; see CONTRIBUTING.md
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

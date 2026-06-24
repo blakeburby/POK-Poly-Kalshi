@@ -77,10 +77,7 @@ type PendingLogon = {
   reject: (error: Error) => void;
 };
 
-export type KalshiFixSocketFactory = (
-  options: ConnectionOptions,
-  onSecureConnect: () => void,
-) => TLSSocket;
+export type KalshiFixSocketFactory = (options: ConnectionOptions, onSecureConnect: () => void) => TLSSocket;
 
 export function kalshiFixTimestamp(date = new Date()): string {
   const year = date.getUTCFullYear().toString().padStart(4, "0");
@@ -115,7 +112,8 @@ function checksum(messageWithoutChecksum: string): string {
 }
 
 export function encodeFixMessage(fields: Array<[number | string, string | number | boolean]>): string {
-  const body = fields.map(([tag, value]) => `${tag}=${value === true ? "Y" : value === false ? "N" : value}`).join(SOH) + SOH;
+  const body =
+    fields.map(([tag, value]) => `${tag}=${value === true ? "Y" : value === false ? "N" : value}`).join(SOH) + SOH;
   const head = `8=${FIX_BEGIN_STRING}${SOH}9=${Buffer.byteLength(body, "ascii")}${SOH}`;
   const withoutChecksum = head + body;
   return `${withoutChecksum}10=${checksum(withoutChecksum)}${SOH}`;
@@ -172,11 +170,7 @@ function centsLimitPrice(yesBookPrice: number, direction: "yes" | "no"): string 
   return Math.max(1, Math.min(99, cents)).toString();
 }
 
-export function kalshiFixLimitPriceField(
-  yesBookPrice: number,
-  direction: "yes" | "no",
-  useDollars: boolean,
-): string {
+export function kalshiFixLimitPriceField(yesBookPrice: number, direction: "yes" | "no", useDollars: boolean): string {
   return useDollars ? fixedDollars(yesBookPrice) : centsLimitPrice(yesBookPrice, direction);
 }
 
@@ -226,13 +220,13 @@ export function buildKalshiFixNewOrderFields(
 }
 
 function isTerminalReport(report: KalshiFixExecutionReport): boolean {
-  return ["2", "4", "8", "C"].includes(report.ordStatus ?? "")
-    || ["4", "8", "C"].includes(report.execType ?? "");
+  return ["2", "4", "8", "C"].includes(report.ordStatus ?? "") || ["4", "8", "C"].includes(report.execType ?? "");
 }
 
 function reportStatus(report: KalshiFixExecutionReport, requestedQuantity: number): KalshiFixOrderExecution["status"] {
   if (report.text === KALSHI_EXCHANGE_UNAVAILABLE) return "unknown";
-  if (report.cumulativeQuantity != null && Math.abs(report.cumulativeQuantity - requestedQuantity) < 0.000001) return "filled";
+  if (report.cumulativeQuantity != null && Math.abs(report.cumulativeQuantity - requestedQuantity) < 0.000001)
+    return "filled";
   if ((report.cumulativeQuantity ?? 0) > 0 && ["4", "C"].includes(report.ordStatus ?? "")) return "partial";
   if (report.ordStatus === "4") return "canceled";
   if (report.ordStatus === "8") return "rejected";
@@ -241,7 +235,10 @@ function reportStatus(report: KalshiFixExecutionReport, requestedQuantity: numbe
   return "unknown";
 }
 
-function executionFromReports(input: KalshiFixOrderInput, reports: KalshiFixExecutionReport[]): KalshiFixOrderExecution {
+function executionFromReports(
+  input: KalshiFixOrderInput,
+  reports: KalshiFixExecutionReport[],
+): KalshiFixOrderExecution {
   const finalReport = reports[reports.length - 1] ?? null;
   const tradeReports = reports.filter((report) => (report.cumulativeQuantity ?? 0) > 0 || report.execType === "F");
   const lastTradeReport = tradeReports[tradeReports.length - 1] ?? finalReport;
@@ -263,7 +260,10 @@ function executionFromReports(input: KalshiFixOrderInput, reports: KalshiFixExec
   };
 }
 
-export function parseKalshiFixExecutionReport(fields: Record<string, string>, useDollars: boolean): KalshiFixExecutionReport {
+export function parseKalshiFixExecutionReport(
+  fields: Record<string, string>,
+  useDollars: boolean,
+): KalshiFixExecutionReport {
   return {
     clientOrderId: fields["11"] ?? "",
     orderId: fields["37"] ?? null,
@@ -333,19 +333,22 @@ export class KalshiFixOrderSession {
         this.connectPromise = null;
         resolve();
       };
-      const socket = this.socketFactory({
-        host: this.options.host,
-        port: this.options.port,
-        servername: this.options.host,
-        minVersion: "TLSv1.2",
-      }, () => {
-        try {
-          socket.setNoDelay(true);
-          this.sendLogon();
-        } catch (error) {
-          settleReject(error instanceof Error ? error : new Error(String(error)));
-        }
-      });
+      const socket = this.socketFactory(
+        {
+          host: this.options.host,
+          port: this.options.port,
+          servername: this.options.host,
+          minVersion: "TLSv1.2",
+        },
+        () => {
+          try {
+            socket.setNoDelay(true);
+            this.sendLogon();
+          } catch (error) {
+            settleReject(error instanceof Error ? error : new Error(String(error)));
+          }
+        },
+      );
 
       this.socket = socket;
       socket.setEncoding("ascii");
@@ -353,7 +356,10 @@ export class KalshiFixOrderSession {
       socket.on("error", (error) => this.onSocketFailure(error));
       socket.on("close", () => this.onSocketClose());
       this.pendingLogon = {
-        timer: setTimeout(() => settleReject(new Error(`Kalshi FIX logon timeout after ${this.options.connectTimeoutMs}ms`)), this.options.connectTimeoutMs),
+        timer: setTimeout(
+          () => settleReject(new Error(`Kalshi FIX logon timeout after ${this.options.connectTimeoutMs}ms`)),
+          this.options.connectTimeoutMs,
+        ),
         resolve: () => {
           clearTimeout(this.pendingLogon?.timer);
           this.pendingLogon = null;
@@ -503,14 +509,17 @@ export class KalshiFixOrderSession {
 
   private startHeartbeats(): void {
     if (this.heartbeatTimer) return;
-    this.heartbeatTimer = setInterval(() => {
-      if (!this.isReady()) return;
-      try {
-        this.send("0", []);
-      } catch {
-        // Socket failure handlers will fail readiness/pending orders.
-      }
-    }, Math.max(4, this.options.heartbeatSeconds) * 1_000);
+    this.heartbeatTimer = setInterval(
+      () => {
+        if (!this.isReady()) return;
+        try {
+          this.send("0", []);
+        } catch {
+          // Socket failure handlers will fail readiness/pending orders.
+        }
+      },
+      Math.max(4, this.options.heartbeatSeconds) * 1_000,
+    );
     this.heartbeatTimer.unref?.();
   }
 

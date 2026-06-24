@@ -4,7 +4,27 @@ import { loadConfig } from "../config";
 import type { LiveExecutionLockWriter } from "../db/live-execution-locks";
 import type { VenueOrderEventInput, VenueOrderEventReader, VenueOrderEventWriter } from "../db/venue-order-events";
 import { protectedCandidateBlockReason } from "../scanner/safety";
-import type { ArbCandidate, ArbLeg, BinaryContract, DashboardSignal, ExecutionResult, ExecutionStrategy, ExecutionTimings, FillQualitySnapshot, LeadLagSnapshot, LiveExecutionLastAttempt, LiveExecutionReadiness, LiveOrderPlacementMode, LiveRecoveryStatus, LiveRiskState, QuoteSnapshot, ReconciliationResolution, Venue, VenueConfirmations, VenueExecutionReadiness } from "../types";
+import type {
+  ArbCandidate,
+  ArbLeg,
+  BinaryContract,
+  DashboardSignal,
+  ExecutionResult,
+  ExecutionStrategy,
+  ExecutionTimings,
+  FillQualitySnapshot,
+  LeadLagSnapshot,
+  LiveExecutionLastAttempt,
+  LiveExecutionReadiness,
+  LiveOrderPlacementMode,
+  LiveRecoveryStatus,
+  LiveRiskState,
+  QuoteSnapshot,
+  ReconciliationResolution,
+  Venue,
+  VenueConfirmations,
+  VenueExecutionReadiness,
+} from "../types";
 import {
   failedVenueResult,
   generatedClientOrderId,
@@ -18,10 +38,20 @@ import {
 import { economicFillPriceForLeg } from "./economic-prices";
 import type { LiveExecutionQualityOptions } from "./execution-quality";
 import { fillQualityBlockReason, scoreFillQuality } from "./fill-quality";
-import { evaluateLiveQuoteQuality, captureShadowLadder, CUSHIONED_EDGE_REASON_PREFIX, selectExecutableSize } from "./quote-quality";
+import {
+  evaluateLiveQuoteQuality,
+  captureShadowLadder,
+  CUSHIONED_EDGE_REASON_PREFIX,
+  selectExecutableSize,
+} from "./quote-quality";
 import { roundPrice } from "./num-utils";
 import { leadLagBlockReason, scoreLeadLag, type LeadLagHistory } from "../signals/lead-lag";
-import { buildUserStreamReadiness, defaultReconciliationReadiness, type VenueConfirmationMonitor, type VenueConfirmationResult } from "./venue-confirmations";
+import {
+  buildUserStreamReadiness,
+  defaultReconciliationReadiness,
+  type VenueConfirmationMonitor,
+  type VenueConfirmationResult,
+} from "./venue-confirmations";
 
 export interface ArbExecutor {
   execute(candidate: ArbCandidate): Promise<ExecutionResult>;
@@ -101,14 +131,14 @@ function isVerifiedNoFillAfterRecovery(result: VenueOrderResult, config: AppConf
 function isUserStreamPreflightReason(reason: string): boolean {
   const normalized = reason.toLowerCase();
   const mentionsUserStream = normalized.includes("user stream") || normalized.includes("user subscription");
-  return mentionsUserStream
-    && (
-      normalized.includes("not connected")
-      || normalized.includes("not subscribed")
-      || normalized.includes("not ready")
-      || normalized.includes("not configured")
-      || normalized.includes("refreshing")
-    );
+  return (
+    mentionsUserStream &&
+    (normalized.includes("not connected") ||
+      normalized.includes("not subscribed") ||
+      normalized.includes("not ready") ||
+      normalized.includes("not configured") ||
+      normalized.includes("refreshing"))
+  );
 }
 
 function isRetryablePreSubmitReason(reason: string | null | undefined): boolean {
@@ -116,20 +146,20 @@ function isRetryablePreSubmitReason(reason: string | null | undefined): boolean 
   const normalized = reason.toLowerCase();
   if (isUserStreamPreflightReason(reason)) return true;
   if (
-    normalized.includes("hot-path lock cache has not been hydrated")
-    || normalized.includes("hot-path lock cache is stale")
-    || normalized.includes("hot-path exposure cache is stale")
-    || normalized.includes("hot readiness cache is stale")
-    || normalized.includes("readiness cache is stale")
-  ) return true;
+    normalized.includes("hot-path lock cache has not been hydrated") ||
+    normalized.includes("hot-path lock cache is stale") ||
+    normalized.includes("hot-path exposure cache is stale") ||
+    normalized.includes("hot readiness cache is stale") ||
+    normalized.includes("readiness cache is stale")
+  )
+    return true;
   if (
-    normalized.includes("quote revalidation after preflight failed")
-    && (
-      normalized.includes("quote is stale")
-      || normalized.includes("quote skew")
-      || normalized.includes("tick size changed")
-    )
-  ) return true;
+    normalized.includes("quote revalidation after preflight failed") &&
+    (normalized.includes("quote is stale") ||
+      normalized.includes("quote skew") ||
+      normalized.includes("tick size changed"))
+  )
+    return true;
   return false;
 }
 
@@ -242,7 +272,10 @@ export interface RiskQuarantineExposureReader {
   unresolvedRiskQuarantineExposureDollars(): Promise<number>;
   liveRiskQuarantineStatus?(): Promise<{ total: number; count: number }>;
   liveExactExposureBlockReason?(now: number): Promise<string | null>;
-  liveExecutionQualityStatus?(now: number, options: LiveExecutionQualityOptions): Promise<LiveExecutionReadiness["executionQuality"]>;
+  liveExecutionQualityStatus?(
+    now: number,
+    options: LiveExecutionQualityOptions,
+  ): Promise<LiveExecutionReadiness["executionQuality"]>;
   listLiveExecutionQualitySignals?(now: number, lookbackMs: number, limit?: number): Promise<DashboardSignal[]>;
 }
 
@@ -282,7 +315,11 @@ export class LiveExecutor implements ArbExecutor {
   // P2: TTL cache of the fill-quality snapshot's two DB read results (off by default via
   // liveFillQualityInputCacheMaxAgeMs=0). Keyed only by time — the reads are a time-window sample, not
   // candidate-specific — so clustered executions reuse one query instead of contending the shared pg pool.
-  private fillQualityInputsCache: { at: number; recentSignals: DashboardSignal[]; recentVenueEvents: VenueOrderEventInput[] } | null = null;
+  private fillQualityInputsCache: {
+    at: number;
+    recentSignals: DashboardSignal[];
+    recentVenueEvents: VenueOrderEventInput[];
+  } | null = null;
 
   constructor(
     private readonly config: AppConfig = loadConfig(),
@@ -323,39 +360,46 @@ export class LiveExecutor implements ArbExecutor {
       avgMismatchCostDollars: null,
       estimatedExecutableEdge: null,
     };
-    const [kalshi, polymarket, activeLock, quarantineStatus, exactExposureReason, executionQuality] = await Promise.all([
-      this.kalshiClient.readiness(now),
-      this.polymarketClient.readiness(now),
-      this.liveLocks?.getActiveLock() ?? Promise.resolve(null),
-      this.quarantineExposureReader?.liveRiskQuarantineStatus?.()
-        ?? this.quarantineExposureReader?.unresolvedRiskQuarantineExposureDollars().then((total) => ({ total, count: total > 0 ? 1 : 0 }))
-        ?? Promise.resolve(null),
-      this.config.liveExactExposureRequired
-        ? this.quarantineExposureReader?.liveExactExposureBlockReason?.(now) ?? Promise.resolve(null)
-        : Promise.resolve(null),
-      this.quarantineExposureReader?.liveExecutionQualityStatus?.(now, qualityOptions) ?? Promise.resolve(defaultExecutionQuality),
-    ]);
-    const userStreams = this.confirmationMonitor?.userStreamReadiness(now)
-      ?? buildUserStreamReadiness(
+    const [kalshi, polymarket, activeLock, quarantineStatus, exactExposureReason, executionQuality] = await Promise.all(
+      [
+        this.kalshiClient.readiness(now),
+        this.polymarketClient.readiness(now),
+        this.liveLocks?.getActiveLock() ?? Promise.resolve(null),
+        this.quarantineExposureReader?.liveRiskQuarantineStatus?.() ??
+          this.quarantineExposureReader
+            ?.unresolvedRiskQuarantineExposureDollars()
+            .then((total) => ({ total, count: total > 0 ? 1 : 0 })) ??
+          Promise.resolve(null),
+        this.config.liveExactExposureRequired
+          ? (this.quarantineExposureReader?.liveExactExposureBlockReason?.(now) ?? Promise.resolve(null))
+          : Promise.resolve(null),
+        this.quarantineExposureReader?.liveExecutionQualityStatus?.(now, qualityOptions) ??
+          Promise.resolve(defaultExecutionQuality),
+      ],
+    );
+    const userStreams =
+      this.confirmationMonitor?.userStreamReadiness(now) ??
+      buildUserStreamReadiness(
         this.config.liveUserStreamsEnabled,
         this.config.liveUserStreamConfirmTimeoutMs,
         undefined,
         undefined,
         now,
       );
-    const baseReconciliation = this.confirmationMonitor?.reconciliationReadiness(now)
-      ?? defaultReconciliationReadiness(
+    const baseReconciliation =
+      this.confirmationMonitor?.reconciliationReadiness(now) ??
+      defaultReconciliationReadiness(
         this.config.liveReconcileBeforeTrade,
         null,
         this.config.liveUserStreamsEnabled ? "live reconciliation monitor is not configured" : null,
       );
     const reconciliation = quarantineStatus
       ? {
-        ...baseReconciliation,
-        quarantinedExposureDollars: baseReconciliation.quarantinedExposureDollars ?? quarantineStatus.total,
-        quarantinedSignalCount: baseReconciliation.quarantinedSignalCount ?? quarantineStatus.count,
-        quarantineCapDollars: baseReconciliation.quarantineCapDollars ?? this.config.liveMaxUnresolvedExposureDollars,
-      }
+          ...baseReconciliation,
+          quarantinedExposureDollars: baseReconciliation.quarantinedExposureDollars ?? quarantineStatus.total,
+          quarantinedSignalCount: baseReconciliation.quarantinedSignalCount ?? quarantineStatus.count,
+          quarantineCapDollars: baseReconciliation.quarantineCapDollars ?? this.config.liveMaxUnresolvedExposureDollars,
+        }
       : baseReconciliation;
     const effectiveActiveLock = this.config.liveAutoHardlocksEnabled ? activeLock : null;
     const effectivePartialFillLocked = this.config.liveAutoHardlocksEnabled ? this.partialFillLocked : false;
@@ -423,14 +467,13 @@ export class LiveExecutor implements ArbExecutor {
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const result = await this.executeOnce(candidate);
-      const shouldRetry = result.executionGroupId == null
-        && isRetryablePreSubmitReason(result.failureReason)
-        && attempt < maxRetries;
+      const shouldRetry =
+        result.executionGroupId == null && isRetryablePreSubmitReason(result.failureReason) && attempt < maxRetries;
       if (!shouldRetry) {
         return this.withRecoveryMetadata(result, {
-          status: evidence.length > 0 ? "pretrade_retry" : result.recoveryStatus ?? "none",
+          status: evidence.length > 0 ? "pretrade_retry" : (result.recoveryStatus ?? "none"),
           attempts: evidence.length,
-          evidence: evidence.length > 0 ? { pretradeRetries: evidence } : result.recoveryEvidence ?? null,
+          evidence: evidence.length > 0 ? { pretradeRetries: evidence } : (result.recoveryEvidence ?? null),
         });
       }
       evidence.push({
@@ -459,26 +502,34 @@ export class LiveExecutor implements ArbExecutor {
     const activeLock = this.config.liveAutoHardlocksEnabled ? await this.liveLocks?.getActiveLock() : null;
     if (activeLock) return failed(`live circuit breaker locked: ${activeLock.reason}`);
     if (this.config.liveAutoHardlocksEnabled && this.partialFillLocked) {
-      return liveLocked("live execution locked after unsafe fill; manual operator review required before trading resumes");
+      return liveLocked(
+        "live execution locked after unsafe fill; manual operator review required before trading resumes",
+      );
     }
     const monitorFailure = await this.confirmationPreflight(candidate);
     if (monitorFailure) return monitorFailure;
     const kalshiLeg = legForVenue(candidate, "kalshi");
     const polymarketLeg = legForVenue(candidate, "polymarket");
-    if (!kalshiLeg || !polymarketLeg) return this.failed("candidate must contain one Kalshi leg and one Polymarket leg");
+    if (!kalshiLeg || !polymarketLeg)
+      return this.failed("candidate must contain one Kalshi leg and one Polymarket leg");
 
     // The extra first-leg cross offset (P1-5) applies only when Polymarket is the leading/cancelable
     // leg (polymarket_first_exact). Default 0 = no change. The cushioned-edge gate still binds.
-    const polymarketFirstCrossCents = this.config.liveOrderPlacementMode === "polymarket_first_exact"
-      ? this.config.livePolymarketFirstCrossCents
-      : 0;
+    const polymarketFirstCrossCents =
+      this.config.liveOrderPlacementMode === "polymarket_first_exact" ? this.config.livePolymarketFirstCrossCents : 0;
     // M2: with cash-aware sizing on, feed selectExecutableSize the cached Kalshi balance so a deep window
     // sizes DOWN to the largest affordable size instead of skipping when its size-N reserve exceeds dipping
     // cash. Cached readiness (hot path) is fast; default off -> null -> cash-unaware (byte-identical).
     const availableKalshiCash = this.config.liveDynamicSizingCashAware
-      ? (await this.kalshiClient.readiness(this.now())).balance ?? null
+      ? ((await this.kalshiClient.readiness(this.now())).balance ?? null)
       : null;
-    const preparedOrSkip = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents, availableKalshiCash);
+    const preparedOrSkip = this.prepareExecution(
+      candidate,
+      kalshiLeg,
+      polymarketLeg,
+      polymarketFirstCrossCents,
+      availableKalshiCash,
+    );
     if (isPrepareSkip(preparedOrSkip)) {
       return preparedOrSkip.rejectedSnapshot
         ? this.skippedWithShadowLadder(preparedOrSkip.skipReason, preparedOrSkip.rejectedSnapshot)
@@ -490,35 +541,41 @@ export class LiveExecutor implements ArbExecutor {
     const executionGroupId = randomUUID();
     const kalshiClientOrderId = generatedClientOrderId("kalshi");
     const polymarketClientOrderId = generatedClientOrderId("polymarket");
-    const placementMode = this.config.liveOrderPlacementMode === "polymarket_first_exact"
-      || this.config.liveOrderPlacementMode === "kalshi_first_exact"
-      || this.config.liveOrderPlacementMode === "parallel_market"
-      || this.config.liveOrderPlacementMode === "parallel_quick"
-      ? this.config.liveOrderPlacementMode
-      : this.config.liveParallelExecutionEnabled ? this.config.liveOrderPlacementMode : "parallel_fok";
+    const placementMode =
+      this.config.liveOrderPlacementMode === "polymarket_first_exact" ||
+      this.config.liveOrderPlacementMode === "kalshi_first_exact" ||
+      this.config.liveOrderPlacementMode === "parallel_market" ||
+      this.config.liveOrderPlacementMode === "parallel_quick"
+        ? this.config.liveOrderPlacementMode
+        : this.config.liveParallelExecutionEnabled
+          ? this.config.liveOrderPlacementMode
+          : "parallel_fok";
     if (
-      placementMode === "parallel_quick"
-      && this.config.kalshiHedgeOrderMode !== "ui_quick_order"
-      && this.config.kalshiHedgeOrderMode !== "fix_ioc"
-      && this.config.kalshiHedgeOrderMode !== "public_v2"
+      placementMode === "parallel_quick" &&
+      this.config.kalshiHedgeOrderMode !== "ui_quick_order" &&
+      this.config.kalshiHedgeOrderMode !== "fix_ioc" &&
+      this.config.kalshiHedgeOrderMode !== "public_v2"
     ) {
       return skipped("parallel_quick requires KALSHI_HEDGE_ORDER_MODE=ui_quick_order, fix_ioc, or public_v2");
     }
     if (
-      placementMode === "parallel_quick"
-      && this.config.kalshiHedgeOrderMode === "ui_quick_order"
-      && !this.config.kalshiUiQuickOrderCapValidated
+      placementMode === "parallel_quick" &&
+      this.config.kalshiHedgeOrderMode === "ui_quick_order" &&
+      !this.config.kalshiUiQuickOrderCapValidated
     ) {
       return skipped("parallel_quick requires KALSHI_UI_QUICK_ORDER_CAP_VALIDATED=true");
     }
-    const limitRestMs = placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
+    const limitRestMs =
+      placementMode === "parallel_limit_rest" ? Math.max(0, this.config.liveAggressiveLimitRestMs) : undefined;
     let kalshiContext: LiveOrderContext = {
       executionGroupId,
       clientOrderId: kalshiClientOrderId,
       size: prepared.orderSize,
       maxBuyPrice: prepared.kalshi.maxBuyPrice,
       requiredCollateral: this.kalshiPreflightCollateral(prepared, placementMode),
-      orderGroupId: this.config.liveKalshiOrderGroupEnabled ? this.config.liveKalshiOrderGroupId || undefined : undefined,
+      orderGroupId: this.config.liveKalshiOrderGroupEnabled
+        ? this.config.liveKalshiOrderGroupId || undefined
+        : undefined,
       placementMode,
       limitRestMs,
     };
@@ -527,7 +584,9 @@ export class LiveExecutor implements ArbExecutor {
       clientOrderId: polymarketClientOrderId,
       size: prepared.orderSize,
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
-      requiredCollateral: roundPrice(prepared.orderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: roundPrice(
+        prepared.orderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars,
+      ),
       placementMode,
       limitRestMs,
     };
@@ -538,7 +597,12 @@ export class LiveExecutor implements ArbExecutor {
       return this.skippedWithQuoteQuality(
         initialLeadLagBlock,
         prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt: blockedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
+        this.executionTimings(executeStartedAt, null, null, {
+          preflightStartedAt: blockedAt,
+          preflightCompletedAt: blockedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt: blockedAt,
+        }),
         null,
       );
     }
@@ -549,7 +613,12 @@ export class LiveExecutor implements ArbExecutor {
       return this.skippedWithQuoteQuality(
         initialFillQualityBlock,
         prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt: blockedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
+        this.executionTimings(executeStartedAt, null, null, {
+          preflightStartedAt: blockedAt,
+          preflightCompletedAt: blockedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt: blockedAt,
+        }),
         fillQualitySnapshot,
       );
     }
@@ -563,7 +632,12 @@ export class LiveExecutor implements ArbExecutor {
       return this.skippedWithQuoteQuality(
         preflightFailure,
         prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
+        this.executionTimings(executeStartedAt, null, null, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt: preflightCompletedAt,
+        }),
         fillQualitySnapshot,
       );
     }
@@ -571,16 +645,32 @@ export class LiveExecutor implements ArbExecutor {
       return this.skippedWithQuoteQuality(
         `live preflight took ${preflightCompletedAt - preflightStartedAt}ms, exceeding quote freshness window ${this.config.liveQuoteMaxAgeMs}ms`,
         prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: preflightCompletedAt }),
+        this.executionTimings(executeStartedAt, null, null, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt: preflightCompletedAt,
+        }),
         fillQualitySnapshot,
       );
     }
-    const refreshed = this.prepareExecution(candidate, kalshiLeg, polymarketLeg, polymarketFirstCrossCents, availableKalshiCash);
+    const refreshed = this.prepareExecution(
+      candidate,
+      kalshiLeg,
+      polymarketLeg,
+      polymarketFirstCrossCents,
+      availableKalshiCash,
+    );
     if (isPrepareSkip(refreshed)) {
       return this.skippedWithQuoteQuality(
         `live quote revalidation after preflight failed: ${refreshed.skipReason}`,
         refreshed.rejectedSnapshot ?? prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+        this.executionTimings(executeStartedAt, null, null, {
+          preflightStartedAt,
+          preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt: this.now(),
+        }),
         fillQualitySnapshot,
       );
     }
@@ -605,7 +695,12 @@ export class LiveExecutor implements ArbExecutor {
         return this.skippedWithQuoteQuality(
           refreshedLeadLagBlock,
           prepared.quoteSnapshot,
-          this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+          this.executionTimings(executeStartedAt, null, null, {
+            preflightStartedAt,
+            preflightCompletedAt,
+            hotGateStartedAt,
+            hotGateCompletedAt: this.now(),
+          }),
           null,
         );
       }
@@ -617,7 +712,12 @@ export class LiveExecutor implements ArbExecutor {
         return this.skippedWithQuoteQuality(
           refreshedFillQualityBlock,
           prepared.quoteSnapshot,
-          this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt, hotGateStartedAt, hotGateCompletedAt: this.now() }),
+          this.executionTimings(executeStartedAt, null, null, {
+            preflightStartedAt,
+            preflightCompletedAt,
+            hotGateStartedAt,
+            hotGateCompletedAt: this.now(),
+          }),
           fillQualitySnapshot,
         );
       }
@@ -630,7 +730,9 @@ export class LiveExecutor implements ArbExecutor {
     polymarketContext = {
       ...polymarketContext,
       maxBuyPrice: prepared.polymarket.maxBuyPrice,
-      requiredCollateral: roundPrice(prepared.orderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars),
+      requiredCollateral: roundPrice(
+        prepared.orderSize * prepared.polymarket.maxBuyPrice + this.config.liveCollateralBufferDollars,
+      ),
     };
     // LA3: re-preflight Polymarket too in the share-limit presign modes so it RE-PRESIGNS at the refreshed
     // capped price. Otherwise the order is presigned once at the initial price, the post-preflight quote
@@ -641,12 +743,10 @@ export class LiveExecutor implements ArbExecutor {
     const refreshesPolymarket = placementMode === "parallel_quick" || placementMode === "polymarket_first_exact";
     const refreshedPreflightOrders = refreshesPolymarket
       ? [
-        { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
-        { client: this.polymarketClient, leg: prepared.polymarket.leg, context: polymarketContext },
-      ]
-      : [
-        { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
-      ];
+          { client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext },
+          { client: this.polymarketClient, leg: prepared.polymarket.leg, context: polymarketContext },
+        ]
+      : [{ client: this.kalshiClient, leg: prepared.kalshi.leg, context: kalshiContext }];
     const refreshedKalshiPreflight = await this.preflightVenueOrders(refreshedPreflightOrders);
     if (refreshedKalshiPreflight) {
       const blockedAt = this.now();
@@ -655,7 +755,12 @@ export class LiveExecutor implements ArbExecutor {
           ? `live refreshed preflight failed: ${refreshedKalshiPreflight}`
           : `live Kalshi hedge collateral revalidation failed: ${refreshedKalshiPreflight}`,
         prepared.quoteSnapshot,
-        this.executionTimings(executeStartedAt, null, null, { preflightStartedAt, preflightCompletedAt: blockedAt, hotGateStartedAt, hotGateCompletedAt: blockedAt }),
+        this.executionTimings(executeStartedAt, null, null, {
+          preflightStartedAt,
+          preflightCompletedAt: blockedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt: blockedAt,
+        }),
         fillQualitySnapshot,
       );
     }
@@ -669,23 +774,38 @@ export class LiveExecutor implements ArbExecutor {
     };
 
     if (placementMode === "polymarket_first_exact") {
-      return await this.executePolymarketFirstExact(candidate, executionGroupId, prepared, kalshiContext, polymarketContext, {
-        executeStartedAt,
-        preflightStartedAt,
-        preflightCompletedAt,
-        hotGateStartedAt,
-        hotGateCompletedAt,
-      }, fillQualityMetadata);
+      return await this.executePolymarketFirstExact(
+        candidate,
+        executionGroupId,
+        prepared,
+        kalshiContext,
+        polymarketContext,
+        {
+          executeStartedAt,
+          preflightStartedAt,
+          preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt,
+        },
+        fillQualityMetadata,
+      );
     }
 
     if (placementMode === "parallel_quick") {
-      return await this.executeParallelQuick(executionGroupId, prepared, kalshiContext, polymarketContext, {
-        executeStartedAt,
-        preflightStartedAt,
-        preflightCompletedAt,
-        hotGateStartedAt,
-        hotGateCompletedAt,
-      }, fillQualityMetadata);
+      return await this.executeParallelQuick(
+        executionGroupId,
+        prepared,
+        kalshiContext,
+        polymarketContext,
+        {
+          executeStartedAt,
+          preflightStartedAt,
+          preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt,
+        },
+        fillQualityMetadata,
+      );
     }
 
     if (placementMode === "kalshi_first_exact") {
@@ -712,33 +832,46 @@ export class LiveExecutor implements ArbExecutor {
       };
       const firstDecision: SequentialFirstVenueDecision = {
         firstVenue: "kalshi",
-        firstVenueReason: "kalshi_first_exact: commit the reliable integer Kalshi leg (FOK) first, then hedge Polymarket after an exact Kalshi fill",
+        firstVenueReason:
+          "kalshi_first_exact: commit the reliable integer Kalshi leg (FOK) first, then hedge Polymarket after an exact Kalshi fill",
         firstVenueVwap: prepared.quoteSnapshot.kalshi?.vwap ?? prepared.kalshi.maxBuyPrice,
       };
-      return await this.executeFirstThenHedge(candidate, executionGroupId, prepared, kalshiPlan, polymarketPlan, firstDecision, {
-        executeStartedAt,
-        preflightStartedAt,
-        preflightCompletedAt,
-        hotGateStartedAt,
-        hotGateCompletedAt,
-      }, fillQualityMetadata, "kalshi_first_exact");
+      return await this.executeFirstThenHedge(
+        candidate,
+        executionGroupId,
+        prepared,
+        kalshiPlan,
+        polymarketPlan,
+        firstDecision,
+        {
+          executeStartedAt,
+          preflightStartedAt,
+          preflightCompletedAt,
+          hotGateStartedAt,
+          hotGateCompletedAt,
+        },
+        fillQualityMetadata,
+        "kalshi_first_exact",
+      );
     }
 
     if (this.config.liveParallelExecutionEnabled || placementMode === "parallel_market") {
-      const executionStrategy = placementMode === "parallel_limit_rest"
-        ? "parallel_limit_rest"
-        : placementMode === "parallel_market"
-          ? "parallel_market"
-          : placementMode === "parallel_fak"
-            ? "parallel_fak"
-            : "parallel_fok";
-      const firstVenueReason = placementMode === "parallel_limit_rest"
-        ? `parallel aggressive limit orders submitted concurrently with ${limitRestMs ?? 0}ms rest`
-        : placementMode === "parallel_market"
-          ? "parallel capped market orders submitted concurrently"
-          : placementMode === "parallel_fak"
-            ? "parallel Kalshi FOK and Polymarket FAK orders submitted concurrently"
-            : "parallel FOK orders submitted concurrently";
+      const executionStrategy =
+        placementMode === "parallel_limit_rest"
+          ? "parallel_limit_rest"
+          : placementMode === "parallel_market"
+            ? "parallel_market"
+            : placementMode === "parallel_fak"
+              ? "parallel_fak"
+              : "parallel_fok";
+      const firstVenueReason =
+        placementMode === "parallel_limit_rest"
+          ? `parallel aggressive limit orders submitted concurrently with ${limitRestMs ?? 0}ms rest`
+          : placementMode === "parallel_market"
+            ? "parallel capped market orders submitted concurrently"
+            : placementMode === "parallel_fak"
+              ? "parallel Kalshi FOK and Polymarket FAK orders submitted concurrently"
+              : "parallel FOK orders submitted concurrently";
       const [kalshi, polymarket] = await Promise.all([
         this.placeVenueOrder(this.kalshiClient, prepared.kalshi.leg, kalshiContext),
         this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, polymarketContext),
@@ -747,7 +880,13 @@ export class LiveExecutor implements ArbExecutor {
         { result: kalshi, leg: prepared.kalshi.leg, submittedAtMs: Date.parse(kalshi.requestedAt) },
         { result: polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(polymarket.requestedAt) },
       ]);
-      const confirmed = this.applyVenueConfirmations(kalshi, polymarket, venueConfirmations, prepared.kalshi.leg, prepared.polymarket.leg);
+      const confirmed = this.applyVenueConfirmations(
+        kalshi,
+        polymarket,
+        venueConfirmations,
+        prepared.kalshi.leg,
+        prepared.polymarket.leg,
+      );
       return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
         ...fillQualityMetadata,
@@ -784,13 +923,23 @@ export class LiveExecutor implements ArbExecutor {
     const firstDecision = this.selectSequentialFirstVenue(prepared);
     const firstPlan = firstDecision.firstVenue === "kalshi" ? kalshiPlan : polymarketPlan;
     const hedgePlan = firstPlan.venue === "kalshi" ? polymarketPlan : kalshiPlan;
-    return await this.executeFirstThenHedge(candidate, executionGroupId, prepared, firstPlan, hedgePlan, firstDecision, {
-      executeStartedAt,
-      preflightStartedAt,
-      preflightCompletedAt,
-      hotGateStartedAt,
-      hotGateCompletedAt,
-    }, fillQualityMetadata, "sequential_hedge");
+    return await this.executeFirstThenHedge(
+      candidate,
+      executionGroupId,
+      prepared,
+      firstPlan,
+      hedgePlan,
+      firstDecision,
+      {
+        executeStartedAt,
+        preflightStartedAt,
+        preflightCompletedAt,
+        hotGateStartedAt,
+        hotGateCompletedAt,
+      },
+      fillQualityMetadata,
+      "sequential_hedge",
+    );
   }
 
   // Shared "place the first leg, then hedge the other after an exact first-leg fill" machinery used by
@@ -813,7 +962,10 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
-    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs">,
+    fillQualityMetadata: Pick<
+      ExecutionMetadata,
+      "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs"
+    >,
     executionStrategy: ExecutionStrategy,
   ): Promise<ExecutionResult> {
     const results: Partial<Record<Venue, VenueOrderResult>> = {};
@@ -829,13 +981,18 @@ export class LiveExecutor implements ArbExecutor {
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
         ...fillQualityMetadata,
-        executionTimings: this.executionTimings(timings.executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
-          preflightStartedAt: timings.preflightStartedAt,
-          preflightCompletedAt: timings.preflightCompletedAt,
-          hotGateStartedAt: timings.hotGateStartedAt,
-          hotGateCompletedAt: timings.hotGateCompletedAt,
-          ...firstDecision,
-        }),
+        executionTimings: this.executionTimings(
+          timings.executeStartedAt,
+          results.kalshi ?? null,
+          results.polymarket ?? null,
+          {
+            preflightStartedAt: timings.preflightStartedAt,
+            preflightCompletedAt: timings.preflightCompletedAt,
+            hotGateStartedAt: timings.hotGateStartedAt,
+            hotGateCompletedAt: timings.hotGateCompletedAt,
+            ...firstDecision,
+          },
+        ),
         executionStrategy,
         riskHedge: false,
       });
@@ -854,14 +1011,19 @@ export class LiveExecutor implements ArbExecutor {
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: prepared.quoteSnapshot,
         ...fillQualityMetadata,
-        executionTimings: this.executionTimings(timings.executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
-          preflightStartedAt: timings.preflightStartedAt,
-          preflightCompletedAt: timings.preflightCompletedAt,
-          hotGateStartedAt: timings.hotGateStartedAt,
-          hotGateCompletedAt: timings.hotGateCompletedAt,
-          postFillHedgeDecisionMs,
-          ...firstDecision,
-        }),
+        executionTimings: this.executionTimings(
+          timings.executeStartedAt,
+          results.kalshi ?? null,
+          results.polymarket ?? null,
+          {
+            preflightStartedAt: timings.preflightStartedAt,
+            preflightCompletedAt: timings.preflightCompletedAt,
+            hotGateStartedAt: timings.hotGateStartedAt,
+            hotGateCompletedAt: timings.hotGateCompletedAt,
+            postFillHedgeDecisionMs,
+            ...firstDecision,
+          },
+        ),
         executionStrategy,
         riskHedge: true,
         hedgeCapPrice: null,
@@ -888,14 +1050,19 @@ export class LiveExecutor implements ArbExecutor {
       return await this.resultFromVenueOrders(executionGroupId, results.kalshi!, results.polymarket!, {
         quoteSnapshot: hedge.quoteSnapshot,
         ...fillQualityMetadata,
-        executionTimings: this.executionTimings(timings.executeStartedAt, results.kalshi ?? null, results.polymarket ?? null, {
-          preflightStartedAt: timings.preflightStartedAt,
-          preflightCompletedAt: timings.preflightCompletedAt,
-          hotGateStartedAt: timings.hotGateStartedAt,
-          hotGateCompletedAt: timings.hotGateCompletedAt,
-          postFillHedgeDecisionMs,
-          ...firstDecision,
-        }),
+        executionTimings: this.executionTimings(
+          timings.executeStartedAt,
+          results.kalshi ?? null,
+          results.polymarket ?? null,
+          {
+            preflightStartedAt: timings.preflightStartedAt,
+            preflightCompletedAt: timings.preflightCompletedAt,
+            hotGateStartedAt: timings.hotGateStartedAt,
+            hotGateCompletedAt: timings.hotGateCompletedAt,
+            postFillHedgeDecisionMs,
+            ...firstDecision,
+          },
+        ),
         executionStrategy,
         riskHedge: true,
         hedgeCapPrice: hedge.hedgeCapPrice,
@@ -919,7 +1086,13 @@ export class LiveExecutor implements ArbExecutor {
     ]);
     const kalshiConfirmationLeg = firstPlan.venue === "kalshi" ? firstPlan.prepared.leg : hedge.leg;
     const polymarketConfirmationLeg = firstPlan.venue === "polymarket" ? firstPlan.prepared.leg : hedge.leg;
-    const confirmed = this.applyVenueConfirmations(results.kalshi!, results.polymarket!, venueConfirmations, kalshiConfirmationLeg, polymarketConfirmationLeg);
+    const confirmed = this.applyVenueConfirmations(
+      results.kalshi!,
+      results.polymarket!,
+      venueConfirmations,
+      kalshiConfirmationLeg,
+      polymarketConfirmationLeg,
+    );
 
     return await this.resultFromVenueOrders(executionGroupId, confirmed.kalshi, confirmed.polymarket, {
       quoteSnapshot: hedge.quoteSnapshot,
@@ -952,12 +1125,19 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
-    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs">,
+    fillQualityMetadata: Pick<
+      ExecutionMetadata,
+      "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs"
+    >,
   ): Promise<ExecutionResult> {
     const submitted = await this.submitSynchronizedVenueOrders(prepared, kalshiContext, polymarketContext);
     const venueConfirmations = await this.confirmVenueOrders(executionGroupId, [
       { result: submitted.kalshi, leg: prepared.kalshi.leg, submittedAtMs: Date.parse(submitted.kalshi.requestedAt) },
-      { result: submitted.polymarket, leg: prepared.polymarket.leg, submittedAtMs: Date.parse(submitted.polymarket.requestedAt) },
+      {
+        result: submitted.polymarket,
+        leg: prepared.polymarket.leg,
+        submittedAtMs: Date.parse(submitted.polymarket.requestedAt),
+      },
     ]);
     const confirmed = this.applyVenueConfirmations(
       submitted.kalshi,
@@ -973,11 +1153,12 @@ export class LiveExecutor implements ArbExecutor {
         preflightStartedAt: timings.preflightStartedAt,
         preflightCompletedAt: timings.preflightCompletedAt,
         firstVenue: null,
-        firstVenueReason: this.config.kalshiHedgeOrderMode === "fix_ioc"
-          ? "parallel Kalshi FIX IOC and Polymarket exact-share FAK submitted concurrently"
-          : this.config.kalshiHedgeOrderMode === "public_v2"
-            ? "parallel Kalshi public V2 IOC and Polymarket exact-share FAK submitted concurrently"
-            : "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
+        firstVenueReason:
+          this.config.kalshiHedgeOrderMode === "fix_ioc"
+            ? "parallel Kalshi FIX IOC and Polymarket exact-share FAK submitted concurrently"
+            : this.config.kalshiHedgeOrderMode === "public_v2"
+              ? "parallel Kalshi public V2 IOC and Polymarket exact-share FAK submitted concurrently"
+              : "parallel Kalshi UI Quick Order and Polymarket exact-share FAK submitted concurrently",
         firstVenueVwap: null,
         hotGateStartedAt: timings.hotGateStartedAt,
         hotGateCompletedAt: timings.hotGateCompletedAt,
@@ -1005,15 +1186,25 @@ export class LiveExecutor implements ArbExecutor {
       hotGateStartedAt: number;
       hotGateCompletedAt: number;
     },
-    fillQualityMetadata: Pick<ExecutionMetadata, "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs">,
+    fillQualityMetadata: Pick<
+      ExecutionMetadata,
+      "leadLagSnapshot" | "fillQualitySnapshot" | "expectedExecutableEdge" | "unwindLegs"
+    >,
   ): Promise<ExecutionResult> {
     const firstVenueReason = `Polymarket FAK submitted first; Kalshi submits after Polymarket fill count is within ${this.polymarketFirstFillRangeLabel()}`;
     const firstVenueVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
     const polymarketSubmittedAt = this.now();
-    const pendingPolymarket = this.pendingVenueResult("polymarket", polymarketContext.clientOrderId, polymarketSubmittedAt);
-    const polymarketConfirmationPromise = this.config.liveUserStreamsEnabled && this.confirmationMonitor
-      ? this.confirmVenueOrder(executionGroupId, pendingPolymarket, prepared.polymarket.leg, polymarketSubmittedAt, { firstLegTrigger: true })
-      : Promise.resolve(null);
+    const pendingPolymarket = this.pendingVenueResult(
+      "polymarket",
+      polymarketContext.clientOrderId,
+      polymarketSubmittedAt,
+    );
+    const polymarketConfirmationPromise =
+      this.config.liveUserStreamsEnabled && this.confirmationMonitor
+        ? this.confirmVenueOrder(executionGroupId, pendingPolymarket, prepared.polymarket.leg, polymarketSubmittedAt, {
+            firstLegTrigger: true,
+          })
+        : Promise.resolve(null);
     const polymarketRestPromise = this.placeVenueOrder(this.polymarketClient, prepared.polymarket.leg, {
       ...polymarketContext,
       requestedAt: polymarketSubmittedAt,
@@ -1026,16 +1217,16 @@ export class LiveExecutor implements ArbExecutor {
     );
 
     if (!polymarketEvidence.trigger) {
-      const polymarket = polymarketEvidence.restResult ?? await polymarketRestPromise;
-      const polymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
-      const confirmedPolymarket = this.applyVenueConfirmation(polymarket, polymarketConfirmation, prepared.polymarket.leg);
+      const polymarket = polymarketEvidence.restResult ?? (await polymarketRestPromise);
+      const polymarketConfirmation = polymarketEvidence.confirmation ?? (await polymarketConfirmationPromise);
+      const confirmedPolymarket = this.applyVenueConfirmation(
+        polymarket,
+        polymarketConfirmation,
+        prepared.polymarket.leg,
+      );
       const polymarketConfirmations = polymarketConfirmation ? { polymarket: polymarketConfirmation } : null;
       const hedgeSkipReason = this.polymarketHedgeTriggerSkipReason(confirmedPolymarket);
-      const kalshi = this.notSubmittedResult(
-        "kalshi",
-        kalshiContext.clientOrderId,
-        hedgeSkipReason,
-      );
+      const kalshi = this.notSubmittedResult("kalshi", kalshiContext.clientOrderId, hedgeSkipReason);
       return await this.resultFromVenueOrders(executionGroupId, kalshi, confirmedPolymarket, {
         quoteSnapshot: prepared.quoteSnapshot,
         ...fillQualityMetadata,
@@ -1109,18 +1300,22 @@ export class LiveExecutor implements ArbExecutor {
     // REST response/recovery (p90 ~6s). The private-stream branch of mergePolymarketHedgeTriggerEvidence
     // already takes every fill field from evidence.result — REST only contributed forensic metadata — so this
     // is a latency change, not a fill-data change. The late REST is drained in the background. Flag default off.
-    const acceptStreamAck = this.config.liveAcceptStreamAckAsOrderResult
-      && evidence.source === "private_stream"
-      && polymarketEvidence.restResult === undefined;
+    const acceptStreamAck =
+      this.config.liveAcceptStreamAckAsOrderResult &&
+      evidence.source === "private_stream" &&
+      polymarketEvidence.restResult === undefined;
     if (acceptStreamAck) this.drainPolymarketRestInBackground(polymarketRestPromise);
     const finalPolymarketRest = acceptStreamAck
       ? evidence.restResult
-      : (polymarketEvidence.restResult ?? await polymarketRestPromise);
-    const finalPolymarketConfirmation = polymarketEvidence.confirmation ?? await polymarketConfirmationPromise;
+      : (polymarketEvidence.restResult ?? (await polymarketRestPromise));
+    const finalPolymarketConfirmation = polymarketEvidence.confirmation ?? (await polymarketConfirmationPromise);
     const mergedPolymarket = this.mergePolymarketHedgeTriggerEvidence(evidence, finalPolymarketRest);
     const finalPolymarket = this.applyVenueConfirmation(
       acceptStreamAck
-        ? { ...mergedPolymarket, metadata: { ...(mergedPolymarket.metadata ?? {}), polymarketRestShortCircuited: true } }
+        ? {
+            ...mergedPolymarket,
+            metadata: { ...(mergedPolymarket.metadata ?? {}), polymarketRestShortCircuited: true },
+          }
         : mergedPolymarket,
       finalPolymarketConfirmation,
       prepared.polymarket.leg,
@@ -1172,7 +1367,9 @@ export class LiveExecutor implements ArbExecutor {
   // P2: fetch the two fill-quality DB read inputs, optionally serving a TTL-cached result so clustered
   // executions don't each pay the pg-pool round-trips on the candidate->submit hot path. With the cache
   // disabled (liveFillQualityInputCacheMaxAgeMs=0, default) this is a fresh read every call — byte-identical.
-  private async fillQualityInputs(now: number): Promise<{ recentSignals: DashboardSignal[]; recentVenueEvents: VenueOrderEventInput[] }> {
+  private async fillQualityInputs(
+    now: number,
+  ): Promise<{ recentSignals: DashboardSignal[]; recentVenueEvents: VenueOrderEventInput[] }> {
     const ttl = Math.max(0, this.config.liveFillQualityInputCacheMaxAgeMs);
     const cached = this.fillQualityInputsCache;
     if (ttl > 0 && cached && now - cached.at >= 0 && now - cached.at < ttl) {
@@ -1217,7 +1414,10 @@ export class LiveExecutor implements ArbExecutor {
     if (!this.config.liveLeadLagScoringEnabled) return null;
     const now = this.now();
     const maxWindowMs = Math.max(1, ...this.config.liveLeadLagWindowsMs);
-    const history = this.books?.leadLagHistoryForQuoteSnapshot?.(quoteSnapshot, now, maxWindowMs) ?? { kalshi: [], polymarket: [] };
+    const history = this.books?.leadLagHistoryForQuoteSnapshot?.(quoteSnapshot, now, maxWindowMs) ?? {
+      kalshi: [],
+      polymarket: [],
+    };
     const snapshot = scoreLeadLag({
       candidate,
       quoteSnapshot,
@@ -1261,11 +1461,17 @@ export class LiveExecutor implements ArbExecutor {
 
   private withRecoveryMetadata(
     result: ExecutionResult,
-    recovery: { status: LiveRecoveryStatus; attempts?: number | null; evidence?: Record<string, unknown> | null; finalizationMs?: number | null },
+    recovery: {
+      status: LiveRecoveryStatus;
+      attempts?: number | null;
+      evidence?: Record<string, unknown> | null;
+      finalizationMs?: number | null;
+    },
   ): ExecutionResult {
-    const recoveryEvidence = recovery.evidence && result.recoveryEvidence
-      ? { ...result.recoveryEvidence, ...recovery.evidence }
-      : recovery.evidence ?? result.recoveryEvidence ?? null;
+    const recoveryEvidence =
+      recovery.evidence && result.recoveryEvidence
+        ? { ...result.recoveryEvidence, ...recovery.evidence }
+        : (recovery.evidence ?? result.recoveryEvidence ?? null);
     return {
       ...result,
       recoveryStatus: recovery.status,
@@ -1277,18 +1483,25 @@ export class LiveExecutor implements ArbExecutor {
 
   private liveRiskState(
     circuitBreakerReason: string | null,
-    reconciliation: { reason: string | null; quarantinedExposureDollars?: number | null; quarantinedSignalCount?: number | null },
+    reconciliation: {
+      reason: string | null;
+      quarantinedExposureDollars?: number | null;
+      quarantinedSignalCount?: number | null;
+    },
     userStreamReason: string | null,
     partialFillLocked = this.partialFillLocked,
     exactExposureReason: string | null = null,
     executionQualityReason: string | null = null,
   ): { state: LiveRiskState; reason: string | null } {
-    if (this.config.liveExactExposureRequired && exactExposureReason) return { state: "blocked", reason: exactExposureReason };
-    if (this.config.liveExecutionQualityGateEnabled && executionQualityReason) return { state: "blocked", reason: executionQualityReason };
+    if (this.config.liveExactExposureRequired && exactExposureReason)
+      return { state: "blocked", reason: exactExposureReason };
+    if (this.config.liveExecutionQualityGateEnabled && executionQualityReason)
+      return { state: "blocked", reason: executionQualityReason };
     if (!this.config.liveAutoHardlocksEnabled) {
       return {
         state: "auto_hardlocks_disabled",
-        reason: "temporary operator override: automatic hardlocks are disabled; unresolved risk will be audited but will not stop new candidates",
+        reason:
+          "temporary operator override: automatic hardlocks are disabled; unresolved risk will be audited but will not stop new candidates",
       };
     }
     if (circuitBreakerReason) return { state: "hard_locked", reason: circuitBreakerReason };
@@ -1333,19 +1546,31 @@ export class LiveExecutor implements ArbExecutor {
   // Reserve for that worst case BEFORE dispatching Polymarket so a qualifying fill can always be hedged
   // and never strands one-sided. Other modes reserve at the standard order-size * maxBuyPrice.
   private kalshiPreflightCollateral(prepared: PreparedExecution, placementMode: LiveOrderPlacementMode): number {
-    const standard = roundPrice(prepared.orderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars);
+    const standard = roundPrice(
+      prepared.orderSize * prepared.kalshi.maxBuyPrice + this.config.liveCollateralBufferDollars,
+    );
     if (placementMode !== "polymarket_first_exact") return standard;
-    const polyTopAsk = prepared.quoteSnapshot.polymarket?.topAsk
-      ?? prepared.quoteSnapshot.polymarket?.vwap
-      ?? prepared.polymarket.maxBuyPrice;
-    const worstCaseHedgePrice = Math.min(1, Math.max(
-      prepared.kalshi.maxBuyPrice,
-      1 - polyTopAsk - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars,
-    ));
+    const polyTopAsk =
+      prepared.quoteSnapshot.polymarket?.topAsk ??
+      prepared.quoteSnapshot.polymarket?.vwap ??
+      prepared.polymarket.maxBuyPrice;
+    const worstCaseHedgePrice = Math.min(
+      1,
+      Math.max(
+        prepared.kalshi.maxBuyPrice,
+        1 - polyTopAsk - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars,
+      ),
+    );
     return roundPrice(prepared.orderSize * worstCaseHedgePrice + this.config.liveCollateralBufferDollars);
   }
 
-  private prepareExecution(candidate: ArbCandidate, kalshiLeg: ArbLeg, polymarketLeg: ArbLeg, polymarketFirstCrossCents = 0, availableKalshiCash: number | null = null): PreparedExecution | PrepareSkip {
+  private prepareExecution(
+    candidate: ArbCandidate,
+    kalshiLeg: ArbLeg,
+    polymarketLeg: ArbLeg,
+    polymarketFirstCrossCents = 0,
+    availableKalshiCash: number | null = null,
+  ): PreparedExecution | PrepareSkip {
     const now = this.now();
     if (!Number.isFinite(this.config.liveOrderSize) || this.config.liveOrderSize <= 0) {
       return { skipReason: "LIVE_ORDER_SIZE must be greater than 0", rejectedSnapshot: null };
@@ -1358,8 +1583,22 @@ export class LiveExecutor implements ArbExecutor {
     // that size so the prepared legs/snapshot/maxBuyPrices are all consistent with what we will actually
     // submit. selectExecutableSize returns config.liveOrderSize when dynamic sizing is off (byte-identical).
     // Cash bound is null here (kept sync); the Kalshi hedge-collateral preflight is the hard bankroll backstop.
-    const orderSize = selectExecutableSize(candidate, books, this.config, availableKalshiCash, now, polymarketFirstCrossCents);
-    const evaluation = evaluateLiveQuoteQuality(candidate, books, this.config, now, polymarketFirstCrossCents, orderSize);
+    const orderSize = selectExecutableSize(
+      candidate,
+      books,
+      this.config,
+      availableKalshiCash,
+      now,
+      polymarketFirstCrossCents,
+    );
+    const evaluation = evaluateLiveQuoteQuality(
+      candidate,
+      books,
+      this.config,
+      now,
+      polymarketFirstCrossCents,
+      orderSize,
+    );
     if (!evaluation.ok) {
       const skipReason = evaluation.reason ?? "live quote quality preflight failed";
       // T2.4 read-only diagnostic: only on the dominant below-threshold-edge skip, and only when
@@ -1367,11 +1606,19 @@ export class LiveExecutor implements ArbExecutor {
       // gate outcome is already decided (evaluation.ok === false) so this can never flip a reject.
       let rejectedSnapshot: QuoteSnapshot | null = null;
       if (this.config.liveShadowLadderCaptureEnabled && skipReason.startsWith(CUSHIONED_EDGE_REASON_PREFIX)) {
-        rejectedSnapshot = { ...evaluation.snapshot, shadowLadder: captureShadowLadder(candidate, books, this.config, now) };
+        rejectedSnapshot = {
+          ...evaluation.snapshot,
+          shadowLadder: captureShadowLadder(candidate, books, this.config, now),
+        };
       }
       return { skipReason, rejectedSnapshot };
     }
-    if (!evaluation.kalshiLeg || !evaluation.polymarketLeg || evaluation.kalshiMaxBuyPrice == null || evaluation.polymarketMaxBuyPrice == null) {
+    if (
+      !evaluation.kalshiLeg ||
+      !evaluation.polymarketLeg ||
+      evaluation.kalshiMaxBuyPrice == null ||
+      evaluation.polymarketMaxBuyPrice == null
+    ) {
       return { skipReason: "live quote quality preflight missing executable legs", rejectedSnapshot: null };
     }
     return {
@@ -1391,7 +1638,8 @@ export class LiveExecutor implements ArbExecutor {
     const now = this.now();
     const hedgeVenue = venueLabel(hedgeLeg.venue);
     if (candidate.expiryMs <= now) return `candidate expired before ${hedgeVenue} hedge could be submitted`;
-    if (filled.fillPrice == null) return `${venueLabel(filledLeg.venue)} fill price missing; cannot calculate ${hedgeVenue} hedge cap`;
+    if (filled.fillPrice == null)
+      return `${venueLabel(filledLeg.venue)} fill price missing; cannot calculate ${hedgeVenue} hedge cap`;
     // Size the hedge to the ACTUAL first-leg fill (integer floor), not the static configured order
     // size. For an integer first-leg fill the two executed sizes match exactly (a clean two-sided
     // fill). For a fractional first-leg fill (e.g. Polymarket 8.13) the integer Kalshi hedge takes the
@@ -1408,7 +1656,12 @@ export class LiveExecutor implements ArbExecutor {
       return `${venueLabel(filledLeg.venue)} fill ${filledFillCount} below one share; cannot size ${hedgeVenue} hedge`;
     }
     const knownFilledFee = Math.max(0, filled.fee ?? 0);
-    const rawHedgeCapPrice = 1 - filled.fillPrice - knownFilledFee - this.config.liveHedgeFeeBufferDollars + this.config.liveHedgeMaxLossDollars;
+    const rawHedgeCapPrice =
+      1 -
+      filled.fillPrice -
+      knownFilledFee -
+      this.config.liveHedgeFeeBufferDollars +
+      this.config.liveHedgeMaxLossDollars;
     const hedgeCapPrice = roundPrice(Math.min(1, Math.max(0, rawHedgeCapPrice)));
     if (!Number.isFinite(hedgeCapPrice) || hedgeCapPrice <= 0) {
       return `computed ${hedgeVenue} hedge cap ${hedgeCapPrice.toFixed(4)} is not executable`;
@@ -1416,7 +1669,12 @@ export class LiveExecutor implements ArbExecutor {
 
     const kalshiLeg = filledLeg.venue === "kalshi" ? filledLeg : hedgeLeg;
     const polymarketLeg = filledLeg.venue === "polymarket" ? filledLeg : hedgeLeg;
-    const evaluation = evaluateLiveQuoteQuality(candidate, this.liveBooksForPreflight(kalshiLeg, polymarketLeg), this.config, now);
+    const evaluation = evaluateLiveQuoteQuality(
+      candidate,
+      this.liveBooksForPreflight(kalshiLeg, polymarketLeg),
+      this.config,
+      now,
+    );
     const hedgeQuote = hedgeLeg.venue === "kalshi" ? evaluation.snapshot.kalshi : evaluation.snapshot.polymarket;
     if (!hedgeQuote) return `${hedgeVenue} quote missing for hedge`;
     if (hedgeQuote.quoteAgeMs != null && hedgeQuote.quoteAgeMs > this.config.liveHedgeQuoteMaxAgeMs) {
@@ -1429,9 +1687,10 @@ export class LiveExecutor implements ArbExecutor {
     if (hedgeQuote.worstAsk > hedgeCapPrice + 1e-9) {
       return `${hedgeVenue} hedge worst ask ${hedgeQuote.worstAsk.toFixed(4)} exceeds cap ${hedgeCapPrice.toFixed(4)}`;
     }
-    const leg = hedgeLeg.venue === "kalshi"
-      ? evaluation.kalshiLeg ?? { ...hedgeLeg, ask: hedgeQuote.topAsk }
-      : evaluation.polymarketLeg ?? { ...hedgeLeg, ask: hedgeQuote.topAsk };
+    const leg =
+      hedgeLeg.venue === "kalshi"
+        ? (evaluation.kalshiLeg ?? { ...hedgeLeg, ask: hedgeQuote.topAsk })
+        : (evaluation.polymarketLeg ?? { ...hedgeLeg, ask: hedgeQuote.topAsk });
     return {
       leg,
       maxBuyPrice: hedgeCapPrice,
@@ -1451,9 +1710,7 @@ export class LiveExecutor implements ArbExecutor {
     if (String(result.status ?? "").toLowerCase() === "filled") return false;
     if (isTimeoutOrUnknownResult(result)) return false;
     const error = String(result.error ?? "").toLowerCase();
-    if (error.includes("insufficient_balance")
-      || error.includes("below required")
-      || error.includes("collateral")) {
+    if (error.includes("insufficient_balance") || error.includes("below required") || error.includes("collateral")) {
       return false;
     }
     return true;
@@ -1481,10 +1738,10 @@ export class LiveExecutor implements ArbExecutor {
     // submit, so a string of slow Kalshi round-trips cannot stretch the one-sided window unboundedly. FOK
     // keeps every attempt atomic (no partial), so stopping early never strands a Kalshi partial.
     while (
-      attempt < maxAttempts
-      && this.isHedgeRetryable(result)
-      && candidate.expiryMs > this.now()
-      && this.now() - hedgeStartedAt < retryBudgetMs
+      attempt < maxAttempts &&
+      this.isHedgeRetryable(result) &&
+      candidate.expiryMs > this.now() &&
+      this.now() - hedgeStartedAt < retryBudgetMs
     ) {
       attempt += 1;
       const reprepared = this.prepareVenueHedge(candidate, filledLeg, hedgeLeg, filled);
@@ -1513,10 +1770,17 @@ export class LiveExecutor implements ArbExecutor {
   ): Promise<VenueUnwindOutcome | null> {
     const kalshiFill = kalshi.fillCount ?? 0;
     const polymarketFill = polymarket.fillCount ?? 0;
-    const filled = kalshiFill > 0
-      ? { client: this.kalshiClient, leg: legs.kalshi, fillCount: kalshiFill, fillPrice: kalshi.fillPrice }
-      : { client: this.polymarketClient, leg: legs.polymarket, fillCount: polymarketFill, fillPrice: polymarket.fillPrice };
-    if (!filled.client.unwindPosition || filled.fillCount <= 0) return { flattened: false, reason: "no unwind adapter" };
+    const filled =
+      kalshiFill > 0
+        ? { client: this.kalshiClient, leg: legs.kalshi, fillCount: kalshiFill, fillPrice: kalshi.fillPrice }
+        : {
+            client: this.polymarketClient,
+            leg: legs.polymarket,
+            fillCount: polymarketFill,
+            fillPrice: polymarket.fillPrice,
+          };
+    if (!filled.client.unwindPosition || filled.fillCount <= 0)
+      return { flattened: false, reason: "no unwind adapter" };
     try {
       return await filled.client.unwindPosition({
         leg: filled.leg,
@@ -1543,10 +1807,18 @@ export class LiveExecutor implements ArbExecutor {
       return { firstVenue: "polymarket", firstVenueReason: reason, firstVenueVwap: polymarketVwap };
     }
     if (kalshiWorstAsk < polymarketWorstAsk - 1e-9) {
-      return { firstVenue: "kalshi", firstVenueReason: `${reason}; tie broken by worst ask`, firstVenueVwap: kalshiVwap };
+      return {
+        firstVenue: "kalshi",
+        firstVenueReason: `${reason}; tie broken by worst ask`,
+        firstVenueVwap: kalshiVwap,
+      };
     }
     if (polymarketWorstAsk < kalshiWorstAsk - 1e-9) {
-      return { firstVenue: "polymarket", firstVenueReason: `${reason}; tie broken by worst ask`, firstVenueVwap: polymarketVwap };
+      return {
+        firstVenue: "polymarket",
+        firstVenueReason: `${reason}; tie broken by worst ask`,
+        firstVenueVwap: polymarketVwap,
+      };
     }
     return {
       firstVenue: "polymarket",
@@ -1555,23 +1827,27 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
-  private liveBooksForPreflight(kalshiLeg: ArbLeg, polymarketLeg: ArbLeg): { kalshi: BinaryContract[]; polymarket: BinaryContract[] } {
+  private liveBooksForPreflight(
+    kalshiLeg: ArbLeg,
+    polymarketLeg: ArbLeg,
+  ): { kalshi: BinaryContract[]; polymarket: BinaryContract[] } {
     if (this.books) return this.books.snapshot();
-    const synthetic = (leg: ArbLeg): BinaryContract => ({
-      venue: leg.venue,
-      contractId: leg.contractId,
-      asset: "BTC",
-      expiryMs: 0,
-      strike: leg.strike,
-      yesAsk: leg.direction === "yes" ? leg.ask : null,
-      noAsk: leg.direction === "no" ? leg.ask : null,
-      yesBid: null,
-      noBid: null,
-      yesAskLevels: leg.direction === "yes" ? [{ price: leg.ask, size: Number.POSITIVE_INFINITY }] : [],
-      noAskLevels: leg.direction === "no" ? [{ price: leg.ask, size: Number.POSITIVE_INFINITY }] : [],
-      tokenId: leg.tokenId,
-      updatedAt: this.now(),
-    } as BinaryContract);
+    const synthetic = (leg: ArbLeg): BinaryContract =>
+      ({
+        venue: leg.venue,
+        contractId: leg.contractId,
+        asset: "BTC",
+        expiryMs: 0,
+        strike: leg.strike,
+        yesAsk: leg.direction === "yes" ? leg.ask : null,
+        noAsk: leg.direction === "no" ? leg.ask : null,
+        yesBid: null,
+        noBid: null,
+        yesAskLevels: leg.direction === "yes" ? [{ price: leg.ask, size: Number.POSITIVE_INFINITY }] : [],
+        noAskLevels: leg.direction === "no" ? [{ price: leg.ask, size: Number.POSITIVE_INFINITY }] : [],
+        tokenId: leg.tokenId,
+        updatedAt: this.now(),
+      }) as BinaryContract;
     return {
       kalshi: [synthetic(kalshiLeg)],
       polymarket: [synthetic(polymarketLeg)],
@@ -1579,24 +1855,29 @@ export class LiveExecutor implements ArbExecutor {
   }
 
   private currentAsk(leg: ArbLeg): BinaryContract | null {
-    if (!this.books) return {
-      venue: leg.venue,
-      contractId: leg.contractId,
-      asset: "BTC",
-      expiryMs: 0,
-      strike: leg.strike,
-      yesAsk: leg.direction === "yes" ? leg.ask : null,
-      noAsk: leg.direction === "no" ? leg.ask : null,
-      yesBid: null,
-      noBid: null,
-      tokenId: leg.tokenId,
-      updatedAt: this.now(),
-    } as BinaryContract;
+    if (!this.books)
+      return {
+        venue: leg.venue,
+        contractId: leg.contractId,
+        asset: "BTC",
+        expiryMs: 0,
+        strike: leg.strike,
+        yesAsk: leg.direction === "yes" ? leg.ask : null,
+        noAsk: leg.direction === "no" ? leg.ask : null,
+        yesBid: null,
+        noBid: null,
+        tokenId: leg.tokenId,
+        updatedAt: this.now(),
+      } as BinaryContract;
     const snapshot = this.books.snapshot();
     return snapshot[leg.venue].find((contract) => contract.contractId === leg.contractId) ?? null;
   }
 
-  private async placeVenueOrder(client: VenueOrderClient, leg: ArbLeg, context: LiveOrderContext): Promise<VenueOrderResult> {
+  private async placeVenueOrder(
+    client: VenueOrderClient,
+    leg: ArbLeg,
+    context: LiveOrderContext,
+  ): Promise<VenueOrderResult> {
     const submittedAt = context.requestedAt ?? this.now();
     const timeoutMs = Math.max(1, this.config.liveOrderTimeoutMs);
     const abortController = new AbortController();
@@ -1622,7 +1903,8 @@ export class LiveExecutor implements ArbExecutor {
         });
       }, timeoutMs);
     });
-    const order = client.placeOrder(leg, submittedContext)
+    const order = client
+      .placeOrder(leg, submittedContext)
       .catch((error) => failedVenueResult(client.venue, context.clientOrderId, error, submittedAt));
     let result = await Promise.race([order, timeout]);
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -1665,9 +1947,10 @@ export class LiveExecutor implements ArbExecutor {
       venue: Venue,
       clientOrderId: string,
       settled: PromiseSettledResult<VenueOrderResult>,
-    ): VenueOrderResult => settled.status === "fulfilled"
-      ? settled.value
-      : failedVenueResult(venue, clientOrderId, settled.reason, dispatchAtMs);
+    ): VenueOrderResult =>
+      settled.status === "fulfilled"
+        ? settled.value
+        : failedVenueResult(venue, clientOrderId, settled.reason, dispatchAtMs);
     return {
       kalshi: resultFromSettled("kalshi", kalshiContext.clientOrderId, kalshiSettled),
       polymarket: resultFromSettled("polymarket", polymarketContext.clientOrderId, polymarketSettled),
@@ -1680,14 +1963,16 @@ export class LiveExecutor implements ArbExecutor {
   private async preflightVenueOrders(
     orders: Array<{ client: VenueOrderClient; leg: ArbLeg; context: LiveOrderContext }>,
   ): Promise<string | null> {
-    const results = await Promise.all(orders.map(async (order) => {
-      try {
-        const reason = await order.client.preflightOrder?.(order.leg, order.context);
-        return reason ? `${venueLabel(order.client.venue)} live preflight failed: ${reason}` : null;
-      } catch (error) {
-        return `${venueLabel(order.client.venue)} live preflight failed: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    }));
+    const results = await Promise.all(
+      orders.map(async (order) => {
+        try {
+          const reason = await order.client.preflightOrder?.(order.leg, order.context);
+          return reason ? `${venueLabel(order.client.venue)} live preflight failed: ${reason}` : null;
+        } catch (error) {
+          return `${venueLabel(order.client.venue)} live preflight failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }),
+    );
     return results.find((reason): reason is string => reason != null) ?? null;
   }
 
@@ -1743,9 +2028,9 @@ export class LiveExecutor implements ArbExecutor {
   private isExactVenueFill(result: VenueOrderResult): boolean {
     const band = this.confirmationOverfillBand();
     const expected = this.orderSizeForExecution();
-    return !result.error
-      && (result.fillCount ?? 0) >= expected
-      && (result.fillCount ?? 0) - expected <= band + 0.000001;
+    return (
+      !result.error && (result.fillCount ?? 0) >= expected && (result.fillCount ?? 0) - expected <= band + 0.000001
+    );
   }
 
   private polymarketFirstFillRangeLabel(): string {
@@ -1755,25 +2040,31 @@ export class LiveExecutor implements ArbExecutor {
 
   private isPolymarketFirstFillCountInRange(fillCount: unknown): fillCount is number {
     const size = this.orderSizeForExecution();
-    return typeof fillCount === "number"
-      && Number.isFinite(fillCount)
-      && fillCount + 0.000001 >= size + this.polymarketFirstFillLowerOffset()
-      && fillCount - 0.000001 <= size + this.polymarketFirstFillUpperOffset();
+    return (
+      typeof fillCount === "number" &&
+      Number.isFinite(fillCount) &&
+      fillCount + 0.000001 >= size + this.polymarketFirstFillLowerOffset() &&
+      fillCount - 0.000001 <= size + this.polymarketFirstFillUpperOffset()
+    );
   }
 
   private isPolymarketFirstHedgeTriggerResult(result: VenueOrderResult): boolean {
-    return this.isPolymarketFirstFillCountInRange(result.fillCount)
-      && result.fillPrice != null
-      && Number.isFinite(result.fillPrice);
+    return (
+      this.isPolymarketFirstFillCountInRange(result.fillCount) &&
+      result.fillPrice != null &&
+      Number.isFinite(result.fillPrice)
+    );
   }
 
   private isPolymarketFirstHedgeTriggerConfirmation(record: Record<string, unknown> | null | undefined): boolean {
     const status = String(record?.status ?? "");
     const fillPrice = typeof record?.fillPrice === "number" ? record.fillPrice : null;
-    return ["confirmed", "mismatch"].includes(status)
-      && this.isPolymarketFirstFillCountInRange(record?.fillCount)
-      && fillPrice != null
-      && Number.isFinite(fillPrice);
+    return (
+      ["confirmed", "mismatch"].includes(status) &&
+      this.isPolymarketFirstFillCountInRange(record?.fillCount) &&
+      fillPrice != null &&
+      Number.isFinite(fillPrice)
+    );
   }
 
   private polymarketHedgeTriggerMetadata(
@@ -1802,10 +2093,12 @@ export class LiveExecutor implements ArbExecutor {
     polymarketHedgeTriggerExact: boolean;
   } {
     return {
-      ...(evidence.isExact ? {
-        polymarketExactEvidenceSource: evidence.source,
-        polymarketExactEvidenceAtMs: evidence.receivedAtMs,
-      } : {}),
+      ...(evidence.isExact
+        ? {
+            polymarketExactEvidenceSource: evidence.source,
+            polymarketExactEvidenceAtMs: evidence.receivedAtMs,
+          }
+        : {}),
       polymarketHedgeTriggerSource: evidence.source,
       polymarketHedgeTriggerAtMs: evidence.receivedAtMs,
       polymarketHedgeTriggerFillCount: evidence.fillCount,
@@ -1831,28 +2124,39 @@ export class LiveExecutor implements ArbExecutor {
     leg: ArbLeg,
   ): VenueOrderResult {
     const fillCount = typeof confirmation.fillCount === "number" ? confirmation.fillCount : null;
-    const fillPrice = typeof confirmation.fillPrice === "number"
-      ? economicFillPriceForLeg(pendingResult.venue, leg.direction, confirmation.fillPrice, leg.ask)
-      : null;
-    const receivedAtMs = typeof confirmation.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
-      ? confirmation.receivedAtMs
-      : null;
+    const fillPrice =
+      typeof confirmation.fillPrice === "number"
+        ? economicFillPriceForLeg(pendingResult.venue, leg.direction, confirmation.fillPrice, leg.ask)
+        : null;
+    const receivedAtMs =
+      typeof confirmation.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
+        ? confirmation.receivedAtMs
+        : null;
     const confirmed = confirmation.status === "confirmed";
     return {
       ...pendingResult,
-      clientOrderId: typeof confirmation.clientOrderId === "string" && confirmation.clientOrderId
-        ? confirmation.clientOrderId
-        : pendingResult.clientOrderId,
-      orderId: typeof confirmation.venueOrderId === "string" && confirmation.venueOrderId
-        ? confirmation.venueOrderId
-        : pendingResult.orderId,
+      clientOrderId:
+        typeof confirmation.clientOrderId === "string" && confirmation.clientOrderId
+          ? confirmation.clientOrderId
+          : pendingResult.clientOrderId,
+      orderId:
+        typeof confirmation.venueOrderId === "string" && confirmation.venueOrderId
+          ? confirmation.venueOrderId
+          : pendingResult.orderId,
       status: confirmed ? "filled" : "unexpected_fill_count",
       fillCount,
       fillPrice,
-      fee: typeof confirmation.fee === "number" ? confirmation.fee : pendingResult.fee ?? null,
-      exchangeTimestampMs: typeof confirmation.exchangeTimestampMs === "number" ? confirmation.exchangeTimestampMs : pendingResult.exchangeTimestampMs ?? null,
+      fee: typeof confirmation.fee === "number" ? confirmation.fee : (pendingResult.fee ?? null),
+      exchangeTimestampMs:
+        typeof confirmation.exchangeTimestampMs === "number"
+          ? confirmation.exchangeTimestampMs
+          : (pendingResult.exchangeTimestampMs ?? null),
       respondedAt: receivedAtMs == null ? pendingResult.respondedAt : new Date(receivedAtMs).toISOString(),
-      error: confirmed ? null : typeof confirmation.reason === "string" ? confirmation.reason : "Polymarket private stream reported fill mismatch",
+      error: confirmed
+        ? null
+        : typeof confirmation.reason === "string"
+          ? confirmation.reason
+          : "Polymarket private stream reported fill mismatch",
       metadata: {
         ...(pendingResult.metadata ?? {}),
         resolvedFromPrivateStreamConfirmation: true,
@@ -1901,7 +2205,8 @@ export class LiveExecutor implements ArbExecutor {
     if (this.isPolymarketFirstHedgeTriggerResult(result)) return false;
     if (result.fillCount != null) return false;
     const status = String(result.status ?? "").toLowerCase();
-    if (["failed", "rejected", "canceled", "cancelled", "unfilled", "unexpected_fill_count"].includes(status)) return false;
+    if (["failed", "rejected", "canceled", "cancelled", "unfilled", "unexpected_fill_count"].includes(status))
+      return false;
     if (result.error && !isTimeoutOrUnknownResult(result)) return false;
     return true;
   }
@@ -1911,16 +2216,24 @@ export class LiveExecutor implements ArbExecutor {
     restPromise: Promise<VenueOrderResult>,
     confirmationPromise: Promise<Record<string, unknown> | null> | null,
     pendingResult: VenueOrderResult,
-  ): Promise<{ trigger: PolymarketHedgeTriggerEvidence | null; restResult?: VenueOrderResult; confirmation?: Record<string, unknown> | null }> {
+  ): Promise<{
+    trigger: PolymarketHedgeTriggerEvidence | null;
+    restResult?: VenueOrderResult;
+    confirmation?: Record<string, unknown> | null;
+  }> {
     let restResult: VenueOrderResult | undefined;
     let confirmation: Record<string, unknown> | null | undefined;
-    let restRace: Promise<{ kind: "rest"; result: VenueOrderResult }> | null = restPromise.then((result) => ({ kind: "rest" as const, result }));
-    let confirmationRace: Promise<{ kind: "confirmation"; record: Record<string, unknown> | null }> | null = confirmationPromise
-      ? confirmationPromise.then((record) => ({ kind: "confirmation" as const, record }))
-      : null;
+    let restRace: Promise<{ kind: "rest"; result: VenueOrderResult }> | null = restPromise.then((result) => ({
+      kind: "rest" as const,
+      result,
+    }));
+    let confirmationRace: Promise<{ kind: "confirmation"; record: Record<string, unknown> | null }> | null =
+      confirmationPromise ? confirmationPromise.then((record) => ({ kind: "confirmation" as const, record })) : null;
 
     while (restRace || confirmationRace) {
-      const raced = [restRace, confirmationRace].filter((promise): promise is NonNullable<typeof promise> => promise != null);
+      const raced = [restRace, confirmationRace].filter(
+        (promise): promise is NonNullable<typeof promise> => promise != null,
+      );
       const next = await Promise.race(raced);
       if (next.kind === "rest") {
         restRace = null;
@@ -1960,9 +2273,12 @@ export class LiveExecutor implements ArbExecutor {
       if (confirmation && this.isPolymarketFirstHedgeTriggerConfirmation(confirmation)) {
         const confirmed = this.polymarketResultFromHedgeTriggerConfirmation(pendingResult, confirmation, leg);
         const parsedRespondedAt = Date.parse(confirmed.respondedAt);
-        const receivedAtMs = typeof confirmation?.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
-          ? confirmation.receivedAtMs
-          : Number.isFinite(parsedRespondedAt) ? parsedRespondedAt : this.now();
+        const receivedAtMs =
+          typeof confirmation?.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
+            ? confirmation.receivedAtMs
+            : Number.isFinite(parsedRespondedAt)
+              ? parsedRespondedAt
+              : this.now();
         const fillCount = confirmed.fillCount ?? this.orderSizeForExecution();
         const isExact = Math.abs(fillCount - this.orderSizeForExecution()) <= 0.000001;
         return {
@@ -2000,10 +2316,16 @@ export class LiveExecutor implements ArbExecutor {
   // gates the result. Drain it without awaiting (so it can't surface as an unhandled rejection) — the
   // executor's normal async venue reconciliation still covers the venue truth.
   private drainPolymarketRestInBackground(restPromise: Promise<VenueOrderResult>): void {
-    void restPromise.then(() => undefined, () => undefined);
+    void restPromise.then(
+      () => undefined,
+      () => undefined,
+    );
   }
 
-  private mergePolymarketHedgeTriggerEvidence(evidence: PolymarketHedgeTriggerEvidence, restResult: VenueOrderResult): VenueOrderResult {
+  private mergePolymarketHedgeTriggerEvidence(
+    evidence: PolymarketHedgeTriggerEvidence,
+    restResult: VenueOrderResult,
+  ): VenueOrderResult {
     if (evidence.source === "rest_response") return evidence.result;
     return {
       ...restResult,
@@ -2030,10 +2352,12 @@ export class LiveExecutor implements ArbExecutor {
     orders: Array<{ result: VenueOrderResult; leg: ArbLeg; submittedAtMs: number }>,
   ): Promise<VenueConfirmations | null> {
     if (!this.config.liveUserStreamsEnabled || !this.confirmationMonitor) return null;
-    const entries = await Promise.all(orders.map(async ({ result, leg, submittedAtMs }) => {
-      const confirmation = await this.confirmVenueOrder(executionGroupId, result, leg, submittedAtMs);
-      return [result.venue, confirmation] as const;
-    }));
+    const entries = await Promise.all(
+      orders.map(async ({ result, leg, submittedAtMs }) => {
+        const confirmation = await this.confirmVenueOrder(executionGroupId, result, leg, submittedAtMs);
+        return [result.venue, confirmation] as const;
+      }),
+    );
     return Object.fromEntries(entries);
   }
 
@@ -2051,9 +2375,10 @@ export class LiveExecutor implements ArbExecutor {
 
   private confirmationRecord(confirmation: VenueConfirmationResult, submittedAtMs: number): Record<string, unknown> {
     const receivedAtMs = confirmation.receivedAtMs;
-    const confirmationMs = receivedAtMs != null && Number.isFinite(receivedAtMs) && Number.isFinite(submittedAtMs)
-      ? Math.max(0, receivedAtMs - submittedAtMs)
-      : null;
+    const confirmationMs =
+      receivedAtMs != null && Number.isFinite(receivedAtMs) && Number.isFinite(submittedAtMs)
+        ? Math.max(0, receivedAtMs - submittedAtMs)
+        : null;
     return {
       status: confirmation.status,
       reason: confirmation.reason,
@@ -2082,28 +2407,39 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
-  private applyVenueConfirmation(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined, leg: ArbLeg): VenueOrderResult {
+  private applyVenueConfirmation(
+    result: VenueOrderResult,
+    confirmation: Record<string, unknown> | null | undefined,
+    leg: ArbLeg,
+  ): VenueOrderResult {
     if (!confirmation || confirmation.status !== "confirmed") return result;
     const fillCount = typeof confirmation.fillCount === "number" ? confirmation.fillCount : result.fillCount;
     if (fillCount == null || fillCount <= 0) return result;
-    const receivedAtMs = typeof confirmation.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
-      ? confirmation.receivedAtMs
-      : null;
+    const receivedAtMs =
+      typeof confirmation.receivedAtMs === "number" && Number.isFinite(confirmation.receivedAtMs)
+        ? confirmation.receivedAtMs
+        : null;
     return {
       ...result,
-      clientOrderId: typeof confirmation.clientOrderId === "string" && confirmation.clientOrderId
-        ? confirmation.clientOrderId
-        : result.clientOrderId,
-      orderId: typeof confirmation.venueOrderId === "string" && confirmation.venueOrderId
-        ? confirmation.venueOrderId
-        : result.orderId,
+      clientOrderId:
+        typeof confirmation.clientOrderId === "string" && confirmation.clientOrderId
+          ? confirmation.clientOrderId
+          : result.clientOrderId,
+      orderId:
+        typeof confirmation.venueOrderId === "string" && confirmation.venueOrderId
+          ? confirmation.venueOrderId
+          : result.orderId,
       status: "filled",
       fillCount,
-      fillPrice: typeof confirmation.fillPrice === "number"
-        ? economicFillPriceForLeg(result.venue, leg.direction, confirmation.fillPrice, leg.ask)
-        : result.fillPrice,
-      fee: typeof confirmation.fee === "number" ? confirmation.fee : result.fee ?? null,
-      exchangeTimestampMs: typeof confirmation.exchangeTimestampMs === "number" ? confirmation.exchangeTimestampMs : result.exchangeTimestampMs ?? null,
+      fillPrice:
+        typeof confirmation.fillPrice === "number"
+          ? economicFillPriceForLeg(result.venue, leg.direction, confirmation.fillPrice, leg.ask)
+          : result.fillPrice,
+      fee: typeof confirmation.fee === "number" ? confirmation.fee : (result.fee ?? null),
+      exchangeTimestampMs:
+        typeof confirmation.exchangeTimestampMs === "number"
+          ? confirmation.exchangeTimestampMs
+          : (result.exchangeTimestampMs ?? null),
       respondedAt: receivedAtMs == null ? result.respondedAt : new Date(receivedAtMs).toISOString(),
       error: null,
       metadata: {
@@ -2119,7 +2455,10 @@ export class LiveExecutor implements ArbExecutor {
     kalshi: VenueOrderResult,
     polymarket: VenueOrderResult,
   ): VenueConfirmations {
-    const attach = (record: Record<string, unknown> | null | undefined, result: VenueOrderResult): Record<string, unknown> | null => {
+    const attach = (
+      record: Record<string, unknown> | null | undefined,
+      result: VenueOrderResult,
+    ): Record<string, unknown> | null => {
       if (!result.metadata) return record ?? null;
       return { ...(record ?? {}), ...result.metadata };
     };
@@ -2130,28 +2469,35 @@ export class LiveExecutor implements ArbExecutor {
     };
   }
 
-  private hasRecoveryEvidence(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined): boolean {
+  private hasRecoveryEvidence(
+    result: VenueOrderResult,
+    confirmation: Record<string, unknown> | null | undefined,
+  ): boolean {
     const metadata = result.metadata ?? {};
     return Boolean(
-      metadata.pendingReconciliation
-      || metadata.resolvedFromPrivateStreamConfirmation
-      || metadata.timeoutRecoveryError
-      || metadata.orderResponseTimeoutMs
-      || metadata.kalshiFinalFillSource
-      || metadata.polymarketFinalFillSource
-      || metadata.cancelStatus
-      || metadata.canceledOpenRemainder
-      || confirmation?.status === "timeout"
-      || confirmation?.status === "mismatch"
-      || confirmation?.status === "failed"
-      || result.status === "unknown"
-      || result.status === "canceled"
-      || result.status === "cancelled"
-      || result.error?.toLowerCase().includes("timeout") === true,
+      metadata.pendingReconciliation ||
+        metadata.resolvedFromPrivateStreamConfirmation ||
+        metadata.timeoutRecoveryError ||
+        metadata.orderResponseTimeoutMs ||
+        metadata.kalshiFinalFillSource ||
+        metadata.polymarketFinalFillSource ||
+        metadata.cancelStatus ||
+        metadata.canceledOpenRemainder ||
+        confirmation?.status === "timeout" ||
+        confirmation?.status === "mismatch" ||
+        confirmation?.status === "failed" ||
+        result.status === "unknown" ||
+        result.status === "canceled" ||
+        result.status === "cancelled" ||
+        result.error?.toLowerCase().includes("timeout") === true,
     );
   }
 
-  private recoveryEvidenceFor(kalshi: VenueOrderResult, polymarket: VenueOrderResult, venueConfirmations: VenueConfirmations): Record<string, unknown> {
+  private recoveryEvidenceFor(
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    venueConfirmations: VenueConfirmations,
+  ): Record<string, unknown> {
     return {
       kalshi: {
         status: kalshi.status,
@@ -2181,12 +2527,17 @@ export class LiveExecutor implements ArbExecutor {
     realizedGuaranteedProfit: number | null,
     metadata: ExecutionMetadata,
   ): Record<string, unknown> | null {
-    const combined = `${kalshi.status} ${kalshi.error ?? ""} ${polymarket.status} ${polymarket.error ?? ""}`.toLowerCase();
+    const combined =
+      `${kalshi.status} ${kalshi.error ?? ""} ${polymarket.status} ${polymarket.error ?? ""}`.toLowerCase();
     const kalshiFillCount = kalshi.fillCount ?? 0;
     const polymarketFillCount = polymarket.fillCount ?? 0;
     const quoteFailure = metadata.quoteSnapshot?.failureReason ?? null;
     let category: string | null = null;
-    if (combined.includes("insufficient_balance") || combined.includes("below required operating cash") || combined.includes("below required hedge collateral")) {
+    if (
+      combined.includes("insufficient_balance") ||
+      combined.includes("below required operating cash") ||
+      combined.includes("below required hedge collateral")
+    ) {
       category = "insufficient_balance";
     } else if (combined.includes("timeout") || kalshi.status === "unknown" || polymarket.status === "unknown") {
       category = "timeout_or_unknown";
@@ -2269,21 +2620,26 @@ export class LiveExecutor implements ArbExecutor {
     // The Kalshi integer floor-hedge deliberately fills floor(polymarketFill); a Polymarket in-band
     // overfill therefore leaves a bounded sub-share gap that is NOT a true two-sided mismatch. Tolerate up
     // to the overfill band (0 when the flag is off -> strict |kalshi - polymarket| > eps as before).
-    const fillCountMismatch = kalshiHasFill && polymarketHasFill
-      && Math.abs(kalshiFillCount - polymarketFillCount) > this.confirmationOverfillBand() + 0.000001;
+    const fillCountMismatch =
+      kalshiHasFill &&
+      polymarketHasFill &&
+      Math.abs(kalshiFillCount - polymarketFillCount) > this.confirmationOverfillBand() + 0.000001;
     const partialFill = kalshiFilled !== polymarketFilled || unexpectedFillCount || fillCountMismatch;
-    const realizedGuaranteedProfit = kalshi.fillPrice != null && polymarket.fillPrice != null
-      ? roundPrice(1 - (kalshi.fillPrice + polymarket.fillPrice + this.realizedFeePerSpread(kalshi, polymarket)))
-      : null;
+    const realizedGuaranteedProfit =
+      kalshi.fillPrice != null && polymarket.fillPrice != null
+        ? roundPrice(1 - (kalshi.fillPrice + polymarket.fillPrice + this.realizedFeePerSpread(kalshi, polymarket)))
+        : null;
     const exactPairFilled = kalshiFilled && polymarketFilled && !partialFill;
-    const riskHedgeWithinLossCap = Boolean(metadata.riskHedge)
-      && realizedGuaranteedProfit != null
-      && realizedGuaranteedProfit + 1e-9 >= -Math.max(0, this.config.liveHedgeMaxLossDollars);
-    const completedRiskHedgeBelowThreshold = exactPairFilled
-      && Boolean(metadata.riskHedge)
-      && riskHedgeWithinLossCap
-      && realizedGuaranteedProfit != null
-      && realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars;
+    const riskHedgeWithinLossCap =
+      Boolean(metadata.riskHedge) &&
+      realizedGuaranteedProfit != null &&
+      realizedGuaranteedProfit + 1e-9 >= -Math.max(0, this.config.liveHedgeMaxLossDollars);
+    const completedRiskHedgeBelowThreshold =
+      exactPairFilled &&
+      Boolean(metadata.riskHedge) &&
+      riskHedgeWithinLossCap &&
+      realizedGuaranteedProfit != null &&
+      realizedGuaranteedProfit + 1e-9 < this.config.minProfitDollars;
     const realizedEdgeUnsafe = kalshiHasFill && polymarketHasFill && realizedGuaranteedProfit == null;
     const fallbackVenueConfirmations: VenueConfirmations = {
       kalshi: {
@@ -2297,7 +2653,11 @@ export class LiveExecutor implements ArbExecutor {
         fee: polymarket.fee ?? null,
       },
     };
-    const venueConfirmations = this.attachRestMetadata(metadata.venueConfirmations ?? fallbackVenueConfirmations, kalshi, polymarket);
+    const venueConfirmations = this.attachRestMetadata(
+      metadata.venueConfirmations ?? fallbackVenueConfirmations,
+      kalshi,
+      polymarket,
+    );
     // C1 (default-off): before committing to quarantine/hardlock, try to flatten a one-sided fill with a
     // loss-bounded opposing order. Guarded by liveAutoUnwindEnabled so the default path below is unchanged.
     const oneSidedFill = kalshiHasFill !== polymarketHasFill;
@@ -2311,61 +2671,90 @@ export class LiveExecutor implements ArbExecutor {
     // Polymarket WS drop must NOT engage a critical circuit breaker — downgrade it to a clean zero-exposure
     // miss. Any fill, size mismatch, or ambiguous (unknown/order-timeout) result is NOT provably flat and
     // still locks for reconciliation. Reversible via LIVE_CONFIRMATION_FLAT_MISS_NONBLOCKING.
-    const bothLegsProvablyFlat = (isDefinitiveNoFill(kalshi) || isVerifiedNoFillAfterRecovery(kalshi, this.config))
-      && (isDefinitiveNoFill(polymarket) || isVerifiedNoFillAfterRecovery(polymarket, this.config));
+    const bothLegsProvablyFlat =
+      (isDefinitiveNoFill(kalshi) || isVerifiedNoFillAfterRecovery(kalshi, this.config)) &&
+      (isDefinitiveNoFill(polymarket) || isVerifiedNoFillAfterRecovery(polymarket, this.config));
     // Either operator switch suppresses a stream-confirmation timeout on a BOTH-legs-flat (zero-exposure)
     // result: liveConfirmationFlatMissNonBlocking (the general flat-miss switch) OR
     // livePolymarketTimeoutRecoveryResolvesNoFill (the recovery switch, which the operator turns on expecting
     // recovery-verified no-fill timeouts to resolve rather than lock — making it SUFFICIENT here honors that
     // expectation regardless of the flat-miss flag's state). Both-legs-flat is still required for ANY
     // suppression, so a genuine one-sided fill / mismatch / unverified-exposure result still locks below.
-    const provablyNoExposure = bothLegsProvablyFlat
-      && (this.config.liveConfirmationFlatMissNonBlocking || this.config.livePolymarketTimeoutRecoveryResolvesNoFill);
-    const initialLiveLockReason = autoUnwindFlattened || provablyNoExposure
-      ? null
-      : this.confirmationLockReason(metadata.venueConfirmations, { kalshi, polymarket })
-        ?? this.liveLockReason(partialFill, realizedGuaranteedProfit, kalshi, polymarket, Boolean(metadata.riskHedge), metadata.hedgeFailureReason);
-    const riskQuarantine = autoUnwindFlattened || provablyNoExposure
-      ? null
-      : await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
+    const provablyNoExposure =
+      bothLegsProvablyFlat &&
+      (this.config.liveConfirmationFlatMissNonBlocking || this.config.livePolymarketTimeoutRecoveryResolvesNoFill);
+    const initialLiveLockReason =
+      autoUnwindFlattened || provablyNoExposure
+        ? null
+        : (this.confirmationLockReason(metadata.venueConfirmations, { kalshi, polymarket }) ??
+          this.liveLockReason(
+            partialFill,
+            realizedGuaranteedProfit,
+            kalshi,
+            polymarket,
+            Boolean(metadata.riskHedge),
+            metadata.hedgeFailureReason,
+          ));
+    const riskQuarantine =
+      autoUnwindFlattened || provablyNoExposure
+        ? null
+        : await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
     const liveLockReason = riskQuarantine ? null : initialLiveLockReason;
-    const recoveryEvidencePresent = this.hasRecoveryEvidence(kalshi, venueConfirmations.kalshi)
-      || this.hasRecoveryEvidence(polymarket, venueConfirmations.polymarket)
-      || metadata.recoveryStatus === "pretrade_retry";
-    const recoveryStatus = metadata.recoveryStatus
-      ?? (riskQuarantine ? "risk_quarantined" : this.recoveryStatusForResult(liveLockReason, exactPairFilled, hasAnyFill, recoveryEvidencePresent));
-    const failureClassification = this.postTradeFailureClassification(kalshi, polymarket, partialFill, realizedGuaranteedProfit, metadata);
-    const baseRecoveryEvidence = metadata.recoveryEvidence
-      ?? (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
+    const recoveryEvidencePresent =
+      this.hasRecoveryEvidence(kalshi, venueConfirmations.kalshi) ||
+      this.hasRecoveryEvidence(polymarket, venueConfirmations.polymarket) ||
+      metadata.recoveryStatus === "pretrade_retry";
+    const recoveryStatus =
+      metadata.recoveryStatus ??
+      (riskQuarantine
+        ? "risk_quarantined"
+        : this.recoveryStatusForResult(liveLockReason, exactPairFilled, hasAnyFill, recoveryEvidencePresent));
+    const failureClassification = this.postTradeFailureClassification(
+      kalshi,
+      polymarket,
+      partialFill,
+      realizedGuaranteedProfit,
+      metadata,
+    );
+    const baseRecoveryEvidence =
+      metadata.recoveryEvidence ??
+      (recoveryEvidencePresent ? this.recoveryEvidenceFor(kalshi, polymarket, venueConfirmations) : null);
     const autoUnwindEvidence = autoUnwind
       ? {
-        autoUnwind: {
-          attempted: true,
-          flattened: autoUnwind.flattened,
-          lossDollars: autoUnwind.lossDollars ?? null,
-          reason: autoUnwind.reason ?? null,
-        },
-      }
+          autoUnwind: {
+            attempted: true,
+            flattened: autoUnwind.flattened,
+            lossDollars: autoUnwind.lossDollars ?? null,
+            reason: autoUnwind.reason ?? null,
+          },
+        }
       : null;
-    const recoveryEvidence = (failureClassification || autoUnwindEvidence)
-      ? { ...(baseRecoveryEvidence ?? {}), ...(autoUnwindEvidence ?? {}), ...(failureClassification ? { failureClassification } : {}) }
-      : baseRecoveryEvidence;
+    const recoveryEvidence =
+      failureClassification || autoUnwindEvidence
+        ? {
+            ...(baseRecoveryEvidence ?? {}),
+            ...(autoUnwindEvidence ?? {}),
+            ...(failureClassification ? { failureClassification } : {}),
+          }
+        : baseRecoveryEvidence;
     const finalizationMs = metadata.finalizationMs ?? metadata.executionTimings?.totalMs ?? null;
     const autoResolution = this.autoResolution(recoveryStatus, executionGroupId, recoveryEvidence);
     if (liveLockReason && this.config.liveAutoHardlocksEnabled) this.partialFillLocked = true;
-    const venueFailureReason = [kalshi, polymarket]
-      .filter((result) => result.error || (result.fillCount ?? 0) < this.orderSizeForExecution())
-      .map((result) => `${result.venue}: ${result.error ?? result.status}`)
-      .join("; ") || null;
+    const venueFailureReason =
+      [kalshi, polymarket]
+        .filter((result) => result.error || (result.fillCount ?? 0) < this.orderSizeForExecution())
+        .map((result) => `${result.venue}: ${result.error ?? result.status}`)
+        .join("; ") || null;
     const hedgeFailureReason = completedRiskHedgeBelowThreshold
       ? `risk hedge completed below normal profit threshold: realized edge ${realizedGuaranteedProfit?.toFixed(4)} below threshold ${this.config.minProfitDollars.toFixed(4)}`
       : null;
     const failureReason = riskQuarantine
       ? `risk quarantined: ${riskQuarantine.reason}`
-      : liveLockReason ?? hedgeFailureReason ?? venueFailureReason;
-    const action: ExecutionResult["action"] = exactPairFilled && !realizedEdgeUnsafe && !completedRiskHedgeBelowThreshold && !liveLockReason
-      ? "filled"
-      : "failed";
+      : (liveLockReason ?? hedgeFailureReason ?? venueFailureReason);
+    const action: ExecutionResult["action"] =
+      exactPairFilled && !realizedEdgeUnsafe && !completedRiskHedgeBelowThreshold && !liveLockReason
+        ? "filled"
+        : "failed";
     this.lastAttempt = {
       executionGroupId,
       action,
@@ -2408,7 +2797,8 @@ export class LiveExecutor implements ArbExecutor {
       projectedEdgeAfterFees: metadata.quoteSnapshot?.projectedEdgeAfterFees ?? null,
       leadLagSnapshot: metadata.leadLagSnapshot ?? metadata.quoteSnapshot?.leadLagSnapshot ?? null,
       fillQualitySnapshot: metadata.fillQualitySnapshot ?? null,
-      expectedExecutableEdge: metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
+      expectedExecutableEdge:
+        metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
       executionTimings: metadata.executionTimings ?? null,
       venueConfirmations,
       executionStrategy: metadata.executionStrategy ?? null,
@@ -2451,7 +2841,8 @@ export class LiveExecutor implements ArbExecutor {
           quoteSnapshot: metadata.quoteSnapshot ?? null,
           leadLagSnapshot: metadata.leadLagSnapshot ?? metadata.quoteSnapshot?.leadLagSnapshot ?? null,
           fillQualitySnapshot: metadata.fillQualitySnapshot ?? null,
-          expectedExecutableEdge: metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
+          expectedExecutableEdge:
+            metadata.expectedExecutableEdge ?? metadata.fillQualitySnapshot?.expectedExecutableEdge ?? null,
           executionTimings: metadata.executionTimings ?? null,
           kalshiRestMetadata: kalshi.metadata ?? null,
           polymarketRestMetadata: polymarket.metadata ?? null,
@@ -2476,7 +2867,10 @@ export class LiveExecutor implements ArbExecutor {
     const exposureDollars = this.unresolvedExposureDollars(kalshi, polymarket);
     if (exposureDollars == null) return null;
 
-    const existingExposure = await this.quarantineExposureReader?.unresolvedRiskQuarantineExposureDollars().catch(() => Number.POSITIVE_INFINITY) ?? 0;
+    const existingExposure =
+      (await this.quarantineExposureReader
+        ?.unresolvedRiskQuarantineExposureDollars()
+        .catch(() => Number.POSITIVE_INFINITY)) ?? 0;
     const totalExposure = existingExposure + exposureDollars;
     if (totalExposure > this.config.liveMaxUnresolvedExposureDollars + 1e-9) return null;
 
@@ -2497,10 +2891,12 @@ export class LiveExecutor implements ArbExecutor {
 
   private isRiskQuarantinableLock(reason: string): boolean {
     const normalized = reason.toLowerCase();
-    return normalized.includes("private stream confirmation")
-      || normalized.includes("fill mismatch")
-      || normalized.includes("unexpected fill count")
-      || normalized.includes("timeout/unknown");
+    return (
+      normalized.includes("private stream confirmation") ||
+      normalized.includes("fill mismatch") ||
+      normalized.includes("unexpected fill count") ||
+      normalized.includes("timeout/unknown")
+    );
   }
 
   private unresolvedExposureDollars(kalshi: VenueOrderResult, polymarket: VenueOrderResult): number | null {
@@ -2518,29 +2914,39 @@ export class LiveExecutor implements ArbExecutor {
 
   private unverifiedOpenOrderRisk(result: VenueOrderResult): string | null {
     const status = result.status.toLowerCase();
-    if (["live", "open", "resting", "delayed"].includes(status)) return `${result.venue} order may still be open (${result.status})`;
+    if (["live", "open", "resting", "delayed"].includes(status))
+      return `${result.venue} order may still be open (${result.status})`;
     const metadata = result.metadata ?? {};
     const cancelStatus = String(metadata.kalshiCancelStatus ?? metadata.polymarketCancelStatus ?? "");
     const openOrderCount = Number(metadata.polymarketOpenOrderCount ?? 0);
     const openOrdersError = metadata.polymarketOpenOrdersError;
     const finalFetchError = metadata.kalshiFinalFetchError ?? metadata.polymarketFinalFetchError;
     const timeoutRecoveryStatus = String(metadata.kalshiTimeoutRecoveryStatus ?? "");
-    const verifiedNoKalshiOrder = result.venue === "kalshi"
-      && result.status === "unknown"
-      && (result.fillCount ?? 0) === 0
-      && timeoutRecoveryStatus === "not_found";
+    const verifiedNoKalshiOrder =
+      result.venue === "kalshi" &&
+      result.status === "unknown" &&
+      (result.fillCount ?? 0) === 0 &&
+      timeoutRecoveryStatus === "not_found";
     if (verifiedNoKalshiOrder) return null;
     if (openOrderCount > 0) return `${result.venue} has ${openOrderCount} open order(s)`;
-    if (typeof openOrdersError === "string" && openOrdersError) return `${result.venue} open-order query failed: ${openOrdersError}`;
-    if (typeof finalFetchError === "string" && finalFetchError && result.status === "unknown") return `${result.venue} final order query failed: ${finalFetchError}`;
-    if (["cancel_failed", "cancel_unavailable", "skipped_no_order_id"].includes(cancelStatus) && result.status === "unknown") {
+    if (typeof openOrdersError === "string" && openOrdersError)
+      return `${result.venue} open-order query failed: ${openOrdersError}`;
+    if (typeof finalFetchError === "string" && finalFetchError && result.status === "unknown")
+      return `${result.venue} final order query failed: ${finalFetchError}`;
+    if (
+      ["cancel_failed", "cancel_unavailable", "skipped_no_order_id"].includes(cancelStatus) &&
+      result.status === "unknown"
+    ) {
       return `${result.venue} cancel state is unverified (${cancelStatus})`;
     }
     if (result.status === "unknown" && (result.fillCount ?? 0) <= 0) return `${result.venue} exposure is unknown`;
     return null;
   }
 
-  private riskQuarantineVenueEvidence(result: VenueOrderResult, confirmation: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  private riskQuarantineVenueEvidence(
+    result: VenueOrderResult,
+    confirmation: Record<string, unknown> | null | undefined,
+  ): Record<string, unknown> {
     return {
       status: result.status,
       orderId: result.orderId,
@@ -2626,47 +3032,55 @@ export class LiveExecutor implements ArbExecutor {
     };
     const kalshiRequestedAt = requested(kalshi);
     const polymarketRequestedAt = requested(polymarket);
-    const firstRequestedAt = [kalshiRequestedAt, polymarketRequestedAt]
-      .filter((value): value is number => value != null)
-      .sort((a, b) => a - b)[0] ?? null;
-    const completedAt = [kalshi, polymarket]
-      .map((result) => result == null ? null : Date.parse(result.respondedAt))
-      .filter((value): value is number => value != null && Number.isFinite(value))
-      .sort((a, b) => b - a)[0] ?? this.now();
-    const preflightMs = metadata.preflightStartedAt != null && metadata.preflightCompletedAt != null
-      ? Math.max(0, metadata.preflightCompletedAt - metadata.preflightStartedAt)
-      : null;
-    const hotGateMs = metadata.hotGateStartedAt != null && metadata.hotGateCompletedAt != null
-      ? Math.max(0, metadata.hotGateCompletedAt - metadata.hotGateStartedAt)
-      : null;
+    const firstRequestedAt =
+      [kalshiRequestedAt, polymarketRequestedAt]
+        .filter((value): value is number => value != null)
+        .sort((a, b) => a - b)[0] ?? null;
+    const completedAt =
+      [kalshi, polymarket]
+        .map((result) => (result == null ? null : Date.parse(result.respondedAt)))
+        .filter((value): value is number => value != null && Number.isFinite(value))
+        .sort((a, b) => b - a)[0] ?? this.now();
+    const preflightMs =
+      metadata.preflightStartedAt != null && metadata.preflightCompletedAt != null
+        ? Math.max(0, metadata.preflightCompletedAt - metadata.preflightStartedAt)
+        : null;
+    const hotGateMs =
+      metadata.hotGateStartedAt != null && metadata.hotGateCompletedAt != null
+        ? Math.max(0, metadata.hotGateCompletedAt - metadata.hotGateStartedAt)
+        : null;
     // M9: the one-sided-window skew is meaningful only when BOTH legs were genuinely submitted. A no-fill
     // leg is a notSubmittedResult whose requestedAt is stamped at decision time, which otherwise inflated this
     // metric to ~the order timeout (p50 2500ms) across all the no-fill attempts, masking the true ~400ms
     // two-sided window. Null it out unless both legs actually submitted.
-    const bothLegsSubmitted = kalshi != null && polymarket != null
-      && String(kalshi.status ?? "").toLowerCase() !== "not_submitted"
-      && String(polymarket.status ?? "").toLowerCase() !== "not_submitted";
-    const venueSubmitSkewMs = bothLegsSubmitted && kalshiRequestedAt != null && polymarketRequestedAt != null
-      ? Math.abs(kalshiRequestedAt - polymarketRequestedAt)
-      : null;
+    const bothLegsSubmitted =
+      kalshi != null &&
+      polymarket != null &&
+      String(kalshi.status ?? "").toLowerCase() !== "not_submitted" &&
+      String(polymarket.status ?? "").toLowerCase() !== "not_submitted";
+    const venueSubmitSkewMs =
+      bothLegsSubmitted && kalshiRequestedAt != null && polymarketRequestedAt != null
+        ? Math.abs(kalshiRequestedAt - polymarketRequestedAt)
+        : null;
     const kalshiOrderRttMs = timing(kalshi);
     const polymarketOrderRttMs = timing(polymarket);
-    const metadataNumber = (value: unknown): number | null => (
-      typeof value === "number" && Number.isFinite(value) ? value : null
-    );
+    const metadataNumber = (value: unknown): number | null =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
     const polymarketPostOrderMs = metadataNumber(polymarket?.metadata?.polymarketPostOrderMs);
     const polymarketConfirmationMs = metadataNumber(metadata.venueConfirmations?.polymarket?.confirmationMs);
     const kalshiPrearmAgeMs = metadataNumber(kalshi?.metadata?.kalshiPrearmAgeMs);
     const kalshiPrearmMs = metadataNumber(kalshi?.metadata?.kalshiPrearmMs);
     const kalshiPricePatchMs = metadataNumber(kalshi?.metadata?.kalshiPricePatchMs);
     const polymarketExactEvidenceAtMs = metadata.polymarketExactEvidenceAtMs ?? null;
-    const polyExactToKalshiSubmitMs = polymarketExactEvidenceAtMs != null && kalshiRequestedAt != null
-      ? Math.max(0, kalshiRequestedAt - polymarketExactEvidenceAtMs)
-      : null;
+    const polyExactToKalshiSubmitMs =
+      polymarketExactEvidenceAtMs != null && kalshiRequestedAt != null
+        ? Math.max(0, kalshiRequestedAt - polymarketExactEvidenceAtMs)
+        : null;
     const polymarketHedgeTriggerAtMs = metadata.polymarketHedgeTriggerAtMs ?? polymarketExactEvidenceAtMs;
-    const polyHedgeTriggerToKalshiSubmitMs = polymarketHedgeTriggerAtMs != null && kalshiRequestedAt != null
-      ? Math.max(0, kalshiRequestedAt - polymarketHedgeTriggerAtMs)
-      : null;
+    const polyHedgeTriggerToKalshiSubmitMs =
+      polymarketHedgeTriggerAtMs != null && kalshiRequestedAt != null
+        ? Math.max(0, kalshiRequestedAt - polymarketHedgeTriggerAtMs)
+        : null;
     return {
       candidateToSubmitMs: Math.max(0, (firstRequestedAt ?? startedAt) - startedAt),
       hotGateMs,
@@ -2677,7 +3091,8 @@ export class LiveExecutor implements ArbExecutor {
       polymarketExactEvidenceSource: metadata.polymarketExactEvidenceSource ?? null,
       polymarketExactEvidenceAtMs,
       polyHedgeTriggerToKalshiSubmitMs,
-      polymarketHedgeTriggerSource: metadata.polymarketHedgeTriggerSource ?? metadata.polymarketExactEvidenceSource ?? null,
+      polymarketHedgeTriggerSource:
+        metadata.polymarketHedgeTriggerSource ?? metadata.polymarketExactEvidenceSource ?? null,
       polymarketHedgeTriggerAtMs,
       polymarketHedgeTriggerFillCount: metadata.polymarketHedgeTriggerFillCount ?? null,
       polymarketHedgeTriggerMinFillShares: metadata.polymarketHedgeTriggerMinFillShares ?? null,
@@ -2714,8 +3129,9 @@ export class LiveExecutor implements ArbExecutor {
     const kalshiFillCount = kalshi.fillCount ?? 0;
     const polymarketFillCount = polymarket.fillCount ?? 0;
     const hasAnyFill = kalshiFillCount > 0 || polymarketFillCount > 0;
-    const hasUnknownResponse = [kalshi, polymarket].some((result) => result.error?.toLowerCase().includes("timeout")
-      || result.status === "unknown");
+    const hasUnknownResponse = [kalshi, polymarket].some(
+      (result) => result.error?.toLowerCase().includes("timeout") || result.status === "unknown",
+    );
     if (hasUnknownResponse) {
       return "live safety lock engaged: venue order response was timeout/unknown and requires reconciliation";
     }

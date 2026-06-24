@@ -14,17 +14,17 @@ made fast — DB writes, logging, prearm, and the hedge-decision are all ~0–1 
 
 ### Measured component breakdown (submitted attempts, n≈1108; window 2026-05-08..06-15)
 
-| Component | avg | p50 | p95 | p99 | max |
-|---|--:|--:|--:|--:|--:|
-| `venueSubmitSkewMs` (one-sided window) | 2219 | 601 | 5501 | 5777 | 5920 |
-| `polymarketOrderRttMs` | 989 | 637 | 2263 | 5848 | 5920 |
-| `polymarketPostOrderMs` | 793 | 541 | 1915 | 2301 | 2472 |
-| `polymarketConfirmationMs` | 702 | 509 | 1632 | 2072 | 2566 |
-| `kalshiOrderRttMs` | 545 | 600 | 1163 | 2508 | 5523 |
-| `hotGateMs` | 398 | 306 | 867 | 1555 | 26976 |
-| `preflightMs` (Kalshi balance RTT) | 164 | 115 | 374 | 782 | 7929 |
-| `polymarketSignMs` | 81 | 3 | 389 | 448 | 695 |
-| DB write / hedge-decision / prearm | ~0–1 | — | — | — | — |
+| Component                              |  avg | p50 |  p95 |  p99 |   max |
+| -------------------------------------- | ---: | --: | ---: | ---: | ----: |
+| `venueSubmitSkewMs` (one-sided window) | 2219 | 601 | 5501 | 5777 |  5920 |
+| `polymarketOrderRttMs`                 |  989 | 637 | 2263 | 5848 |  5920 |
+| `polymarketPostOrderMs`                |  793 | 541 | 1915 | 2301 |  2472 |
+| `polymarketConfirmationMs`             |  702 | 509 | 1632 | 2072 |  2566 |
+| `kalshiOrderRttMs`                     |  545 | 600 | 1163 | 2508 |  5523 |
+| `hotGateMs`                            |  398 | 306 |  867 | 1555 | 26976 |
+| `preflightMs` (Kalshi balance RTT)     |  164 | 115 |  374 |  782 |  7929 |
+| `polymarketSignMs`                     |   81 |   3 |  389 |  448 |   695 |
+| DB write / hedge-decision / prearm     | ~0–1 |   — |    — |    — |     — |
 
 ## Phase A — shipped (commit `c80a615`, build + 254 tests green, on branch `hostinger-exact-share-readiness`)
 
@@ -34,7 +34,7 @@ In-place software wins; no relocation; every change preserves hedge integrity an
   required collateral by a margin; otherwise forces) and naturally de-dupes the second preflight. ~250–300 ms.
 - **LA2** — `LiveExposureCache` serves last-good + background refresh in a soft window; blocks only past a
   hard ceiling (3× maxAge). Eliminates the multi-second / 27 s submit stalls.
-- **LA3** — re-presign Polymarket at the *refreshed* capped price so the submit reuses the EIP-712 signature
+- **LA3** — re-presign Polymarket at the _refreshed_ capped price so the submit reuses the EIP-712 signature
   (~3 ms) instead of re-signing inline (avg 81 / p95 389 ms).
 - **LA4** — first-leg confirmation drops the +3000 ms recovery extension (stays 2500 ms > p99 2072) → cuts the
   ~5500 ms no-in-range-fill tail; plus `LIVE_HEDGE_RETRY_BUDGET_MS=1500` wall-clock bound on hedge retries.
@@ -94,7 +94,7 @@ one-sided window → ~250–450 ms.
 - **#9b/c (follow-up):** use the FIX ExecutionReport as the first-leg confirmation (removes the ~702 ms
   confirmation wait), validate FIX session connect/heartbeat/reconnect stability from the new region, then
   canary `kalshi_first_exact` + `fix_ioc` on the funded account before promoting to default. Committing the
-  reliable integer leg first also *improves* hedge integrity on a thin account (an unfundable Kalshi leg
+  reliable integer leg first also _improves_ hedge integrity on a thin account (an unfundable Kalshi leg
   aborts flat before any Polymarket order).
 
 ## Low-value / rejected (given the data)

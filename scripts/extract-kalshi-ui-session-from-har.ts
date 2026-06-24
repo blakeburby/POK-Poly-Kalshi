@@ -40,7 +40,9 @@ interface ExtractedSession {
 }
 
 function usage(): never {
-  console.error("Usage: npm run kalshi:ui-session:extract -- /path/to/fresh-kalshi.har --out tmp/kalshi-ui-session-fresh.json");
+  console.error(
+    "Usage: npm run kalshi:ui-session:extract -- /path/to/fresh-kalshi.har --out tmp/kalshi-ui-session-fresh.json",
+  );
   process.exit(2);
 }
 
@@ -83,12 +85,7 @@ function safeExtraHeaders(headers: Map<string, string>): Record<string, string> 
     "x-csrf-token",
     "x-xsrf-token",
   ]);
-  const keepPatterns = [
-    /^accept-language$/,
-    /^priority$/,
-    /^sec-/,
-    /^x-aws-waf-token$/,
-  ];
+  const keepPatterns = [/^accept-language$/, /^priority$/, /^sec-/, /^x-aws-waf-token$/];
   const result: Record<string, string> = {};
   for (const [key, value] of headers) {
     if (blocked.has(key)) continue;
@@ -152,24 +149,32 @@ function main(): void {
     .sort((left, right) => Date.parse(right.startedDateTime ?? "0") - Date.parse(left.startedDateTime ?? "0"));
   const selected = entries.map(extractSessionFromEntry).find((session): session is ExtractedSession => session != null);
   if (!selected) {
-    console.error("No usable Kalshi UI session request found. Export a fresh HAR after loading a logged-in Kalshi page that calls /v1/users/{user_id}/event_positions or /orders.");
+    console.error(
+      "No usable Kalshi UI session request found. Export a fresh HAR after loading a logged-in Kalshi page that calls /v1/users/{user_id}/event_positions or /orders.",
+    );
     process.exit(1);
   }
   fs.mkdirSync(path.dirname(outPath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(outPath, `${JSON.stringify(selected, null, 2)}\n`, { mode: 0o600 });
   fs.chmodSync(outPath, 0o600);
-  console.log(JSON.stringify({
-    outPath,
-    userIdHash: hash(selected.userId),
-    csrfHash: hash(selected.csrfToken),
-    cookiePresent: Boolean(selected.cookie),
-    cookieHash: hash(selected.cookie),
-    cookiePartCount: selected.cookie?.split(/;\s*/).filter(Boolean).length ?? 0,
-    wafTokenPresent: Boolean(selected.headers?.["x-aws-waf-token"]),
-    wafTokenHash: hash(selected.headers?.["x-aws-waf-token"]),
-    userAgentPresent: Boolean(selected.userAgent),
-    selectedFromSuccessfulRequest: true,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        outPath,
+        userIdHash: hash(selected.userId),
+        csrfHash: hash(selected.csrfToken),
+        cookiePresent: Boolean(selected.cookie),
+        cookieHash: hash(selected.cookie),
+        cookiePartCount: selected.cookie?.split(/;\s*/).filter(Boolean).length ?? 0,
+        wafTokenPresent: Boolean(selected.headers?.["x-aws-waf-token"]),
+        wafTokenHash: hash(selected.headers?.["x-aws-waf-token"]),
+        userAgentPresent: Boolean(selected.userAgent),
+        selectedFromSuccessfulRequest: true,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 if (process.argv[1] && path.basename(process.argv[1]) === "extract-kalshi-ui-session-from-har.ts") {

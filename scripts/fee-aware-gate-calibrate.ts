@@ -35,8 +35,15 @@ function percentile(xs: number[], p: number): number {
   return sorted[idx];
 }
 
-interface CompletedRow { gate_edge: string | number | null; realized: string | number | null; kalshi_fill_price: string | number | null }
-interface SkipRow { edge: string | number | null; n: string | number }
+interface CompletedRow {
+  gate_edge: string | number | null;
+  realized: string | number | null;
+  kalshi_fill_price: string | number | null;
+}
+interface SkipRow {
+  edge: string | number | null;
+  n: string | number;
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -47,17 +54,21 @@ async function main(): Promise<void> {
   const pool = createPool(config);
   try {
     // (1) completed fills — precise over-promise check
-    const completed = (await pool.query<CompletedRow>(`
+    const completed = (
+      await pool.query<CompletedRow>(`
       SELECT projected_edge_after_fees AS gate_edge, realized_guaranteed_profit AS realized, kalshi_fill_price
       FROM cross_venue_arb_signals
       WHERE action = 'filled'
         AND projected_edge_after_fees IS NOT NULL AND realized_guaranteed_profit IS NOT NULL
         AND created_at > now() - make_interval(days => ${days})
-    `)).rows;
+    `)
+    ).rows;
     const residuals: number[] = [];
     const fees: number[] = [];
     for (const r of completed) {
-      const gate = num(r.gate_edge), realized = num(r.realized), price = num(r.kalshi_fill_price);
+      const gate = num(r.gate_edge),
+        realized = num(r.realized),
+        price = num(r.kalshi_fill_price);
       if (gate == null || realized == null) continue;
       const fee = expectedKalshiFeePerShare(price); // 0 if price unknown
       fees.push(fee);
@@ -68,16 +79,20 @@ async function main(): Promise<void> {
     const realizedMean = mean(completed.map((r) => num(r.realized) ?? 0));
 
     // (2) skipped cushioned-edge scans — approximate unlock at the cushion cut (mean fee applied)
-    const skipRows = (await pool.query<SkipRow>(`
+    const skipRows = (
+      await pool.query<SkipRow>(`
       SELECT (regexp_match(failure_reason, 'edge (-?[0-9.]+) below'))[1]::numeric AS edge, count(*) AS n
       FROM cross_venue_arb_signals
       WHERE action = 'skipped' AND failure_reason LIKE 'cushioned executable edge%'
         AND created_at > now() - make_interval(days => 1)
       GROUP BY 1
-    `)).rows;
-    let totalSkips = 0, newlyAdmitted = 0;
+    `)
+    ).rows;
+    let totalSkips = 0,
+      newlyAdmitted = 0;
     for (const s of skipRows) {
-      const edge = num(s.edge), n = num(s.n) ?? 0;
+      const edge = num(s.edge),
+        n = num(s.n) ?? 0;
       if (edge == null) continue;
       totalSkips += n;
       // cushion cut raises the cushioned edge by cushionCutCents; fee-aware subtracts the mean fee.
@@ -93,10 +108,17 @@ async function main(): Promise<void> {
         n: completed.length,
         gateEdgeMean: Number(mean(completed.map((r) => num(r.gate_edge) ?? 0)).toFixed(4)),
         realizedMean: Number(realizedMean.toFixed(4)),
-        feeAwarePredictedVsRealized: { meanResidual: Number(meanResidual.toFixed(4)), p10Residual: Number(percentile(residuals, 0.1).toFixed(4)) },
+        feeAwarePredictedVsRealized: {
+          meanResidual: Number(meanResidual.toFixed(4)),
+          p10Residual: Number(percentile(residuals, 0.1).toFixed(4)),
+        },
       },
       cushionCutUnlock_per24h: { totalCushionedSkips: totalSkips, newlyAdmittedEstimate: newlyAdmitted },
-      promotion: { passed: overPromiseOk, criterion: "completed fills >=5 AND mean(realized - feeAwarePredicted) >= -0.005 AND p10 >= -0.02 (no systematic over-promise)" },
+      promotion: {
+        passed: overPromiseOk,
+        criterion:
+          "completed fills >=5 AND mean(realized - feeAwarePredicted) >= -0.005 AND p10 >= -0.02 (no systematic over-promise)",
+      },
     };
     console.log(JSON.stringify(report, null, 2));
     if (requirePass && !report.promotion.passed) process.exitCode = 1;
@@ -106,6 +128,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(JSON.stringify({ error: "FEE_AWARE_GATE_CALIBRATION_DB_ERROR", message: error instanceof Error ? error.message : String(error) }, null, 2));
+  console.error(
+    JSON.stringify(
+      { error: "FEE_AWARE_GATE_CALIBRATION_DB_ERROR", message: error instanceof Error ? error.message : String(error) },
+      null,
+      2,
+    ),
+  );
   process.exit(2);
 });

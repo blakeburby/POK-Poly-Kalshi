@@ -51,13 +51,48 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
   const estEdge = exec?.executionQuality?.estimatedExecutableEdge ?? 0;
 
   const answers: AnswerProps[] = [
-    { q: "Making money?", value: day == null ? "–" : fmtUsd(day, { sign: true }), tone: day == null ? "stale" : day >= 0 ? "live" : "halt", sub: "24h account P&L" },
-    { q: "Edge working?", value: fmtCents(estEdge), tone: estEdge > 0 && candidates >= 0 ? "live" : "stale", sub: `${candidates} live candidates` },
-    { q: "Filling?", value: fmtPct(fillRate), tone: fillRate >= 0.6 ? "live" : fillRate >= 0.4 ? "stale" : "halt", sub: "filled / opportunities" },
-    { q: "Hedging?", value: fmtPct(exactRate), tone: exactRate >= 0.6 ? "live" : exactRate >= 0.4 ? "stale" : "halt", sub: "exact-pair fills" },
-    { q: "Capturing edge?", value: cap.retention != null ? fmtPctRaw(cap.retention * 100) : "–", tone: (cap.retention ?? 0) >= 0.8 ? "live" : "stale", sub: "realized / expected" },
-    { q: "Managing risk?", value: unhedged > 0 ? fmtUsd(unhedged) : "Clean", tone: unhedged > 0 ? "halt" : "live", sub: `risk · ${exec?.riskState ?? "?"}` },
-    { q: "Healthy to trade?", value: tradeableNow(snap) ? "YES" : "NO", tone: tradeableNow(snap) ? "live" : "halt", sub: exec?.liveTrading ? "armed" : "disabled" },
+    {
+      q: "Making money?",
+      value: day == null ? "–" : fmtUsd(day, { sign: true }),
+      tone: day == null ? "stale" : day >= 0 ? "live" : "halt",
+      sub: "24h account P&L",
+    },
+    {
+      q: "Edge working?",
+      value: fmtCents(estEdge),
+      tone: estEdge > 0 && candidates >= 0 ? "live" : "stale",
+      sub: `${candidates} live candidates`,
+    },
+    {
+      q: "Filling?",
+      value: fmtPct(fillRate),
+      tone: fillRate >= 0.6 ? "live" : fillRate >= 0.4 ? "stale" : "halt",
+      sub: "filled / opportunities",
+    },
+    {
+      q: "Hedging?",
+      value: fmtPct(exactRate),
+      tone: exactRate >= 0.6 ? "live" : exactRate >= 0.4 ? "stale" : "halt",
+      sub: "exact-pair fills",
+    },
+    {
+      q: "Capturing edge?",
+      value: cap.retention != null ? fmtPctRaw(cap.retention * 100) : "–",
+      tone: (cap.retention ?? 0) >= 0.8 ? "live" : "stale",
+      sub: "realized / expected",
+    },
+    {
+      q: "Managing risk?",
+      value: unhedged > 0 ? fmtUsd(unhedged) : "Clean",
+      tone: unhedged > 0 ? "halt" : "live",
+      sub: `risk · ${exec?.riskState ?? "?"}`,
+    },
+    {
+      q: "Healthy to trade?",
+      value: tradeableNow(snap) ? "YES" : "NO",
+      tone: tradeableNow(snap) ? "live" : "halt",
+      sub: exec?.liveTrading ? "armed" : "disabled",
+    },
   ];
 
   return (
@@ -71,9 +106,24 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
 
       {/* Unified combined-portfolio equity */}
       <div className="grid grid-cols-3 gap-3">
-        <StatTile label="Combined Value" value={fmtUsd(current)} tone={eq.missingVenues.length ? "amber" : "cyan"} sub={combinedSub} />
-        <StatTile label="Change ($)" value={change.absolute != null ? fmtUsd(change.absolute, { sign: true }) : "–"} tone={changeTone} sub={range.toUpperCase()} />
-        <StatTile label="Change (%)" value={change.percent != null ? fmtPctRaw(change.percent * 100, 2, true) : "–"} tone={changeTone} sub={range.toUpperCase()} />
+        <StatTile
+          label="Combined Value"
+          value={fmtUsd(current)}
+          tone={eq.missingVenues.length ? "amber" : "cyan"}
+          sub={combinedSub}
+        />
+        <StatTile
+          label="Change ($)"
+          value={change.absolute != null ? fmtUsd(change.absolute, { sign: true }) : "–"}
+          tone={changeTone}
+          sub={range.toUpperCase()}
+        />
+        <StatTile
+          label="Change (%)"
+          value={change.percent != null ? fmtPctRaw(change.percent * 100, 2, true) : "–"}
+          tone={changeTone}
+          sub={range.toUpperCase()}
+        />
       </div>
 
       <Grid>
@@ -94,7 +144,9 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
           }
         >
           {hasHistory ? (
-            <EChart option={equityAreaOption(series, { positive: (change.absolute ?? 0) >= 0, fmt: (v) => fmtUsd(v) })} />
+            <EChart
+              option={equityAreaOption(series, { positive: (change.absolute ?? 0) >= 0, fmt: (v) => fmtUsd(v) })}
+            />
           ) : (
             <Empty>Equity history is warming up — samples accrue while the dashboard runs.</Empty>
           )}
@@ -123,7 +175,8 @@ interface AnswerProps {
 }
 
 function AnswerCard({ q, value, tone, sub }: AnswerProps) {
-  const accent = tone === "live" ? "text-up" : tone === "halt" ? "text-down" : tone === "stale" ? "text-amber" : "text-fg";
+  const accent =
+    tone === "live" ? "text-up" : tone === "halt" ? "text-down" : tone === "stale" ? "text-amber" : "text-fg";
   return (
     <div
       className={cn(
@@ -164,11 +217,16 @@ function PositionsTable({ snap }: { snap: DashboardSnapshot }) {
           {rows.map((r) => (
             <tr key={`${r.venue}-${r.id}`} className="border-b border-line/40 hover:bg-surface-2/40">
               <Td>
-                <span className={cn("size-1.5 rounded-full", r.venue === "kalshi" ? "bg-kalshi" : "bg-poly")} style={{ display: "inline-block" }} />
+                <span
+                  className={cn("size-1.5 rounded-full", r.venue === "kalshi" ? "bg-kalshi" : "bg-poly")}
+                  style={{ display: "inline-block" }}
+                />
               </Td>
               <Td className="max-w-[220px] truncate text-fg-secondary">{r.market}</Td>
               <Td className="text-right text-fg">{fmtNum(r.shares)}</Td>
-              <Td className="text-right text-fg-secondary">{r.averagePrice != null ? (r.averagePrice * 100).toFixed(1) : "–"}</Td>
+              <Td className="text-right text-fg-secondary">
+                {r.averagePrice != null ? (r.averagePrice * 100).toFixed(1) : "–"}
+              </Td>
               <Td className="text-right text-fg">
                 <div className="flex items-center justify-end gap-2">
                   <MiniBar value={(r.value ?? 0) / maxVal} tone="info" className="w-12" />
@@ -204,7 +262,8 @@ function OpportunitiesMini({ snap }: { snap: DashboardSnapshot }) {
             return (
               <tr key={c.pairKey} className="border-b border-line/40 hover:bg-surface-2/40">
                 <Td className="text-fg-secondary">
-                  {Math.min(c.lower.strike, c.higher.strike).toLocaleString()}/{Math.max(c.lower.strike, c.higher.strike).toLocaleString()}
+                  {Math.min(c.lower.strike, c.higher.strike).toLocaleString()}/
+                  {Math.max(c.lower.strike, c.higher.strike).toLocaleString()}
                 </Td>
                 <Td className="text-right text-fg-secondary">{fmtCents(c.premium)}</Td>
                 <Td className="text-right">
@@ -224,7 +283,11 @@ function OpportunitiesMini({ snap }: { snap: DashboardSnapshot }) {
 }
 
 function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
-  return <th className={cn("px-3 py-1.5 font-mono text-[9.5px] font-medium uppercase tracking-wide", className)}>{children}</th>;
+  return (
+    <th className={cn("px-3 py-1.5 font-mono text-[9.5px] font-medium uppercase tracking-wide", className)}>
+      {children}
+    </th>
+  );
 }
 function Td({ children, className }: { children?: React.ReactNode; className?: string }) {
   return <td className={cn("px-3 py-1.5", className)}>{children}</td>;

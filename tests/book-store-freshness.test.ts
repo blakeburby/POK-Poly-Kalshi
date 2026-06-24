@@ -5,8 +5,16 @@ import type { BinaryContract } from "../src/types";
 
 function k(contractId: string, updatedAt: number): BinaryContract {
   return {
-    venue: "kalshi", contractId, asset: "BTC", expiryMs: 1_800_000_900_000, strike: 80_000,
-    yesAsk: null, noAsk: null, yesBid: null, noBid: null, updatedAt,
+    venue: "kalshi",
+    contractId,
+    asset: "BTC",
+    expiryMs: 1_800_000_900_000,
+    strike: 80_000,
+    yesAsk: null,
+    noAsk: null,
+    yesBid: null,
+    noBid: null,
+    updatedAt,
   };
 }
 

@@ -3,7 +3,11 @@ import { z } from "zod";
 import { logEvent } from "../logger";
 import type { BookLevel } from "../types";
 import { isRateLimitError } from "../ws/reconnect";
-import { ReconnectingWebSocketClient, type RawWebSocket, type ReconnectingWebSocketClientOptions } from "../ws/reconnecting-websocket-client";
+import {
+  ReconnectingWebSocketClient,
+  type RawWebSocket,
+  type ReconnectingWebSocketClientOptions,
+} from "../ws/reconnecting-websocket-client";
 
 type WebSocketFactory = (url: string) => RawWebSocket;
 
@@ -101,7 +105,7 @@ function sortedLevels(levels: Map<number, number>, side: "bid" | "ask"): BookLev
   return [...levels]
     .filter(([, size]) => size > 0)
     .map(([price, size]) => ({ price, size }))
-    .sort((a, b) => side === "bid" ? b.price - a.price : a.price - b.price);
+    .sort((a, b) => (side === "bid" ? b.price - a.price : a.price - b.price));
 }
 
 export function buildPolymarketSubscribeMessage(tokenIds: Iterable<string>): Record<string, unknown> {
@@ -206,7 +210,11 @@ export class PolymarketBookParser {
     return book;
   }
 
-  private applyMetadata(book: BookLevels, data: { hash?: string; tick_size?: string | number }, timestamp: number): void {
+  private applyMetadata(
+    book: BookLevels,
+    data: { hash?: string; tick_size?: string | number },
+    timestamp: number,
+  ): void {
     if (data.hash) book.hash = data.hash;
     if (data.tick_size != null) {
       const tickSize = toNumber(data.tick_size);
@@ -271,7 +279,11 @@ export class PolymarketBookClient extends ReconnectingWebSocketClient {
   }
 
   protected createSocket(): RawWebSocket | null {
-    logEvent({ category: "POLYMARKET", message: "websocket connecting", context: { subscriptions: this.desired.size } });
+    logEvent({
+      category: "POLYMARKET",
+      message: "websocket connecting",
+      context: { subscriptions: this.desired.size },
+    });
     return this.wsFactory(this.url);
   }
 
@@ -329,7 +341,11 @@ export class PolymarketBookClient extends ReconnectingWebSocketClient {
       for (const tokenId of removed) this.subscribed.delete(tokenId);
     }
     if (added.length > 0 || removed.length > 0) {
-      logEvent({ category: "POLYMARKET", message: "websocket subscription refreshed", context: { subscriptions: next.size } });
+      logEvent({
+        category: "POLYMARKET",
+        message: "websocket subscription refreshed",
+        context: { subscriptions: next.size },
+      });
     }
   }
 }

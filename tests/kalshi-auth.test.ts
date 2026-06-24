@@ -2,11 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { kalshiSignaturePath, resolveKalshiPrivateKeyPem } from "../src/kalshi/auth";
 
-const pem = [
-  "-----BEGIN PRIVATE KEY-----",
-  "abc123",
-  "-----END PRIVATE KEY-----",
-].join("\n");
+const pem = ["-----BEGIN PRIVATE KEY-----", "abc123", "-----END PRIVATE KEY-----"].join("\n");
 
 test("Kalshi private key resolver accepts raw PEM in KALSHI_PRIVATE_KEY", () => {
   assert.equal(resolveKalshiPrivateKeyPem({ KALSHI_PRIVATE_KEY: pem }), pem);

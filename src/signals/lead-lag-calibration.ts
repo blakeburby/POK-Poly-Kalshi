@@ -132,18 +132,22 @@ function normalizedStatus(value: string | null): string {
 function isUnknownOrTimeout(row: LeadLagCalibrationRow): boolean {
   const statuses = [row.kalshiStatus, row.polymarketStatus].map(normalizedStatus);
   const errors = [row.kalshiError, row.polymarketError].map(normalizedStatus);
-  return statuses.some((status) => status === "unknown" || status === "timeout")
-    || errors.some((error) => error.includes("timeout") || error.includes("timed out") || error.includes("unknown"));
+  return (
+    statuses.some((status) => status === "unknown" || status === "timeout") ||
+    errors.some((error) => error.includes("timeout") || error.includes("timed out") || error.includes("unknown"))
+  );
 }
 
 function isExactPair(row: LeadLagCalibrationRow): boolean {
   const kalshiCount = row.kalshiFillCount ?? 0;
   const polymarketCount = row.polymarketFillCount ?? 0;
-  return row.action === "filled"
-    && !row.partialFill
-    && kalshiCount > 0
-    && polymarketCount > 0
-    && Math.abs(kalshiCount - polymarketCount) <= EPSILON;
+  return (
+    row.action === "filled" &&
+    !row.partialFill &&
+    kalshiCount > 0 &&
+    polymarketCount > 0 &&
+    Math.abs(kalshiCount - polymarketCount) <= EPSILON
+  );
 }
 
 function isProfitableExactPair(row: LeadLagCalibrationRow): boolean {
@@ -151,11 +155,13 @@ function isProfitableExactPair(row: LeadLagCalibrationRow): boolean {
 }
 
 function isBadAttempt(row: LeadLagCalibrationRow): boolean {
-  return row.partialFill
-    || row.action === "failed"
-    || isUnknownOrTimeout(row)
-    || !isProfitableExactPair(row)
-    || (row.realizedGuaranteedProfit != null && row.realizedGuaranteedProfit <= 0);
+  return (
+    row.partialFill ||
+    row.action === "failed" ||
+    isUnknownOrTimeout(row) ||
+    !isProfitableExactPair(row) ||
+    (row.realizedGuaranteedProfit != null && row.realizedGuaranteedProfit <= 0)
+  );
 }
 
 function scoredAt(row: LeadLagCalibrationRow): string | null {
@@ -176,7 +182,11 @@ function stalenessScore(row: LeadLagCalibrationRow): number | null {
   return row.leadLagSnapshot?.stalenessScore ?? null;
 }
 
-function simulatedGateBlocks(row: LeadLagCalibrationRow, minConfidence: number, maxAdverseSelectionScore: number): boolean {
+function simulatedGateBlocks(
+  row: LeadLagCalibrationRow,
+  minConfidence: number,
+  maxAdverseSelectionScore: number,
+): boolean {
   const snapshot = row.leadLagSnapshot;
   if (!snapshot) return false;
   return snapshot.confidence >= minConfidence && snapshot.adverseSelectionScore > maxAdverseSelectionScore;
@@ -207,7 +217,10 @@ function bucketStats(label: string, rows: LeadLagCalibrationRow[]): LeadLagCalib
   };
 }
 
-function groupByLabel(rows: LeadLagCalibrationRow[], labelForRow: (row: LeadLagCalibrationRow) => string): LeadLagCalibrationBucket[] {
+function groupByLabel(
+  rows: LeadLagCalibrationRow[],
+  labelForRow: (row: LeadLagCalibrationRow) => string,
+): LeadLagCalibrationBucket[] {
   const grouped = new Map<string, LeadLagCalibrationRow[]>();
   for (const row of rows) {
     const label = labelForRow(row);
@@ -239,7 +252,10 @@ function metricBands(
     });
 }
 
-function metricDeciles(rows: LeadLagCalibrationRow[], metric: (row: LeadLagCalibrationRow) => number | null): LeadLagCalibrationBucket[] {
+function metricDeciles(
+  rows: LeadLagCalibrationRow[],
+  metric: (row: LeadLagCalibrationRow) => number | null,
+): LeadLagCalibrationBucket[] {
   return metricBands(rows, metric, 0.1);
 }
 
@@ -278,8 +294,9 @@ function directionality(
     lowAdverseAvgRealizedEdge: lowRealized,
     highAdverseAvgRealizedEdge: highRealized,
     realizedEdgeSpread: realizedSpread,
-    passed: (exactSpread != null && exactSpread >= minExactSpread)
-      || (realizedSpread != null && realizedSpread >= minRealizedSpread),
+    passed:
+      (exactSpread != null && exactSpread >= minExactSpread) ||
+      (realizedSpread != null && realizedSpread >= minRealizedSpread),
   };
 }
 
@@ -292,9 +309,12 @@ export function buildLeadLagCalibrationReport(
   const minConfidence = options.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
   const maxAdverseSelectionScore = options.maxAdverseSelectionScore ?? DEFAULT_MAX_ADVERSE_SELECTION_SCORE;
   const badAttemptReductionTarget = options.badAttemptReductionTarget ?? DEFAULT_BAD_ATTEMPT_REDUCTION_TARGET;
-  const maxProfitableFillEliminationRate = options.maxProfitableFillEliminationRate ?? DEFAULT_MAX_PROFITABLE_FILL_ELIMINATION_RATE;
-  const minHighLowExactFillRateSpread = options.minHighLowExactFillRateSpread ?? DEFAULT_MIN_HIGH_LOW_EXACT_FILL_RATE_SPREAD;
-  const minHighLowRealizedEdgeSpread = options.minHighLowRealizedEdgeSpread ?? DEFAULT_MIN_HIGH_LOW_REALIZED_EDGE_SPREAD;
+  const maxProfitableFillEliminationRate =
+    options.maxProfitableFillEliminationRate ?? DEFAULT_MAX_PROFITABLE_FILL_ELIMINATION_RATE;
+  const minHighLowExactFillRateSpread =
+    options.minHighLowExactFillRateSpread ?? DEFAULT_MIN_HIGH_LOW_EXACT_FILL_RATE_SPREAD;
+  const minHighLowRealizedEdgeSpread =
+    options.minHighLowRealizedEdgeSpread ?? DEFAULT_MIN_HIGH_LOW_REALIZED_EDGE_SPREAD;
   const rows = inputRows.filter((row) => row.executionGroupId != null && row.leadLagSnapshot != null);
   const sortedByScoreTime = rows
     .filter((row) => scoredAt(row) != null)
@@ -315,19 +335,27 @@ export function buildLeadLagCalibrationReport(
   };
   const directional = directionality(rows, minHighLowExactFillRateSpread, minHighLowRealizedEdgeSpread);
   const firstScoredAt = sortedByScoreTime.length === 0 ? null : scoredAt(sortedByScoreTime[0]);
-  const lastScoredAt = sortedByScoreTime.length === 0 ? null : scoredAt(sortedByScoreTime[sortedByScoreTime.length - 1]);
+  const lastScoredAt =
+    sortedByScoreTime.length === 0 ? null : scoredAt(sortedByScoreTime[sortedByScoreTime.length - 1]);
   const reasons: string[] = [];
-  if (rows.length < minSamples) reasons.push(`need at least ${minSamples} submitted scored attempts; found ${rows.length}`);
+  if (rows.length < minSamples)
+    reasons.push(`need at least ${minSamples} submitted scored attempts; found ${rows.length}`);
   if (!directional.passed) {
-    reasons.push(`high-adverse buckets are not materially worse by exact-fill spread ${minHighLowExactFillRateSpread} or realized-edge spread ${minHighLowRealizedEdgeSpread}`);
+    reasons.push(
+      `high-adverse buckets are not materially worse by exact-fill spread ${minHighLowExactFillRateSpread} or realized-edge spread ${minHighLowRealizedEdgeSpread}`,
+    );
   }
   if ((gateSimulation.badAttemptReductionRate ?? 0) < badAttemptReductionTarget) {
-    reasons.push(`simulated gate blocks ${(gateSimulation.badAttemptReductionRate ?? 0).toFixed(3)} of bad attempts; need ${badAttemptReductionTarget}`);
+    reasons.push(
+      `simulated gate blocks ${(gateSimulation.badAttemptReductionRate ?? 0).toFixed(3)} of bad attempts; need ${badAttemptReductionTarget}`,
+    );
   }
   if (gateSimulation.profitableFillEliminationRate == null) {
     reasons.push("no profitable exact paired fills available for elimination check");
   } else if (gateSimulation.profitableFillEliminationRate > maxProfitableFillEliminationRate) {
-    reasons.push(`simulated gate blocks ${gateSimulation.profitableFillEliminationRate.toFixed(3)} of profitable exact fills; max ${maxProfitableFillEliminationRate}`);
+    reasons.push(
+      `simulated gate blocks ${gateSimulation.profitableFillEliminationRate.toFixed(3)} of profitable exact fills; max ${maxProfitableFillEliminationRate}`,
+    );
   }
 
   return {
@@ -354,14 +382,13 @@ export function buildLeadLagCalibrationReport(
     },
     leaderVenueBuckets: groupByLabel(rows, (row) => row.leadLagSnapshot?.leaderVenue ?? "none"),
     laggingVenueBuckets: groupByLabel(rows, (row) => row.leadLagSnapshot?.laggingVenue ?? "none"),
-    cheapLegLaggingBuckets: groupByLabel(rows, (row) => row.leadLagSnapshot?.cheapLegIsLagging == null ? "unknown" : String(row.leadLagSnapshot.cheapLegIsLagging)),
+    cheapLegLaggingBuckets: groupByLabel(rows, (row) =>
+      row.leadLagSnapshot?.cheapLegIsLagging == null ? "unknown" : String(row.leadLagSnapshot.cheapLegIsLagging),
+    ),
     confidenceBands: metricBands(rows, confidence, 0.2),
     adverseSelectionDeciles: metricDeciles(rows, adverseSelectionScore),
     stalenessDeciles: metricDeciles(rows, stalenessScore),
-    simulatedGateBuckets: [
-      bucketStats("allowed", allowed),
-      bucketStats("blocked", blocked),
-    ],
+    simulatedGateBuckets: [bucketStats("allowed", allowed), bucketStats("blocked", blocked)],
     gateSimulation,
     directionality: directional,
     promotion: {

@@ -76,9 +76,26 @@ export function HealthRailBody() {
       {/* hedge integrity */}
       <div className="border-b border-line px-3 py-2.5">
         <Label className="mb-2 block">Hedge Integrity</Label>
-        <RailStat label="Exact-Pair Fill" value={fmtPct(eq?.exactPairFillRate)} bar={eq?.exactPairFillRate ?? 0} tone="up" />
-        <RailStat label="Mismatch Rate" value={fmtPct(eq?.mismatchRate)} bar={eq?.mismatchRate ?? 0} tone="down" invert />
-        <RailStat label="PM Timeout" value={fmtPct(eq?.polymarketTimeoutRate)} bar={eq?.polymarketTimeoutRate ?? 0} tone="down" invert />
+        <RailStat
+          label="Exact-Pair Fill"
+          value={fmtPct(eq?.exactPairFillRate)}
+          bar={eq?.exactPairFillRate ?? 0}
+          tone="up"
+        />
+        <RailStat
+          label="Mismatch Rate"
+          value={fmtPct(eq?.mismatchRate)}
+          bar={eq?.mismatchRate ?? 0}
+          tone="down"
+          invert
+        />
+        <RailStat
+          label="PM Timeout"
+          value={fmtPct(eq?.polymarketTimeoutRate)}
+          bar={eq?.polymarketTimeoutRate ?? 0}
+          tone="down"
+          invert
+        />
       </div>
 
       {/* risk exposure */}
@@ -86,7 +103,12 @@ export function HealthRailBody() {
         <Label className="mb-2 block">Risk Exposure</Label>
         <div className="flex items-center justify-between py-0.5">
           <span className="text-[11px] text-fg-secondary">Unhedged $</span>
-          <span className={cn("font-mono text-[12px] tabular-nums", (recon?.quarantinedExposureDollars ?? 0) > 0 ? "text-down" : "text-up")}>
+          <span
+            className={cn(
+              "font-mono text-[12px] tabular-nums",
+              (recon?.quarantinedExposureDollars ?? 0) > 0 ? "text-down" : "text-up",
+            )}
+          >
             {fmtUsd(recon?.quarantinedExposureDollars ?? 0)}
           </span>
         </div>
@@ -103,8 +125,22 @@ export function HealthRailBody() {
       {/* venue capital */}
       <div className="px-3 py-2.5">
         <Label className="mb-2 block">Venue Capital</Label>
-        <VenueLine name="Kalshi" tone="kalshi" balance={acct.kalshi} stale={acct.staleVenues.includes("kalshi")} ageMs={staleAgeMs(snap.tradingActivity?.kalshi.portfolio.valueAsOfMs, now)} ready={exec?.kalshi.ready} />
-        <VenueLine name="Polymarket" tone="poly" balance={acct.polymarket} stale={acct.staleVenues.includes("polymarket")} ageMs={staleAgeMs(snap.tradingActivity?.polymarket.portfolio.valueAsOfMs, now)} ready={exec?.polymarket.ready} />
+        <VenueLine
+          name="Kalshi"
+          tone="kalshi"
+          balance={acct.kalshi}
+          stale={acct.staleVenues.includes("kalshi")}
+          ageMs={staleAgeMs(snap.tradingActivity?.kalshi.portfolio.valueAsOfMs, now)}
+          ready={exec?.kalshi.ready}
+        />
+        <VenueLine
+          name="Polymarket"
+          tone="poly"
+          balance={acct.polymarket}
+          stale={acct.staleVenues.includes("polymarket")}
+          ageMs={staleAgeMs(snap.tradingActivity?.polymarket.portfolio.valueAsOfMs, now)}
+          ready={exec?.polymarket.ready}
+        />
         <div className="mt-2 flex items-center justify-between border-t border-line/60 pt-2">
           <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">Clip Size</span>
           <span className="font-mono text-[11px] tabular-nums text-fg-secondary">{size} sh</span>

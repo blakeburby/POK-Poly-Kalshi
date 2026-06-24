@@ -42,9 +42,7 @@ export const SheetContent = React.forwardRef<
       )}
       {...props}
     >
-      {title ? (
-        <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title>
-      ) : null}
+      {title ? <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title> : null}
       <DialogPrimitive.Close className="absolute right-3 top-3 z-10 rounded-sm p-1 text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg">
         <X className="size-4" />
       </DialogPrimitive.Close>

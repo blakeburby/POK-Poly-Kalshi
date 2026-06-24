@@ -16,18 +16,20 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
 
   // (1) Edge Surface: premium x guaranteed edge x realized/expected EV
   const edgePts: Point3[] = React.useMemo(() => {
-    const live = (snap.syntheticStructures ?? []).filter((c) => c.risk).map((c) => ({
-      x: c.premium,
-      y: c.guaranteedProfit,
-      z: c.risk!.worstCaseProfit,
-      color:
-        c.risk!.classification === "true_arbitrage"
-          ? CHART.up
-          : c.risk!.classification === "guaranteed_below_threshold"
-            ? CHART.amber
-            : CHART.down,
-      size: c.executable ? 0.06 : 0.03,
-    }));
+    const live = (snap.syntheticStructures ?? [])
+      .filter((c) => c.risk)
+      .map((c) => ({
+        x: c.premium,
+        y: c.guaranteedProfit,
+        z: c.risk!.worstCaseProfit,
+        color:
+          c.risk!.classification === "true_arbitrage"
+            ? CHART.up
+            : c.risk!.classification === "guaranteed_below_threshold"
+              ? CHART.amber
+              : CHART.down,
+        size: c.executable ? 0.06 : 0.03,
+      }));
     const realized = sigs
       .filter((s) => s.action === "filled")
       .map((s) => ({
@@ -60,7 +62,10 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
     [sigs, size],
   );
   const execAxes = autoAxes(execPts, {
-    x: { label: "Time", fmt: (v) => new Date(v).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }) },
+    x: {
+      label: "Time",
+      fmt: (v) => new Date(v).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    },
     y: { label: "Fill Delay", fmt: (v) => fmtMs(v) },
     z: { label: "Realized Profit", fmt: (v) => fmtUsd(v, { sign: true }) },
   });
@@ -94,7 +99,16 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
           dot="live"
           span={6}
           bodyClassName="aspect-square w-full flex-none p-0"
-          right={<Legend items={[["arb", CHART.up], ["sub-thr", CHART.amber], ["realized", CHART.cyan], ["prob/fail", CHART.down]]} />}
+          right={
+            <Legend
+              items={[
+                ["arb", CHART.up],
+                ["sub-thr", CHART.amber],
+                ["realized", CHART.cyan],
+                ["prob/fail", CHART.down],
+              ]}
+            />
+          }
         >
           <Viz3DPanel
             points={edgePts}
@@ -108,7 +122,15 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
           dot="info"
           span={6}
           bodyClassName="aspect-square w-full flex-none p-0"
-          right={<Legend items={[["exact", CHART.up], ["partial", CHART.amber], ["fail", CHART.down]]} />}
+          right={
+            <Legend
+              items={[
+                ["exact", CHART.up],
+                ["partial", CHART.amber],
+                ["fail", CHART.down],
+              ]}
+            />
+          }
         >
           <Viz3DPanel points={execPts} axes={execAxes} />
         </GridPanel>
@@ -118,7 +140,15 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
           dot="info"
           span={6}
           bodyClassName="aspect-square w-full flex-none p-0"
-          right={<Legend items={[["clean", CHART.up], ["drawdown", CHART.amber], ["unhedged", CHART.down]]} />}
+          right={
+            <Legend
+              items={[
+                ["clean", CHART.up],
+                ["drawdown", CHART.amber],
+                ["unhedged", CHART.down],
+              ]}
+            />
+          }
         >
           <Viz3DPanel points={riskPts} axes={riskAxes} />
         </GridPanel>

@@ -1,6 +1,7 @@
 # POK-Poly-Kalshi — End-to-End Audit & Optimization Roadmap (2026-06-20)
 
 ## IMPLEMENTATION STATUS (updated as fixes land; all flag-gated, default off = byte-identical)
+
 - **C1 — DONE + DEPLOYED + ENABLED** on prod (`50ce743`, `LIVE_CONFIRMATION_STATUS_TOLERANT=true`). The "mined"-status mis-quarantine fix.
 - **C2 — DONE + DEPLOYED** (`ee8067c`, display-only). True attempt-based fill rate + counts hedged in-band overfills. Deferred: dollar/net-fee P&L rebucket + venueAccountValue equity double-count (Ledger already shows correct realized-$).
 - **H1 — DONE** (`26fe868`, `LIVE_HOT_PATH_LOCK_CACHE_GRACE_MS`). Lock-cache last-good grace + throttled block log. Not yet deployed.
@@ -23,10 +24,10 @@
 - **Tier-3 (~30 LOW) — triaged.** All LOW severity; on inspection these are observability/by-design/library items, not profit/risk movers. Representative dispositions: the circular-JSON `TLSSocket` error is **internal to clob-client-v2** (its own message is the stringify TypeError; the order is still classified failed) — upstream, not cleanly fixable on our side; the reservation TOCTOU and heartbeat-mask items are moot under concurrency=1 + H1; lead-lag/fill-quality "computed but gated off" is now cheap post-P2 (fill-quality reads are cached, lead-lag is in-memory). The remainder are small observability/precision niceties available on request; none change profitability, fill rate, or risk materially.
 
 ### Net result
+
 The audit's 101 raw findings distill, under adversarial code+venue verification, to **8 genuinely-actionable fixes — all shipped** (C1, C2, H1, H2, H3, H4, M2, M9; flag-gated, 337 tests, lockstep). The remaining ~30+ are already-handled, by-design, tuning-only, marginal, library-internal, or low-value future-proofing. This is the expected shape of a deep audit: the value is the handful of real bugs (chiefly **C1**, ~5× fill-rate/profit undercount), not 100 speculative edits to a live-money path.
 
 ---
-
 
 Method: 12-agent code audit (101 raw findings, each adversarially verified) **grounded in live production evidence** pulled read-only from the Montreal worker (commit `c8aec36`), plus independent operator investigation against venue truth. ~100 raw findings deduped into the distinct issues below, ranked by risk-adjusted impact. Verification caveat: ~half the verifier agents hit a session usage limit, so several genuine HIGH/CRITICAL items are "unverified" (not refuted) — flagged `[UNVER]`; the top ones are independently confirmed against live data.
 
@@ -37,7 +38,9 @@ Live baseline: 7d real attempts 211 failed / 17 filled (**but ~76 of the "failed
 ## TIER 0 — CRITICAL (correctness + profitability; fix first)
 
 ### C1. Completed, hedged, profitable arbs are quarantined as "mismatch" (~5× fill-rate & profit undercount) — CONFIRMED HIGH
+
 **Root cause (two compounding mechanisms):**
+
 1. **Status-whitelist fallthrough (operator-nailed).** Polymarket's user-stream emits a 3-stage trade lifecycle `matched → mined → confirmed` (7d events: 152 / 148 / 148). `isConfirmingStatus()` ([venue-confirmations.ts:121](src/execution/venue-confirmations.ts)) whitelists only `[confirmed, filled, matched, executed]` — **`mined` is missing**. `confirmationFromEvent` ([venue-confirmations.ts:159-165](src/execution/venue-confirmations.ts)) computes `confirmed = isConfirmingStatus(status) && !mismatch && !failed` and its final ternary **defaults any non-confirming, non-failed event to `"mismatch"` regardless of fill count**. So when the `mined` event resolves the pending confirmation (a race among the 3), even an exact 5/5 fill is quarantined.
 2. **Overfill band not scaling / not threaded into the stream-lock path.** The band `overfillToleranceShares = livePolymarketFirstMaxFillShares − liveOrderSize = 1` is a **fixed absolute share count computed from the STATIC size** ([index.ts:124](src/index.ts)); with dynamic sizing (W2, up to 30) a proportional FAK over-hedge on a 30-share order exceeds +1 and mis-quarantines. Multiple finders also flag the band not reaching the private-stream lock path.
 
@@ -46,6 +49,7 @@ Live baseline: 7d real attempts 211 failed / 17 filled (**but ~76 of the "failed
 **Fix (quick, high-leverage):** (a) add `mined` (+ any other benign Polymarket lifecycle statuses) to `isConfirmingStatus`; (b) change the fallback so a non-failed, in-band, `fillCount>0` event confirms instead of defaulting to "mismatch"; (c) make the overfill band scale with the dynamic order size; (d) thread the P0 band into the private-stream lock path (`lockOnUnsafeEvent`). Add unit tests for matched/mined/confirmed events at 5/5 and 5.16/5 and at size 30. Confidence: **HIGH**.
 
 ### C2. Dashboards & analytics drastically misreport fill rate and P&L — HIGH (corroborated, [UNVER])
+
 **Root cause:** consequences of C1 plus independent accounting bugs: headline **Fill Rate is structurally ~100%** (computed filled/filled) while true is 7.5%; mismatch-quarantined-but-hedged trades render as **outright FAILED with $0 P&L**; analytics realized P&L **excludes in-band-overfilled hedged fills**, is **gross of Kalshi fees**, and is **per-share (ignores W2 dynamic sizing)** so a 30-share trade counts as a 5-share; three inconsistent P&L surfaces (Ledger tile vs fills KPI vs analytics); `venueAccountValue` double-counts venue cash, corrupting the persisted equity curve; `equityPnlOverMs` conflates deposits/top-ups with realized P&L.
 **Impact:** operators are flying blind on true profitability and fill rate — every optimization decision is made on wrong numbers.
 **Fix:** count quarantined-but-hedged as fills; compute realized P&L net of fees × **actual paired fill size**; fix the fill-rate KPI to attempts-based; reconcile the three P&L surfaces to venue truth; stop double-counting cash in equity. Confidence: HIGH (multiple finders + consistent with C1's live data).
@@ -55,31 +59,37 @@ Live baseline: 7d real attempts 211 failed / 17 filled (**but ~76 of the "failed
 ## TIER 1 — HIGH (risk + stability)
 
 ### H1. Stale hot-path lock cache halts ALL trading + floods ERROR logs — CONFIRMED + 6 corroborations
+
 **Root cause:** `CachedLiveExecutionLockStore` ([live-hot-path.ts](src/execution/live-hot-path.ts)) has **no soft-stale/last-good window**: a transient DB slowdown >5s synthesizes a "critical" lock; the scanner treats it as a persistent circuit breaker and **blocks every scan, logging one ERROR per blocked scan with no throttle** (observed dozens/sec at 06:25:04 after restart). Failed refreshes are silently swallowed (breaker can stay engaged forever); cold-start can trip before first hydration.
 **Impact:** trading halts on transient DB lag/restart; the log flood obscures real errors and burns disk/IO.
 **Fix:** serve last-good within a bounded window (mirror `LiveExposureCache`), hydrate before the scanner starts, surface refresh failures, and `logThrottle` the block message. Confidence: HIGH.
 
 ### H2. Discovery resets `updatedAt`, defeating the 750ms freshness gate on a dead WS book — CONFIRMED HIGH
+
 **Root cause:** discovery stamps each contract `updatedAt = now` ([polymarket.ts:350](src/discovery/polymarket.ts), [kalshi.ts:136](src/discovery/kalshi.ts)) and `keepQuotes` does `Math.max(incoming, existing)` ([book-store.ts:143](src/books/book-store.ts)), so every 30s refresh bumps freshness **even with no new WS quote**. A silently-dead WS feed then passes the `LIVE_QUOTE_MAX_AGE_MS=750` gate for up to 750ms after each refresh. Related: `applyPolymarketSnapshot` advances whole-contract `updatedAt` on a one-sided `price_change`, marking the untouched opposite side fresh.
 **Impact:** can submit against stale top-of-book during a WS gap → adverse fills + naked-leg risk under volatility.
 **Fix:** advance `updatedAt` only on real WS snapshots; keep a separate `quoteUpdatedAt` vs `contractRefreshedAt` and gate freshness on the former. Confidence: HIGH.
 
 ### H3. Quarantine-cap query has no expiry filter → settled quarantines accumulate toward the $100 cap → eventual full halt — HIGH ([UNVER], operator-observed)
+
 **Root cause:** the unresolved-exposure cap counts ALL unresolved quarantines regardless of settlement/age; expired ones accumulate until the cap blocks all trading.
 **Impact:** slow-motion halt (I had to manually reconcile 37 settled tails earlier this session for exactly this). C1 reduces the inflow, but the unbounded accumulation remains.
 **Fix:** exclude expired/settled markets from the cap, or auto-reconcile on settlement (the reconciler already exists — run it on a schedule, or filter the cap query by `expiry_ms > now − settle_grace`). Confidence: HIGH.
 
 ### H4. No-fill attempts trip the 5s re-entry throttle despite ZERO exposure — HIGH ([UNVER], "largest non-quarantine leak")
+
 **Root cause:** a Polymarket no-fill (Kalshi never submitted, no exposure) still records a re-entry attempt → throttles that pair 5s ([scanner.ts](src/scanner/scanner.ts) reentry.recordAttempt on `action==="failed" && executionGroupId`).
 **Impact:** a benign no-fill blocks re-attempting a still-profitable window for 5s → direct fill-rate leak (69 no-fills/7d).
 **Fix:** only throttle on actual fills/real exposure; skip throttle for zero-fill, zero-exposure outcomes. Confidence: MEDIUM-HIGH.
 
 ### H5. One-sided (naked) window tail under RTT degradation — HIGH/MEDIUM (operator-corrected F2)
+
 **Root cause:** median hedge fires ~399ms (fine), but **p90 = 4.5s**; the hedge can fire off the slow REST/stream trigger up to ~2.5s+ under RTT degradation; `placeHedgeWithRetry` only retries on a **clean 0-fill**, so a slow/timeout Kalshi FOK strands the Polymarket leg; the hedge-quote staleness gate (2500ms) can hedge into a moved market.
 **Impact:** ~10% of two-sided trades carry a multi-second naked Polymarket window → real loss under volatility (the 3 naked-Kalshi + naked-poly cases). P1 (now enabled) fixes result-finalization, not the trigger-timing tail.
 **Fix:** fire on the earliest in-range evidence (mostly does); bound the trigger wait; retry hedge on slow/timeout (not just clean-0); give the hedge its own freshness bound. Confidence: MEDIUM-HIGH.
 
 ### H6. Order POST not cancelled on the 2500ms timeout — HIGH ([ref] but real)
+
 **Root cause:** the executor's 2500ms timeout fires but the AbortController signal is never threaded into `clob-client-v2.postOrder`, so the underlying order request keeps running.
 **Impact:** a "timed-out" Polymarket order can still land after the executor moved on → surprise fill / naked exposure / the late "mismatch" lock.
 **Fix:** thread the abort signal into the postOrder HTTP call (axios `signal`), or cancel/track the order id on timeout. Confidence: MEDIUM.
@@ -102,7 +112,9 @@ Live baseline: 7d real attempts 211 failed / 17 filled (**but ~76 of the "failed
 ---
 
 ## TIER 3 — LOW (hardening, observability, edge cases)
+
 Confirmed/again-corroborated lower-impact items, batch as cleanup:
+
 - Discovery: boundary-refresh coalescing can drop the window-open capture (intermittent, low); Kalshi discovery doesn't paginate (far-future windows can truncate near-term strikes); price-to-beat symbol match is case/format-fragile; scanner admits 10s-stale books into pairing while the gate is 750ms; sequential page-scrape backfill inflates discovery latency.
 - Gate: lead-lag + fill-quality **computed every trade but both gates disabled in prod** (adverse-selection signal collected then ignored — either enable or stop paying for it); `projectedEdgeAtLimit` can be null while the gate still passes; taker-cushion prod (1c) ≠ default (2c).
 - Fill-classification: a stream event resolves only one pending (late/second confirmations re-arm a pending that can never match); `eventMatchesExpected` matches Polymarket by assetId/tokenId only (cross-order attribution risk at re-entry); `applyVenueConfirmation` silently discards a "mismatch"-status confirmation that carries the true in-band fill.
@@ -114,6 +126,7 @@ Confirmed/again-corroborated lower-impact items, batch as cleanup:
 ---
 
 ## Recommended sequencing
+
 1. **C1** (the mined-status + band fix) — quickest, biggest profit/fill-rate/observability win; unblocks accurate metrics. Flag-gate, canary, re-pull the mismatch-quarantine count (target 76→~0).
 2. **C2** dashboards/P&L correctness — so every subsequent decision uses true numbers.
 3. **H1** lock-cache resilience + log throttle (stability), **H3** cap expiry filter (prevents slow halt), **H2** freshness-gate fix (risk).

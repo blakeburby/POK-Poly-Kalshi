@@ -22,18 +22,26 @@ const WHERE = `
   AND COALESCE(polymarket_fill_count, 0) = 0
 `;
 
-const REASON = "operator: polymarket confirmation timeout / unknown status with no recorded fill on either leg — no venue exposure (post-settlement)";
+const REASON =
+  "operator: polymarket confirmation timeout / unknown status with no recorded fill on either leg — no venue exposure (post-settlement)";
 
 async function main(): Promise<void> {
   const apply = process.argv.includes("--apply");
   const healthUrl = process.env.RESOLVE_HEALTH_URL ?? "http://127.0.0.1:8080/health";
   const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_PUBLIC_URL or DATABASE_URL is required");
-  const ssl = /proxy\.rlwy\.net|\.railway\.app|sslmode=require/.test(connectionString) ? { rejectUnauthorized: false } : undefined;
+  const ssl = /proxy\.rlwy\.net|\.railway\.app|sslmode=require/.test(connectionString)
+    ? { rejectUnauthorized: false }
+    : undefined;
   const pool = new pg.Pool({ connectionString, ssl });
 
   try {
-    const preview = await pool.query<{ id: string; kalshi_status: string | null; polymarket_status: string | null; expiry_ms: string | number }>(
+    const preview = await pool.query<{
+      id: string;
+      kalshi_status: string | null;
+      polymarket_status: string | null;
+      expiry_ms: string | number;
+    }>(
       `SELECT id::TEXT, kalshi_status, polymarket_status, expiry_ms FROM cross_venue_arb_signals WHERE ${WHERE} ORDER BY id ASC`,
     );
     const targets = preview.rows;
@@ -48,25 +56,55 @@ async function main(): Promise<void> {
         arbEnabled = `health_unreachable: ${error instanceof Error ? error.message : String(error)}`;
       }
       if (arbEnabled !== false) {
-        console.log(JSON.stringify({ mode: "apply-aborted", reason: "arb is not paused (health.arbEnabled !== false)", arbEnabled, targetCount: targets.length }, null, 2));
+        console.log(
+          JSON.stringify(
+            {
+              mode: "apply-aborted",
+              reason: "arb is not paused (health.arbEnabled !== false)",
+              arbEnabled,
+              targetCount: targets.length,
+            },
+            null,
+            2,
+          ),
+        );
         return;
       }
       const updated = await pool.query<{ id: string }>(
         `UPDATE cross_venue_arb_signals SET reconciliation_resolved_at = NOW(), reconciliation_resolution_reason = $1 WHERE ${WHERE} RETURNING id::TEXT`,
         [REASON],
       );
-      console.log(JSON.stringify({ mode: "applied", resolvedCount: updated.rowCount, resolvedIds: updated.rows.map((r) => r.id) }, null, 2));
+      console.log(
+        JSON.stringify(
+          { mode: "applied", resolvedCount: updated.rowCount, resolvedIds: updated.rows.map((r) => r.id) },
+          null,
+          2,
+        ),
+      );
       return;
     }
 
-    console.log(JSON.stringify({
-      mode: "dry-run",
-      targetCount: targets.length,
-      targets: targets.map((t) => ({ id: t.id, kalshi_status: t.kalshi_status, polymarket_status: t.polymarket_status })),
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          mode: "dry-run",
+          targetCount: targets.length,
+          targets: targets.map((t) => ({
+            id: t.id,
+            kalshi_status: t.kalshi_status,
+            polymarket_status: t.polymarket_status,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
   } finally {
     await pool.end();
   }
 }
 
-main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

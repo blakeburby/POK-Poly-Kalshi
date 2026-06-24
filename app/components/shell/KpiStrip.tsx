@@ -67,16 +67,30 @@ export function KpiStrip() {
   // Key metrics first so the most important are visible before any horizontal scroll on mobile.
   const kpis: Kpi[] = [
     { label: "Net PnL · Today", value: pnlValue(day), tone: pnlTone(day), emphasis: true, spark: pnlSpark },
-    { label: equityNote ? `Account Equity · ${equityNote}` : "Account Equity", value: fmtUsd(eq.total), tone: eq.missingVenues.length ? "stale" : "neutral", emphasis: true, spark: equitySpark },
+    {
+      label: equityNote ? `Account Equity · ${equityNote}` : "Account Equity",
+      value: fmtUsd(eq.total),
+      tone: eq.missingVenues.length ? "stale" : "neutral",
+      emphasis: true,
+      spark: equitySpark,
+    },
     { label: "Open Positions", value: fmtNum(openPositionCount(snap)), tone: "neutral" },
     { label: "Unhedged Exposure", value: fmtUsd(unhedged), tone: unhedged > 0 ? "down" : "up" },
     { label: "Fill Success", value: fmtPct(a?.daily.fillRate), tone: (a?.daily.fillRate ?? 0) >= 0.6 ? "up" : "stale" },
-    { label: "Hedge / Exact-Pair", value: fmtPct(exec?.executionQuality?.exactPairFillRate), tone: (exec?.executionQuality?.exactPairFillRate ?? 0) >= 0.6 ? "up" : "stale" },
+    {
+      label: "Hedge / Exact-Pair",
+      value: fmtPct(exec?.executionQuality?.exactPairFillRate),
+      tone: (exec?.executionQuality?.exactPairFillRate ?? 0) >= 0.6 ? "up" : "stale",
+    },
     { label: "Avg Edge Captured", value: fmtCents(exec?.executionQuality?.estimatedExecutableEdge), tone: "up" },
     { label: "Net PnL · 1H", value: pnlValue(hour), tone: pnlTone(hour) },
     { label: "Net PnL · 7D", value: pnlValue(week), tone: pnlTone(week) },
     { label: "Win Rate", value: fmtPct(a?.daily.winRate), tone: "neutral" },
-    { label: "Per-Trade Sharpe", value: a?.daily.sharpeRatio != null ? a.daily.sharpeRatio.toFixed(2) : "–", tone: "neutral" },
+    {
+      label: "Per-Trade Sharpe",
+      value: a?.daily.sharpeRatio != null ? a.daily.sharpeRatio.toFixed(2) : "–",
+      tone: "neutral",
+    },
   ];
 
   return (

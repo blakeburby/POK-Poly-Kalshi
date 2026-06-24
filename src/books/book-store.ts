@@ -9,7 +9,10 @@ export class BookStore {
   private readonly polyTokenToContract = new Map<string, { contractId: string; side: "yes" | "no" }>();
   private readonly history: RollingBookHistory;
 
-  constructor(requiredHistoryDepth = 5, private readonly freshnessFromWsOnly = false) {
+  constructor(
+    requiredHistoryDepth = 5,
+    private readonly freshnessFromWsOnly = false,
+  ) {
     this.history = new RollingBookHistory(requiredHistoryDepth);
   }
 
@@ -34,8 +37,10 @@ export class BookStore {
       const existing = this.polymarket.get(contract.contractId);
       const stored = { ...contract, ...this.keepQuotes(existing, contract) };
       this.polymarket.set(contract.contractId, stored);
-      if (contract.yesTokenId) this.polyTokenToContract.set(contract.yesTokenId, { contractId: contract.contractId, side: "yes" });
-      if (contract.noTokenId) this.polyTokenToContract.set(contract.noTokenId, { contractId: contract.contractId, side: "no" });
+      if (contract.yesTokenId)
+        this.polyTokenToContract.set(contract.yesTokenId, { contractId: contract.contractId, side: "yes" });
+      if (contract.noTokenId)
+        this.polyTokenToContract.set(contract.noTokenId, { contractId: contract.contractId, side: "no" });
     }
   }
 
@@ -120,7 +125,13 @@ export class BookStore {
         ? this.history.get("kalshi", snapshot.kalshi.contractId, snapshot.kalshi.direction, nowMs, lookbackMs)
         : [],
       polymarket: snapshot.polymarket
-        ? this.history.get("polymarket", snapshot.polymarket.contractId, snapshot.polymarket.direction, nowMs, lookbackMs)
+        ? this.history.get(
+            "polymarket",
+            snapshot.polymarket.contractId,
+            snapshot.polymarket.direction,
+            nowMs,
+            lookbackMs,
+          )
         : [],
     };
   }

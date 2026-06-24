@@ -13,6 +13,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  logEvent({ severity: "ERROR", category: "DB", message: "migration failed", context: { error: error instanceof Error ? error.message : String(error) } });
+  logEvent({
+    severity: "ERROR",
+    category: "DB",
+    message: "migration failed",
+    context: { error: error instanceof Error ? error.message : String(error) },
+  });
   process.exitCode = 1;
 });

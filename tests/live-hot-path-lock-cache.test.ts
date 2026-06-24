@@ -5,13 +5,28 @@ import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/
 import type { LiveExecutionLock } from "../src/types";
 
 function lock(reason: string): LiveExecutionLock {
-  return { id: 1, createdAt: new Date(0).toISOString(), reason, severity: "critical", sourceSignalId: null, executionGroupId: null, details: {}, clearedAt: null, clearReason: null };
+  return {
+    id: 1,
+    createdAt: new Date(0).toISOString(),
+    reason,
+    severity: "critical",
+    sourceSignalId: null,
+    executionGroupId: null,
+    details: {},
+    clearedAt: null,
+    clearReason: null,
+  };
 }
 
 class FakeDelegate implements LiveExecutionLockWriter {
   active: LiveExecutionLock | null = null;
-  async getActiveLock(): Promise<LiveExecutionLock | null> { return this.active; }
-  async engageLock(input: LiveExecutionLockInput): Promise<LiveExecutionLock> { this.active = lock(input.reason); return this.active; }
+  async getActiveLock(): Promise<LiveExecutionLock | null> {
+    return this.active;
+  }
+  async engageLock(input: LiveExecutionLockInput): Promise<LiveExecutionLock> {
+    this.active = lock(input.reason);
+    return this.active;
+  }
 }
 
 test("H1: within the grace window a stale cache serves last-good (no lock) instead of synthesizing a breaker", async () => {

@@ -56,7 +56,13 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
         id: "expander",
         header: () => null,
         cell: ({ row }) => (
-          <button className="text-fg-muted transition-colors hover:text-fg" onClick={(e) => { e.stopPropagation(); row.toggleExpanded(); }}>
+          <button
+            className="text-fg-muted transition-colors hover:text-fg"
+            onClick={(e) => {
+              e.stopPropagation();
+              row.toggleExpanded();
+            }}
+          >
             {row.getIsExpanded() ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
           </button>
         ),
@@ -72,8 +78,16 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
           </div>
         ),
       }),
-      col.accessor("market", { id: "market", header: "Market", cell: (c) => <span className="text-fg">{c.getValue()}</span> }),
-      col.accessor("premium", { id: "premium", header: "Premium", cell: (c) => <span className="text-fg-secondary">{fmtCents(c.getValue())}</span> }),
+      col.accessor("market", {
+        id: "market",
+        header: "Market",
+        cell: (c) => <span className="text-fg">{c.getValue()}</span>,
+      }),
+      col.accessor("premium", {
+        id: "premium",
+        header: "Premium",
+        cell: (c) => <span className="text-fg-secondary">{fmtCents(c.getValue())}</span>,
+      }),
       col.accessor("guaranteedProfit", {
         id: "edge",
         header: "Edge",
@@ -90,12 +104,16 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
       col.accessor((r) => r.kalshi.fillPrice, {
         id: "kalshi",
         header: "Kalshi",
-        cell: ({ row }) => <LegCell price={row.original.kalshi.fillPrice} status={row.original.kalshi.status} tone="kalshi" />,
+        cell: ({ row }) => (
+          <LegCell price={row.original.kalshi.fillPrice} status={row.original.kalshi.status} tone="kalshi" />
+        ),
       }),
       col.accessor((r) => r.polymarket.fillPrice, {
         id: "poly",
         header: "Polymkt",
-        cell: ({ row }) => <LegCell price={row.original.polymarket.fillPrice} status={row.original.polymarket.status} tone="poly" />,
+        cell: ({ row }) => (
+          <LegCell price={row.original.polymarket.fillPrice} status={row.original.polymarket.status} tone="poly" />
+        ),
       }),
       col.accessor((r) => (r.exact ? 2 : r.partial ? 1 : 0), {
         id: "hedge",
@@ -126,7 +144,11 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
       col.accessor((r) => r.durationMs ?? 0, {
         id: "duration",
         header: "Dur",
-        cell: ({ row }) => <span className="text-fg-secondary">{row.original.durationMs != null ? fmtDuration(row.original.durationMs) : "–"}</span>,
+        cell: ({ row }) => (
+          <span className="text-fg-secondary">
+            {row.original.durationMs != null ? fmtDuration(row.original.durationMs) : "–"}
+          </span>
+        ),
       }),
     ],
     [],
@@ -159,7 +181,12 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="Signals (recent)" value={String(data.length)} tone="neutral" sub="last 100" />
         <StatTile label="Filled / Exact" value={`${filledCount} / ${exactCount}`} tone="cyan" />
-        <StatTile label="Realized PnL" value={fmtUsd(realizedTotal, { sign: true })} tone={realizedTotal >= 0 ? "up" : "down"} sub="across window" />
+        <StatTile
+          label="Realized PnL"
+          value={fmtUsd(realizedTotal, { sign: true })}
+          tone={realizedTotal >= 0 ? "up" : "down"}
+          sub="across window"
+        />
         <StatTile label="Failure Types" value={String(failures.length)} tone="amber" sub={failures[0]?.[0] ?? "none"} />
       </div>
 
@@ -256,7 +283,10 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
       {failures.length ? (
         <GridPanel title="Failure / Skip Breakdown" dot="stale" span={12} bodyClassName="flex flex-wrap gap-2">
           {failures.map(([reason, count]) => (
-            <div key={reason} className="flex items-center gap-2 rounded-sm border border-line bg-surface-2/50 px-2.5 py-1.5">
+            <div
+              key={reason}
+              className="flex items-center gap-2 rounded-sm border border-line bg-surface-2/50 px-2.5 py-1.5"
+            >
               <Badge variant="down">{count}</Badge>
               <span className="font-mono text-[11px] text-fg-secondary">{reason}</span>
             </div>
@@ -269,7 +299,11 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
 
 function LegCell({ price, status, tone }: { price: number | null; status: string | null; tone: "kalshi" | "poly" }) {
   if (price == null) {
-    return <span className={cn("text-[10px]", status === "filled" ? "text-fg-secondary" : "text-fg-faint")}>{status ?? "–"}</span>;
+    return (
+      <span className={cn("text-[10px]", status === "filled" ? "text-fg-secondary" : "text-fg-faint")}>
+        {status ?? "–"}
+      </span>
+    );
   }
   return (
     <div className="flex items-center justify-end gap-1.5">
@@ -293,7 +327,11 @@ function ExpandedTrade({ row }: { row: LedgerRow }) {
         <KV k="Threshold" v={fmtCents(row.threshold)} />
         <KV k="Overlap Profit" v={fmtCents(s.overlapProfit)} />
         <KV k="Expected Edge" v={row.expectedEdge != null ? fmtCents(row.expectedEdge) : "–"} />
-        <KV k="Realized" v={row.realizedDollars != null ? fmtUsd(row.realizedDollars, { sign: true }) : "–"} tone={(row.realizedDollars ?? 0) >= 0 ? "up" : "down"} />
+        <KV
+          k="Realized"
+          v={row.realizedDollars != null ? fmtUsd(row.realizedDollars, { sign: true }) : "–"}
+          tone={(row.realizedDollars ?? 0) >= 0 ? "up" : "down"}
+        />
         <KV k="Strategy" v={s.executionStrategy ?? "–"} />
       </DetailBlock>
 
@@ -319,11 +357,19 @@ function ExpandedTrade({ row }: { row: LedgerRow }) {
       <DetailBlock title="Quality / Timing" tone="info">
         <KV k="Paired-Fill Prob" v={fq ? fmtPct(fq.pairedFillProbability) : "–"} />
         <KV k="Expected Slippage" v={fq ? fmtCents(fq.expectedSlippage) : "–"} />
-        <KV k="Realized Slippage" v={row.slippage != null ? fmtCents(row.slippage, true) : "–"} tone={(row.slippage ?? 0) > 0.01 ? "down" : undefined} />
+        <KV
+          k="Realized Slippage"
+          v={row.slippage != null ? fmtCents(row.slippage, true) : "–"}
+          tone={(row.slippage ?? 0) > 0.01 ? "down" : undefined}
+        />
         <KV k="Mismatch Cost" v={fq ? fmtCents(fq.expectedMismatchCost) : "–"} />
         <KV k="Lead Venue" v={ll?.leaderVenue ?? "–"} />
         <KV k="Lag Est." v={fmtMs(ll?.lagMsEstimate)} />
-        <KV k="Adverse Sel." v={ll ? fmtPct(ll.adverseSelectionScore) : "–"} tone={(ll?.adverseSelectionScore ?? 0) > 0.7 ? "down" : undefined} />
+        <KV
+          k="Adverse Sel."
+          v={ll ? fmtPct(ll.adverseSelectionScore) : "–"}
+          tone={(ll?.adverseSelectionScore ?? 0) > 0.7 ? "down" : undefined}
+        />
         <KV k="Total" v={fmtMs(tm?.totalMs)} />
         {row.quarantined ? <KV k="Quarantine" v={s.riskQuarantineReason ?? "unhedged"} tone="down" /> : null}
       </DetailBlock>
@@ -331,7 +377,15 @@ function ExpandedTrade({ row }: { row: LedgerRow }) {
   );
 }
 
-function DetailBlock({ title, tone, children }: { title: string; tone: StatusTone | "kalshi" | "poly"; children: React.ReactNode }) {
+function DetailBlock({
+  title,
+  tone,
+  children,
+}: {
+  title: string;
+  tone: StatusTone | "kalshi" | "poly";
+  children: React.ReactNode;
+}) {
   const accent = tone === "kalshi" ? "text-kalshi" : tone === "poly" ? "text-poly" : "text-cyan";
   return (
     <div className="rounded-md border border-line bg-surface/60 p-2.5">
@@ -345,7 +399,14 @@ function KV({ k, v, tone }: { k: string; v: React.ReactNode; tone?: "up" | "down
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[10px] text-fg-muted">{k}</span>
-      <span className={cn("max-w-[60%] truncate font-mono text-[10.5px] tabular-nums", tone === "up" ? "text-up" : tone === "down" ? "text-down" : "text-fg-secondary")}>{v}</span>
+      <span
+        className={cn(
+          "max-w-[60%] truncate font-mono text-[10.5px] tabular-nums",
+          tone === "up" ? "text-up" : tone === "down" ? "text-down" : "text-fg-secondary",
+        )}
+      >
+        {v}
+      </span>
     </div>
   );
 }

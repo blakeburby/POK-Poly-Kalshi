@@ -58,7 +58,8 @@ function parseArgs(argv: string[]): Args {
     healthUrl: "http://127.0.0.1:8080/health",
     snapshotUrl: "http://127.0.0.1:8080/dashboard/snapshot",
     minExpiredMs: 5 * 60_000,
-    reason: "operator resolved live execution lock after supported API/dashboard evidence showed entries paused, no open orders, no future unresolved exposure, and no positive-value venue positions",
+    reason:
+      "operator resolved live execution lock after supported API/dashboard evidence showed entries paused, no open orders, no future unresolved exposure, and no positive-value venue positions",
   };
 
   for (const arg of argv) {
@@ -97,7 +98,7 @@ function numberFrom(value: unknown): number | null {
 }
 
 function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 
 function asArray(value: unknown): JsonRecord[] {
@@ -109,18 +110,17 @@ function stringSet(values: Array<string | null | undefined>): Set<string> {
 }
 
 function positionValue(position: JsonRecord): number {
-  return numberFrom(position.value)
-    ?? numberFrom(position.positionValueDollars)
-    ?? numberFrom(position.currentValue)
-    ?? numberFrom(position.marketValue)
-    ?? 0;
+  return (
+    numberFrom(position.value) ??
+    numberFrom(position.positionValueDollars) ??
+    numberFrom(position.currentValue) ??
+    numberFrom(position.marketValue) ??
+    0
+  );
 }
 
 function positionShares(position: JsonRecord): number {
-  return numberFrom(position.shares)
-    ?? numberFrom(position.quantity)
-    ?? numberFrom(position.count)
-    ?? 0;
+  return numberFrom(position.shares) ?? numberFrom(position.quantity) ?? numberFrom(position.count) ?? 0;
 }
 
 function positionMatchesTarget(position: JsonRecord, targetIds: Set<string>): boolean {
@@ -137,16 +137,20 @@ function positionMatchesTarget(position: JsonRecord, targetIds: Set<string>): bo
     position.asset_id,
     position.tokenId,
     position.token_id,
-  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
   return candidates.some((value) => targetIds.has(value));
 }
 
 function targetPositivePositions(venue: JsonRecord, targetIds: Set<string>): JsonRecord[] | null {
   if (!Array.isArray(venue.positions)) return null;
-  return asArray(venue.positions).filter((position) => (
-    positionMatchesTarget(position, targetIds)
-    && (positionValue(position) > 0.01 || (positionValue(position) === 0 && positionShares(position) > 0 && position.value == null))
-  ));
+  return asArray(venue.positions).filter(
+    (position) =>
+      positionMatchesTarget(position, targetIds) &&
+      (positionValue(position) > 0.01 ||
+        (positionValue(position) === 0 && positionShares(position) > 0 && position.value == null)),
+  );
 }
 
 function dateIso(value: Date | string | null | undefined): string | null {
@@ -198,7 +202,7 @@ async function fetchJson(url: string, token?: string): Promise<JsonRecord> {
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`${new URL(url).pathname} failed ${response.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) as JsonRecord : {};
+  return text ? (JSON.parse(text) as JsonRecord) : {};
 }
 
 async function writeReport(outDir: string, evidence: JsonRecord): Promise<string> {
@@ -233,7 +237,8 @@ function guardFailures(input: {
   if (input.health.arbEnabled !== false) failures.push("health.arbEnabled is not false");
   if (snapshotHealth.arbEnabled !== false) failures.push("snapshot.health.arbEnabled is not false");
   if (input.activeLocks.length === 0) failures.push("no active live_execution_locks found");
-  if (input.relatedSignals.length === 0) failures.push("no unresolved signal rows found for active lock execution groups");
+  if (input.relatedSignals.length === 0)
+    failures.push("no unresolved signal rows found for active lock execution groups");
   if (Number(input.futureExposureSignals) !== 0) failures.push("future unresolved exposure signals exist");
   if (execution.partialFillLocked !== false) failures.push("execution.partialFillLocked is not false");
 
@@ -250,7 +255,8 @@ function guardFailures(input: {
   }
   if (polymarketTargetPositions == null) {
     if (Number(polymarket.positiveValuePositions ?? 0) !== 0) failures.push("Polymarket has positive-value positions");
-    if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0) failures.push("Polymarket has positions with unknown value");
+    if (Number(polymarket.unknownValuePositionCount ?? 0) !== 0)
+      failures.push("Polymarket has positions with unknown value");
     if (Number(polymarket.positionValueDollars ?? 0) > 0.01) failures.push("Polymarket position value is positive");
   } else if (polymarketTargetPositions.length > 0) {
     failures.push("Polymarket has positive-value positions for active lock markets");
@@ -265,13 +271,16 @@ function guardFailures(input: {
   return failures;
 }
 
-async function applyResolution(client: pg.Client, input: {
-  activeLocks: ActiveLockRow[];
-  relatedSignals: SignalRow[];
-  resolvedAt: string;
-  reason: string;
-  evidence: JsonRecord;
-}): Promise<JsonRecord> {
+async function applyResolution(
+  client: pg.Client,
+  input: {
+    activeLocks: ActiveLockRow[];
+    relatedSignals: SignalRow[];
+    resolvedAt: string;
+    reason: string;
+    evidence: JsonRecord;
+  },
+): Promise<JsonRecord> {
   const lockIds = input.activeLocks.map((row) => row.id);
   const signalIds = input.relatedSignals.map((row) => row.id);
   const resolution = JSON.stringify({
@@ -285,7 +294,8 @@ async function applyResolution(client: pg.Client, input: {
 
   await client.query("BEGIN");
   try {
-    const signals = await client.query(`
+    const signals = await client.query(
+      `
       UPDATE cross_venue_arb_signals
       SET reconciliation_resolved_at = $2::TIMESTAMPTZ,
           reconciliation_resolution_reason = $3,
@@ -293,15 +303,20 @@ async function applyResolution(client: pg.Client, input: {
       WHERE id = ANY($1::BIGINT[])
         AND reconciliation_resolved_at IS NULL
       RETURNING id
-    `, [signalIds, input.resolvedAt, input.reason, resolution]);
-    const locks = await client.query(`
+    `,
+      [signalIds, input.resolvedAt, input.reason, resolution],
+    );
+    const locks = await client.query(
+      `
       UPDATE live_execution_locks
       SET cleared_at = $2::TIMESTAMPTZ,
           clear_reason = $3
       WHERE id = ANY($1::BIGINT[])
         AND cleared_at IS NULL
       RETURNING id
-    `, [lockIds, input.resolvedAt, input.reason]);
+    `,
+      [lockIds, input.resolvedAt, input.reason],
+    );
     await client.query("COMMIT");
     return {
       resolvedSignalIds: signals.rows.map((row) => String(row.id)),
@@ -338,9 +353,11 @@ async function main(): Promise<void> {
     const executionGroupIds = activeLocks.rows
       .map((row) => row.execution_group_id)
       .filter((value): value is string => Boolean(value));
-    const relatedSignals = executionGroupIds.length === 0
-      ? { rows: [] as SignalRow[] }
-      : await client.query<SignalRow>(`
+    const relatedSignals =
+      executionGroupIds.length === 0
+        ? { rows: [] as SignalRow[] }
+        : await client.query<SignalRow>(
+            `
         SELECT id, created_at, expiry_ms, action, execution_strategy, failure_reason,
                execution_group_id, kalshi_contract_id, polymarket_contract_id,
                kalshi_status, polymarket_status,
@@ -349,8 +366,11 @@ async function main(): Promise<void> {
         WHERE execution_group_id = ANY($1::TEXT[])
           AND reconciliation_resolved_at IS NULL
         ORDER BY created_at DESC
-      `, [executionGroupIds]);
-    const futureExposure = await client.query(`
+      `,
+            [executionGroupIds],
+          );
+    const futureExposure = await client.query(
+      `
       SELECT COUNT(*)::INT AS count
       FROM cross_venue_arb_signals
       WHERE execution_group_id IS NOT NULL
@@ -364,7 +384,9 @@ async function main(): Promise<void> {
           OR kalshi_status IN ($3, $4)
           OR polymarket_status IN ($3, $4)
         )
-    `, [now, "filled", "unknown", "unexpected_fill_count"]);
+    `,
+      [now, "filled", "unknown", "unexpected_fill_count"],
+    );
 
     const evidence: JsonRecord = {
       generatedAt: new Date(now).toISOString(),

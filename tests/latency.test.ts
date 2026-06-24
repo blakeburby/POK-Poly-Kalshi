@@ -26,11 +26,14 @@ test("latency stats report latest, p50, p95, empty states, and current book ages
   assert.deepEqual(summarizeLatencySamples([1, 4, 2, 10], 99), { latestMs: 99, p50Ms: 2, p95Ms: 10, sampleCount: 4 });
 
   const now = 10_000;
-  const ages = summarizeBookAges([
-    contract({ venue: "kalshi", contractId: "a", strike: 100, updatedAt: now - 100 }),
-    contract({ venue: "kalshi", contractId: "b", strike: 101, updatedAt: now - 500 }),
-    contract({ venue: "kalshi", contractId: "c", strike: 102, updatedAt: now - 1_000 }),
-  ], now);
+  const ages = summarizeBookAges(
+    [
+      contract({ venue: "kalshi", contractId: "a", strike: 100, updatedAt: now - 100 }),
+      contract({ venue: "kalshi", contractId: "b", strike: 101, updatedAt: now - 500 }),
+      contract({ venue: "kalshi", contractId: "c", strike: 102, updatedAt: now - 1_000 }),
+    ],
+    now,
+  );
   assert.equal(ages.latestMs, 100);
   assert.equal(ages.p50Ms, 500);
   assert.equal(ages.p95Ms, 1000);
@@ -43,16 +46,19 @@ test("coalesced scan scheduler runs one immediate follow-up with the newest upda
   });
   const calls: number[] = [];
   let coalesced = 0;
-  const scheduler = new CoalescedScanScheduler({
-    async scan(now = 0) {
-      calls.push(now);
-      if (calls.length === 1) await firstScan;
+  const scheduler = new CoalescedScanScheduler(
+    {
+      async scan(now = 0) {
+        calls.push(now);
+        if (calls.length === 1) await firstScan;
+      },
     },
-  }, {
-    recordCoalescedScan: () => {
-      coalesced += 1;
+    {
+      recordCoalescedScan: () => {
+        coalesced += 1;
+      },
     },
-  });
+  );
 
   scheduler.requestScan(100);
   scheduler.requestScan(101);
@@ -181,8 +187,12 @@ test("scanner processes live candidate executions through a bounded queue withou
   assert.equal(duplicateSkips, 0);
   await waitFor(() => executed === 2);
   assert.equal(maxActive, 2);
-  const insertedPairs = order.filter((entry) => entry.startsWith("insert:")).map((entry) => entry.replace("insert:", ""));
-  const executedPairs = order.filter((entry) => entry.startsWith("execute:")).map((entry) => entry.replace("execute:", ""));
+  const insertedPairs = order
+    .filter((entry) => entry.startsWith("insert:"))
+    .map((entry) => entry.replace("insert:", ""));
+  const executedPairs = order
+    .filter((entry) => entry.startsWith("execute:"))
+    .map((entry) => entry.replace("execute:", ""));
   assert.deepEqual(executedPairs.sort(), insertedPairs.sort());
   for (const pairKey of executedPairs) {
     assert.ok(order.indexOf(`insert:${pairKey}`) < order.indexOf(`execute:${pairKey}`));
@@ -195,7 +205,14 @@ test("live hot-path scanner submits before live signal persistence", async () =>
   const books = new BookStore();
   const now = 1_800_000_000_000;
   books.setPolymarketContracts([
-    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesTokenId: "yes-token", updatedAt: now }),
+    contract({
+      venue: "polymarket",
+      contractId: "poly",
+      strike: 1500,
+      yesAsk: 0.4,
+      yesTokenId: "yes-token",
+      updatedAt: now,
+    }),
   ]);
   books.setKalshiContracts([
     contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
@@ -252,7 +269,14 @@ test("live hot-path scanner suppresses automatic lock writes when disabled", asy
   const books = new BookStore();
   const now = 1_800_000_000_000;
   books.setPolymarketContracts([
-    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesTokenId: "yes-token", updatedAt: now }),
+    contract({
+      venue: "polymarket",
+      contractId: "poly",
+      strike: 1500,
+      yesAsk: 0.4,
+      yesTokenId: "yes-token",
+      updatedAt: now,
+    }),
   ]);
   books.setKalshiContracts([
     contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
@@ -568,14 +592,19 @@ test("latency monitor snapshots phase timing and queue state", () => {
   monitor.recordCoalescedScan();
   monitor.recordDuplicateCandidateSkip();
 
-  const snapshot = monitor.snapshot({
-    kalshi: [contract({ venue: "kalshi", contractId: "kalshi", strike: 100, updatedAt: 900 })],
-    polymarket: [contract({ venue: "polymarket", contractId: "poly", strike: 99, updatedAt: 800 })],
-  }, 1000, {
-    dashboardStreamIntervalMs: 250,
-    dashboardSignalRefreshMs: 1000,
-    dashboardAnalyticsRefreshMs: 5000,
-  }, 5);
+  const snapshot = monitor.snapshot(
+    {
+      kalshi: [contract({ venue: "kalshi", contractId: "kalshi", strike: 100, updatedAt: 900 })],
+      polymarket: [contract({ venue: "polymarket", contractId: "poly", strike: 99, updatedAt: 800 })],
+    },
+    1000,
+    {
+      dashboardStreamIntervalMs: 250,
+      dashboardSignalRefreshMs: 1000,
+      dashboardAnalyticsRefreshMs: 5000,
+    },
+    5,
+  );
 
   assert.equal(snapshot.books.kalshi.latestMs, 100);
   assert.equal(snapshot.books.polymarket.latestMs, 200);

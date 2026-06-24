@@ -40,10 +40,24 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
     <ViewScroll>
       <Grid>
         <GridPanel title="Kalshi · Order Book" dot="info" accent="var(--color-kalshi)" span={4} bodyClassName="p-0">
-          <BookTable contracts={snap.books.kalshi} venue="kalshi" now={now} staleMs={staleMs} sel={sel} onSel={setStrike} />
+          <BookTable
+            contracts={snap.books.kalshi}
+            venue="kalshi"
+            now={now}
+            staleMs={staleMs}
+            sel={sel}
+            onSel={setStrike}
+          />
         </GridPanel>
         <GridPanel title="Polymarket · Order Book" dot="info" accent="var(--color-poly)" span={4} bodyClassName="p-0">
-          <BookTable contracts={snap.books.polymarket} venue="polymarket" now={now} staleMs={staleMs} sel={sel} onSel={setStrike} />
+          <BookTable
+            contracts={snap.books.polymarket}
+            venue="polymarket"
+            now={now}
+            staleMs={staleMs}
+            sel={sel}
+            onSel={setStrike}
+          />
         </GridPanel>
         <GridPanel
           title={`Cross-Venue Depth · ${sel != null ? `BTC ${sel.toLocaleString()}` : "—"} (YES ask)`}
@@ -51,7 +65,11 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
           span={4}
           bodyClassName="h-[360px] p-2"
         >
-          {kDepth.length || pDepth.length ? <EChart option={depthOption(kDepth, pDepth)} /> : <Empty>Select a strike with depth</Empty>}
+          {kDepth.length || pDepth.length ? (
+            <EChart option={depthOption(kDepth, pDepth)} />
+          ) : (
+            <Empty>Select a strike with depth</Empty>
+          )}
         </GridPanel>
       </Grid>
 
@@ -68,7 +86,13 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
         </GridPanel>
         <GridPanel title="Book Freshness" dot="info" span={6} bodyClassName="flex flex-col justify-center gap-3">
           <FreshSummary contracts={snap.books.kalshi} label="Kalshi" now={now} staleMs={staleMs} accent="kalshi" />
-          <FreshSummary contracts={snap.books.polymarket} label="Polymarket" now={now} staleMs={staleMs} accent="poly" />
+          <FreshSummary
+            contracts={snap.books.polymarket}
+            label="Polymarket"
+            now={now}
+            staleMs={staleMs}
+            accent="poly"
+          />
           <div className="flex items-center justify-between border-t border-line/60 pt-2.5 font-mono text-[10px] uppercase tracking-wide text-fg-muted">
             <span>Stale threshold</span>
             <span className="tabular-nums text-fg-secondary">{fmtMs(staleMs)}</span>
@@ -174,10 +198,19 @@ function CompareTable({ snap, now, staleMs }: { snap: DashboardSnapshot; now: nu
                 <td className="px-3 py-1.5 text-fg">{s.toLocaleString()}</td>
                 <td className="px-3 py-1.5 text-right text-kalshi">{fmtCents(k?.yesAsk ?? null)}</td>
                 <td className="px-3 py-1.5 text-right text-poly">{fmtCents(p?.yesAsk ?? null)}</td>
-                <td className={cn("px-3 py-1.5 text-right", (dy ?? 0) > 0 ? "text-down" : (dy ?? 0) < 0 ? "text-up" : "text-fg-muted")}>{dy != null ? fmtCents(dy, true) : "–"}</td>
+                <td
+                  className={cn(
+                    "px-3 py-1.5 text-right",
+                    (dy ?? 0) > 0 ? "text-down" : (dy ?? 0) < 0 ? "text-up" : "text-fg-muted",
+                  )}
+                >
+                  {dy != null ? fmtCents(dy, true) : "–"}
+                </td>
                 <td className="px-3 py-1.5 text-right text-kalshi">{fmtCents(k?.noAsk ?? null)}</td>
                 <td className="px-3 py-1.5 text-right text-poly">{fmtCents(p?.noAsk ?? null)}</td>
-                <td className={cn("px-3 py-1.5 text-right", (synth ?? 1) < 1 ? "text-up" : "text-fg-secondary")}>{synth != null ? fmtCents(synth) : "–"}</td>
+                <td className={cn("px-3 py-1.5 text-right", (synth ?? 1) < 1 ? "text-up" : "text-fg-secondary")}>
+                  {synth != null ? fmtCents(synth) : "–"}
+                </td>
               </tr>
             );
           })}
@@ -210,26 +243,46 @@ function FreshSummary({
           <span className={cn("size-1.5 rounded-full", accent === "kalshi" ? "bg-kalshi" : "bg-poly")} />
           <span className="text-[11px] text-fg-secondary">{label}</span>
         </div>
-        <span className="font-mono text-[11px] tabular-nums text-fg">{live}/{total} fresh</span>
+        <span className="font-mono text-[11px] tabular-nums text-fg">
+          {live}/{total} fresh
+        </span>
       </div>
       <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
-        <div className={cn("h-full rounded-full", pct >= 0.8 ? "bg-up" : pct >= 0.5 ? "bg-amber" : "bg-down")} style={{ width: `${pct * 100}%` }} />
+        <div
+          className={cn("h-full rounded-full", pct >= 0.8 ? "bg-up" : pct >= 0.5 ? "bg-amber" : "bg-down")}
+          style={{ width: `${pct * 100}%` }}
+        />
       </div>
     </div>
   );
 }
 
-function LatRow({ label, v }: { label: string; v?: { p50Ms: number | null; p95Ms: number | null; latestMs: number | null } }) {
+function LatRow({
+  label,
+  v,
+}: {
+  label: string;
+  v?: { p50Ms: number | null; p95Ms: number | null; latestMs: number | null };
+}) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-[11px] text-fg-secondary">{label}</span>
       <span className="font-mono text-[11px] tabular-nums text-fg">
-        {fmtMs(v?.latestMs ?? null)} <span className="text-fg-faint">p50 {fmtMs(v?.p50Ms ?? null)} · p95 {fmtMs(v?.p95Ms ?? null)}</span>
+        {fmtMs(v?.latestMs ?? null)}{" "}
+        <span className="text-fg-faint">
+          p50 {fmtMs(v?.p50Ms ?? null)} · p95 {fmtMs(v?.p95Ms ?? null)}
+        </span>
       </span>
     </div>
   );
 }
 
 function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
-  return <th className={cn("px-2.5 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}>{children}</th>;
+  return (
+    <th
+      className={cn("px-2.5 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}
+    >
+      {children}
+    </th>
+  );
 }

@@ -102,7 +102,9 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value != null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function hashIdentifier(value: string | null | undefined): string | null {
@@ -145,14 +147,15 @@ function makeBaseReport(input: {
       arbEnabled: typeof health.arbEnabled === "boolean" ? health.arbEnabled : null,
       liveOrderPlacementMode: stringOrNull(health.liveOrderPlacementMode),
       kalshiHedgeOrderMode: stringOrNull(health.kalshiHedgeOrderMode),
-      kalshiUiQuickOrderCapValidated: typeof health.kalshiUiQuickOrderCapValidated === "boolean" ? health.kalshiUiQuickOrderCapValidated : null,
+      kalshiUiQuickOrderCapValidated:
+        typeof health.kalshiUiQuickOrderCapValidated === "boolean" ? health.kalshiUiQuickOrderCapValidated : null,
     },
     request: {
       ticker: input.selection?.leg.contractId ?? null,
       side: input.selection?.leg.direction ?? null,
       count: input.count,
       maxPriceCents: input.maxPriceCents,
-      priceDollars: ((input.body?.price_dollars as string | undefined) ?? (input.maxPriceCents / 100).toFixed(4)),
+      priceDollars: (input.body?.price_dollars as string | undefined) ?? (input.maxPriceCents / 100).toFixed(4),
       maxCostCents: finiteOrNull(input.body?.max_cost_cents),
       orderType: String(input.body?.order_type ?? "market"),
       timeInForce: String(input.body?.time_in_force ?? "immediate_or_cancel"),
@@ -221,17 +224,21 @@ async function fetchHealthAndSnapshot(
 
   const snapshotResponse = await fetchFn(snapshotUrl, { headers: dashboardAuthHeaders(env) });
   const snapshotText = await snapshotResponse.text();
-  if (!snapshotResponse.ok) throw new Error(`/dashboard/snapshot failed ${snapshotResponse.status}: ${sanitizeError(snapshotText)}`);
+  if (!snapshotResponse.ok)
+    throw new Error(`/dashboard/snapshot failed ${snapshotResponse.status}: ${sanitizeError(snapshotText)}`);
   return { health, snapshot: JSON.parse(snapshotText) as DashboardSnapshot };
 }
 
 export function stagedModeFailures(health: Record<string, unknown>, snapshot?: DashboardSnapshot): string[] {
   const snapshotHealth = (snapshot?.health ?? {}) as Record<string, unknown>;
-  const liveOrderPlacementMode = stringOrNull(health.liveOrderPlacementMode) ?? stringOrNull(snapshotHealth.liveOrderPlacementMode);
-  const kalshiHedgeOrderMode = stringOrNull(health.kalshiHedgeOrderMode) ?? stringOrNull(snapshotHealth.kalshiHedgeOrderMode);
-  const capValidated = typeof health.kalshiUiQuickOrderCapValidated === "boolean"
-    ? health.kalshiUiQuickOrderCapValidated
-    : snapshotHealth.kalshiUiQuickOrderCapValidated;
+  const liveOrderPlacementMode =
+    stringOrNull(health.liveOrderPlacementMode) ?? stringOrNull(snapshotHealth.liveOrderPlacementMode);
+  const kalshiHedgeOrderMode =
+    stringOrNull(health.kalshiHedgeOrderMode) ?? stringOrNull(snapshotHealth.kalshiHedgeOrderMode);
+  const capValidated =
+    typeof health.kalshiUiQuickOrderCapValidated === "boolean"
+      ? health.kalshiUiQuickOrderCapValidated
+      : snapshotHealth.kalshiUiQuickOrderCapValidated;
   const failures = [
     ["health.ok=true", health.ok === true],
     ["health.arbEnabled=false", health.arbEnabled === false],
@@ -268,22 +275,33 @@ export function selectKalshiUiCapTestLeg(input: {
   const explicitTicker = env.KALSHI_UI_CAP_TEST_TICKER?.trim();
   const explicitSide = envSide(env);
   const books = Array.isArray(input.snapshot.books?.kalshi) ? input.snapshot.books.kalshi : [];
-  const kalshiBooks = books.filter((book) => book.venue === "kalshi" && book.asset === "BTC" && book.contractId.startsWith(seriesTicker));
+  const kalshiBooks = books.filter(
+    (book) => book.venue === "kalshi" && book.asset === "BTC" && book.contractId.startsWith(seriesTicker),
+  );
   const contract = (() => {
     if (explicitTicker) {
       const match = kalshiBooks.find((book) => book.contractId === explicitTicker);
-      if (!match) throw new Error(`KALSHI_UI_CAP_TEST_TICKER was not found in protected Kalshi books: ${explicitTicker}`);
+      if (!match)
+        throw new Error(`KALSHI_UI_CAP_TEST_TICKER was not found in protected Kalshi books: ${explicitTicker}`);
       return match;
     }
     const future = kalshiBooks
       .filter((book) => Number.isFinite(book.expiryMs) && book.expiryMs > now)
       .sort((left, right) => left.expiryMs - right.expiryMs || left.contractId.localeCompare(right.contractId));
-    const candidates = future.length > 0 ? future : kalshiBooks.sort((left, right) => left.expiryMs - right.expiryMs || left.contractId.localeCompare(right.contractId));
-    if (candidates.length === 0) throw new Error(`No ${seriesTicker} Kalshi books are available in the protected dashboard snapshot`);
+    const candidates =
+      future.length > 0
+        ? future
+        : kalshiBooks.sort(
+            (left, right) => left.expiryMs - right.expiryMs || left.contractId.localeCompare(right.contractId),
+          );
+    if (candidates.length === 0)
+      throw new Error(`No ${seriesTicker} Kalshi books are available in the protected dashboard snapshot`);
     const nearestExpiry = candidates[0]?.expiryMs;
     const nearest = candidates.filter((book) => book.expiryMs === nearestExpiry);
     if (nearest.length !== 1) {
-      throw new Error(`Kalshi cap-test market selection is ambiguous (${nearest.map((book) => book.contractId).join(", ")}); set KALSHI_UI_CAP_TEST_TICKER`);
+      throw new Error(
+        `Kalshi cap-test market selection is ambiguous (${nearest.map((book) => book.contractId).join(", ")}); set KALSHI_UI_CAP_TEST_TICKER`,
+      );
     }
     return nearest[0]!;
   })();
@@ -292,7 +310,9 @@ export function selectKalshiUiCapTestLeg(input: {
     if (explicitSide) return explicitSide;
     const candidates = sideCandidates(contract, capPrice);
     if (candidates.length === 0) {
-      throw new Error(`No ${contract.contractId} side has displayed ask above $${capPrice.toFixed(2)}; set KALSHI_UI_CAP_TEST_SIDE explicitly if you still want to test`);
+      throw new Error(
+        `No ${contract.contractId} side has displayed ask above $${capPrice.toFixed(2)}; set KALSHI_UI_CAP_TEST_SIDE explicitly if you still want to test`,
+      );
     }
     return candidates[0]!.side;
   })();
@@ -317,10 +337,14 @@ async function resolveUiMarketId(
   fetchFn: typeof fetch,
 ): Promise<UiMarketIdResolution> {
   const eventTicker = eventTickerFromKalshiMarketTicker(ticker);
-  const url = kalshiUiUrl(config, `/v1/users/${encodeURIComponent(session.userId)}/event_positions/${encodeURIComponent(eventTicker)}`);
+  const url = kalshiUiUrl(
+    config,
+    `/v1/users/${encodeURIComponent(session.userId)}/event_positions/${encodeURIComponent(eventTicker)}`,
+  );
   const response = await fetchFn(url, { method: "GET", headers: kalshiUiHeaders(session) });
   const { text, json } = await readJsonResponse(response);
-  if (!response.ok) throw new Error(`Kalshi UI event-position lookup failed ${response.status}: ${sanitizeError(text)}`);
+  if (!response.ok)
+    throw new Error(`Kalshi UI event-position lookup failed ${response.status}: ${sanitizeError(text)}`);
   for (const row of kalshiUiMarketPositionRecords(json)) {
     const marketTicker = stringOrNull(row.market_ticker ?? row.marketTicker ?? row.ticker);
     const marketId = stringOrNull(row.market_id ?? row.marketId ?? row.id);
@@ -341,7 +365,9 @@ function responseBodyKeys(payload: Record<string, unknown>): string[] {
 function rejectionProvesCap(responseStatus: number, text: string): boolean {
   if (responseStatus === 401 || responseStatus === 403) return false;
   if (responseStatus < 400 || responseStatus >= 500) return false;
-  return /(insufficient|liquidity|no\s+orders?\s+found|no\s+match|would\s+exceed|max[_ -]?cost|cost\s+cap|price\s+too\s+low|not\s+fillable|immediate.*cancel|cannot\s+be\s+filled)/i.test(text);
+  return /(insufficient|liquidity|no\s+orders?\s+found|no\s+match|would\s+exceed|max[_ -]?cost|cost\s+cap|price\s+too\s+low|not\s+fillable|immediate.*cancel|cannot\s+be\s+filled)/i.test(
+    text,
+  );
 }
 
 export function classifyCapValidationRecord(input: {
@@ -378,9 +404,12 @@ export function classifyCapValidationRecord(input: {
     if (fillPrice != null && fillPrice <= input.maxPriceDollars + 0.000001) {
       return passReport(next, `filled_${fillCount}_at_or_below_cap`);
     }
-    return failReport(next, fillPrice == null
-      ? "filled_but_average_fill_price_was_unparseable"
-      : `fill_price_${fillPrice.toFixed(4)}_exceeded_cap_${input.maxPriceDollars.toFixed(4)}`);
+    return failReport(
+      next,
+      fillPrice == null
+        ? "filled_but_average_fill_price_was_unparseable"
+        : `fill_price_${fillPrice.toFixed(4)}_exceeded_cap_${input.maxPriceDollars.toFixed(4)}`,
+    );
   }
   const noFillStatus = /cancel|reject|fail|unfill|kill|expired|closed|immediate/i.test(status);
   if (fillCount === 0 && (noFillStatus || remainingCount === 0)) {
@@ -395,14 +424,20 @@ async function fetchUiOrder(
   orderId: string,
   fetchFn: typeof fetch,
 ): Promise<Record<string, unknown>> {
-  const url = kalshiUiUrl(config, `/v1/users/${encodeURIComponent(session.userId)}/orders/${encodeURIComponent(orderId)}`);
+  const url = kalshiUiUrl(
+    config,
+    `/v1/users/${encodeURIComponent(session.userId)}/orders/${encodeURIComponent(orderId)}`,
+  );
   const response = await fetchFn(url, { method: "GET", headers: kalshiUiHeaders(session) });
   const { text, json } = await readJsonResponse(response);
   if (!response.ok) throw new Error(`Kalshi UI order query failed ${response.status}: ${sanitizeError(text)}`);
   return kalshiUiOrderRecord(json);
 }
 
-export function writeValidationReport(report: KalshiUiCapValidationReport, env: NodeJS.ProcessEnv): KalshiUiCapValidationReport {
+export function writeValidationReport(
+  report: KalshiUiCapValidationReport,
+  env: NodeJS.ProcessEnv,
+): KalshiUiCapValidationReport {
   const reportDir = env.KALSHI_UI_CAP_TEST_REPORT_DIR?.trim() || DEFAULT_REPORT_DIR;
   fs.mkdirSync(reportDir, { recursive: true, mode: 0o700 });
   const timestamp = report.generatedAt.replace(/[:.]/g, "-");
@@ -410,36 +445,43 @@ export function writeValidationReport(report: KalshiUiCapValidationReport, env: 
   const markdownPath = path.join(reportDir, `kalshi-ui-cap-validation-${timestamp}.md`);
   const withPaths = { ...report, reportPaths: { json: jsonPath, markdown: markdownPath } };
   fs.writeFileSync(jsonPath, `${JSON.stringify(withPaths, null, 2)}\n`, { mode: 0o600 });
-  fs.writeFileSync(markdownPath, [
-    "# Kalshi UI Quick Order Cap Validation",
-    "",
-    `- Result: ${report.passed ? "PASS" : "FAIL"}`,
-    `- Reason: ${report.reason}`,
-    `- Ticker: ${report.request.ticker ?? "unknown"}`,
-    `- Side: ${report.request.side ?? "unknown"}`,
-    `- Count: ${report.request.count}`,
-    `- Cap: $${(report.request.maxPriceCents / 100).toFixed(4)}`,
-    `- Displayed ask: ${report.market.displayedAsk ?? "unknown"}`,
-    `- HTTP status: ${report.response.httpStatus ?? "unknown"}`,
-    `- Order ID present: ${report.response.orderIdPresent}`,
-    `- Order ID hash: ${report.response.orderIdHash ?? "none"}`,
-    `- Fill count: ${report.response.fillCount ?? "unknown"}`,
-    `- Fill price: ${report.response.fillPrice ?? "unknown"}`,
-    "",
-    "No cookies, CSRF tokens, account IDs, wallet IDs, or private headers are included.",
-    "",
-  ].join("\n"), { mode: 0o600 });
+  fs.writeFileSync(
+    markdownPath,
+    [
+      "# Kalshi UI Quick Order Cap Validation",
+      "",
+      `- Result: ${report.passed ? "PASS" : "FAIL"}`,
+      `- Reason: ${report.reason}`,
+      `- Ticker: ${report.request.ticker ?? "unknown"}`,
+      `- Side: ${report.request.side ?? "unknown"}`,
+      `- Count: ${report.request.count}`,
+      `- Cap: $${(report.request.maxPriceCents / 100).toFixed(4)}`,
+      `- Displayed ask: ${report.market.displayedAsk ?? "unknown"}`,
+      `- HTTP status: ${report.response.httpStatus ?? "unknown"}`,
+      `- Order ID present: ${report.response.orderIdPresent}`,
+      `- Order ID hash: ${report.response.orderIdHash ?? "none"}`,
+      `- Fill count: ${report.response.fillCount ?? "unknown"}`,
+      `- Fill price: ${report.response.fillPrice ?? "unknown"}`,
+      "",
+      "No cookies, CSRF tokens, account IDs, wallet IDs, or private headers are included.",
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
   return withPaths;
 }
 
-export async function runKalshiUiCapValidation(options: KalshiUiCapValidationOptions = {}): Promise<KalshiUiCapValidationReport> {
+export async function runKalshiUiCapValidation(
+  options: KalshiUiCapValidationOptions = {},
+): Promise<KalshiUiCapValidationReport> {
   const env = options.env ?? process.env;
   const fetchFn = options.fetchFn ?? fetch;
   const now = options.now ?? Date.now();
   const count = envNumber(env, "KALSHI_UI_CAP_TEST_COUNT", 1);
   const maxPriceCents = envNumber(env, "KALSHI_UI_CAP_TEST_MAX_PRICE_CENTS", 1);
   if (count !== 1) throw new Error("KALSHI_UI_CAP_TEST_COUNT must be exactly 1 for the tiny live cap test");
-  if (maxPriceCents !== 1) throw new Error("KALSHI_UI_CAP_TEST_MAX_PRICE_CENTS must be exactly 1 for the first cap validation");
+  if (maxPriceCents !== 1)
+    throw new Error("KALSHI_UI_CAP_TEST_MAX_PRICE_CENTS must be exactly 1 for the first cap validation");
   const maxPriceDollars = maxPriceCents / 100;
   const config = loadConfig(env);
   let health: Record<string, unknown> | null = null;
@@ -505,14 +547,17 @@ export async function runKalshiUiCapValidation(options: KalshiUiCapValidationOpt
     const initialRecord = kalshiUiOrderRecord(json);
     const orderId = stringOrNull(initialRecord.order_id ?? initialRecord.orderId);
     if (!orderId) {
-      return failReport({
-        ...report,
-        response: {
-          ...report.response,
-          httpStatus: response.status,
-          responseBodyKeys: responseBodyKeys(json),
+      return failReport(
+        {
+          ...report,
+          response: {
+            ...report.response,
+            httpStatus: response.status,
+            responseBodyKeys: responseBodyKeys(json),
+          },
         },
-      }, "ui_quick_order_response_missing_order_id");
+        "ui_quick_order_response_missing_order_id",
+      );
     }
     const finalRecord = await fetchUiOrder(config, session, orderId, fetchFn);
     return classifyCapValidationRecord({
@@ -532,21 +577,27 @@ export async function runKalshiUiCapValidation(options: KalshiUiCapValidationOpt
 async function main(): Promise<void> {
   const report = await runKalshiUiCapValidation({ writeReport: true });
   const withPaths = writeValidationReport(report, process.env);
-  console.log(JSON.stringify({
-    passed: withPaths.passed,
-    reason: withPaths.reason,
-    ticker: withPaths.request.ticker,
-    side: withPaths.request.side,
-    count: withPaths.request.count,
-    maxPriceCents: withPaths.request.maxPriceCents,
-    displayedAsk: withPaths.market.displayedAsk,
-    httpStatus: withPaths.response.httpStatus,
-    orderIdPresent: withPaths.response.orderIdPresent,
-    orderIdHash: withPaths.response.orderIdHash,
-    fillCount: withPaths.response.fillCount,
-    fillPrice: withPaths.response.fillPrice,
-    reportPaths: withPaths.reportPaths,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        passed: withPaths.passed,
+        reason: withPaths.reason,
+        ticker: withPaths.request.ticker,
+        side: withPaths.request.side,
+        count: withPaths.request.count,
+        maxPriceCents: withPaths.request.maxPriceCents,
+        displayedAsk: withPaths.market.displayedAsk,
+        httpStatus: withPaths.response.httpStatus,
+        orderIdPresent: withPaths.response.orderIdPresent,
+        orderIdHash: withPaths.response.orderIdHash,
+        fillCount: withPaths.response.fillCount,
+        fillPrice: withPaths.response.fillPrice,
+        reportPaths: withPaths.reportPaths,
+      },
+      null,
+      2,
+    ),
+  );
   if (!withPaths.passed) process.exitCode = 1;
 }
 

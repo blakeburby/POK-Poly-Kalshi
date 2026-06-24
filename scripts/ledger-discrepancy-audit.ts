@@ -94,24 +94,30 @@ async function main(): Promise<void> {
       LIMIT 30
     `);
 
-    console.log(JSON.stringify({
-      lookbackHours: LOOKBACK_HOURS,
-      summary: summary.rows[0],
-      hiddenRealTrades_fillsButNoGroupId: {
-        count: hiddenFills.rowCount,
-        note: "If >0, the ledger is hiding real trades. These have fills/exposure but no execution_group_id.",
-        rows: hiddenFills.rows,
-      },
-      failedNoGroupId: {
-        count: failedNoGroup.rowCount,
-        note: "Failed rows with no group id; check whether any correspond to an order that actually placed on the venue.",
-        rows: failedNoGroup.rows,
-      },
-      ledgerVisible_recent: {
-        count: ledgerRows.rowCount,
-        rows: ledgerRows.rows,
-      },
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          lookbackHours: LOOKBACK_HOURS,
+          summary: summary.rows[0],
+          hiddenRealTrades_fillsButNoGroupId: {
+            count: hiddenFills.rowCount,
+            note: "If >0, the ledger is hiding real trades. These have fills/exposure but no execution_group_id.",
+            rows: hiddenFills.rows,
+          },
+          failedNoGroupId: {
+            count: failedNoGroup.rowCount,
+            note: "Failed rows with no group id; check whether any correspond to an order that actually placed on the venue.",
+            rows: failedNoGroup.rows,
+          },
+          ledgerVisible_recent: {
+            count: ledgerRows.rowCount,
+            rows: ledgerRows.rows,
+          },
+        },
+        null,
+        2,
+      ),
+    );
   } finally {
     await pool.end();
   }

@@ -25,7 +25,10 @@ const valueAxis = (fmt?: (v: number) => string, opts?: { compact?: boolean }): A
     show: !opts?.compact,
   }) as unknown as AxisOpt;
 
-export function equityAreaOption(points: Pt[], opts?: { positive?: boolean; fmt?: (v: number) => string }): EChartsOption {
+export function equityAreaOption(
+  points: Pt[],
+  opts?: { positive?: boolean; fmt?: (v: number) => string },
+): EChartsOption {
   const color = (opts?.positive ?? true) ? CHART.up : CHART.down;
   return {
     animation: false,
@@ -86,10 +89,7 @@ export function pnlBarsDrawdownOption(
       axisTick: { show: false },
       axisLabel: { ...axisLabel, hideOverlap: true },
     },
-    yAxis: [
-      valueAxis(fmt),
-      { ...valueAxis(fmt), position: "right", splitLine: { show: false } },
-    ],
+    yAxis: [valueAxis(fmt), { ...valueAxis(fmt), position: "right", splitLine: { show: false } }],
     series: [
       {
         name: "Net PnL",
@@ -145,9 +145,7 @@ export function drawdownAreaOption(points: Pt[], fmt: (v: number) => string): EC
   } satisfies EChartsOption;
 }
 
-export function histogramOption(
-  bars: Array<{ label: string; count: number; color?: string }>,
-): EChartsOption {
+export function histogramOption(bars: Array<{ label: string; count: number; color?: string }>): EChartsOption {
   return {
     animation: false,
     grid: { ...baseGrid, bottom: 4 },
@@ -163,7 +161,10 @@ export function histogramOption(
     series: [
       {
         type: "bar",
-        data: bars.map((b) => ({ value: b.count, itemStyle: { color: b.color ?? CHART.cyan, opacity: 0.85, borderRadius: [2, 2, 0, 0] } })),
+        data: bars.map((b) => ({
+          value: b.count,
+          itemStyle: { color: b.color ?? CHART.cyan, opacity: 0.85, borderRadius: [2, 2, 0, 0] },
+        })),
         barWidth: "62%",
       },
     ],
@@ -189,13 +190,29 @@ export function scatterOption(opts: {
       formatter: (p: any) =>
         `${p.data.name ?? ""}<br/>${opts.xName}: ${opts.xFmt ? opts.xFmt(p.data.value[0]) : p.data.value[0]}<br/>${opts.yName}: ${opts.yFmt ? opts.yFmt(p.data.value[1]) : p.data.value[1]}`,
     },
-    xAxis: { ...valueAxis(opts.xFmt), name: opts.xName, nameTextStyle: { ...axisLabel }, nameGap: 18, nameLocation: "middle" },
-    yAxis: { ...valueAxis(opts.yFmt), name: opts.yName, nameTextStyle: { ...axisLabel }, nameGap: 28, nameLocation: "middle" },
+    xAxis: {
+      ...valueAxis(opts.xFmt),
+      name: opts.xName,
+      nameTextStyle: { ...axisLabel },
+      nameGap: 18,
+      nameLocation: "middle",
+    },
+    yAxis: {
+      ...valueAxis(opts.yFmt),
+      name: opts.yName,
+      nameTextStyle: { ...axisLabel },
+      nameGap: 28,
+      nameLocation: "middle",
+    },
     series: [
       {
         type: "scatter",
         symbolSize: (val: any, p: any) => p.data.size ?? 7,
-        data: opts.points.map((pt) => ({ value: [pt.x, pt.y], name: pt.name, itemStyle: { color: pt.color, opacity: 0.78 } })),
+        data: opts.points.map((pt) => ({
+          value: [pt.x, pt.y],
+          name: pt.name,
+          itemStyle: { color: pt.color, opacity: 0.78 },
+        })),
         markLine:
           opts.markLineX != null || opts.markLineY != null || opts.refLine
             ? {
@@ -213,10 +230,7 @@ export function scatterOption(opts: {
   } satisfies EChartsOption;
 }
 
-export function depthOption(
-  kalshi: Array<[number, number]>,
-  poly: Array<[number, number]>,
-): EChartsOption {
+export function depthOption(kalshi: Array<[number, number]>, poly: Array<[number, number]>): EChartsOption {
   return {
     animation: false,
     grid: baseGrid,
@@ -254,9 +268,7 @@ export function depthOption(
   } satisfies EChartsOption;
 }
 
-export function calibrationOption(
-  bins: Array<{ predicted: number; realized: number; count: number }>,
-): EChartsOption {
+export function calibrationOption(bins: Array<{ predicted: number; realized: number; count: number }>): EChartsOption {
   return {
     animation: false,
     grid: { ...baseGrid, top: 20 },
@@ -284,7 +296,7 @@ export function calibrationOption(
       {
         type: "scatter",
         data: bins.map((b) => ({ value: [b.predicted, b.realized], count: b.count })),
-        symbolSize: (val: any, p: any) => 8 + Math.min(22, (p.data.count ?? 0)),
+        symbolSize: (val: any, p: any) => 8 + Math.min(22, p.data.count ?? 0),
         itemStyle: { color: CHART.cyan, opacity: 0.8, borderColor: CHART.base, borderWidth: 1 },
       },
     ],

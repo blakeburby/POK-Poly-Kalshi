@@ -46,7 +46,11 @@ export function kalshiSignaturePath(pathWithQuery: string): string {
   return pathWithQuery.split("?")[0] ?? pathWithQuery;
 }
 
-export function getKalshiHeaders(method: string, pathWithQuery: string, timestamp = Date.now().toString()): Record<string, string> {
+export function getKalshiHeaders(
+  method: string,
+  pathWithQuery: string,
+  timestamp = Date.now().toString(),
+): Record<string, string> {
   return {
     "KALSHI-ACCESS-KEY": getKeyId(),
     "KALSHI-ACCESS-TIMESTAMP": timestamp,

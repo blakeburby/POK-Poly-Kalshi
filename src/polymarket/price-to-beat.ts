@@ -81,11 +81,18 @@ export function parsePolymarketChainlinkTicks(raw: unknown, receivedAtMs = Date.
     ticks.push({ symbol, value, timestampMs, receivedAtMs });
   });
   return ticks
-    .filter((tick, index, all) => all.findIndex((other) => other.timestampMs === tick.timestampMs && other.value === tick.value) === index)
+    .filter(
+      (tick, index, all) =>
+        all.findIndex((other) => other.timestampMs === tick.timestampMs && other.value === tick.value) === index,
+    )
     .sort((left, right) => left.timestampMs - right.timestampMs);
 }
 
-function shouldCaptureTick(window: PolymarketPriceBeatWindow, tick: PolymarketChainlinkTick, toleranceMs: number): boolean {
+function shouldCaptureTick(
+  window: PolymarketPriceBeatWindow,
+  tick: PolymarketChainlinkTick,
+  toleranceMs: number,
+): boolean {
   return tick.timestampMs >= window.eventStartMs && tick.timestampMs - window.eventStartMs <= toleranceMs;
 }
 
@@ -149,9 +156,14 @@ export class PolymarketPriceToBeatService {
   }
 
   private ensureSocket(): void {
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING))
+      return;
 
-    logEvent({ category: "POLYMARKET_PRICE", message: "price-to-beat websocket connecting", context: { symbol: this.options.symbol } });
+    logEvent({
+      category: "POLYMARKET_PRICE",
+      message: "price-to-beat websocket connecting",
+      context: { symbol: this.options.symbol },
+    });
     const socket = this.wsFactory(this.options.url);
     this.socket = socket;
     this.intentionalClose = false;
@@ -160,7 +172,11 @@ export class PolymarketPriceToBeatService {
       this.reconnectAttempts = 0;
       socket.send(JSON.stringify(buildPolymarketPriceSubscriptionMessage(this.options.symbol)));
       this.startHeartbeat(socket);
-      logEvent({ category: "POLYMARKET_PRICE", message: "price-to-beat websocket subscribed", context: { symbol: this.options.symbol } });
+      logEvent({
+        category: "POLYMARKET_PRICE",
+        message: "price-to-beat websocket subscribed",
+        context: { symbol: this.options.symbol },
+      });
     });
 
     socket.on("message", (raw: WebSocket.RawData) => {
@@ -181,7 +197,12 @@ export class PolymarketPriceToBeatService {
     });
 
     socket.on("error", (error: Error) => {
-      logEvent({ severity: "ERROR", category: "POLYMARKET_PRICE", message: "price-to-beat websocket error", context: { error: error.message } });
+      logEvent({
+        severity: "ERROR",
+        category: "POLYMARKET_PRICE",
+        message: "price-to-beat websocket error",
+        context: { error: error.message },
+      });
     });
 
     socket.on("close", (_code: number, reason: Buffer) => {

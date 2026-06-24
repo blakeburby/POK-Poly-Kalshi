@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { BookStore } from "../src/books/book-store";
 import { buildDashboardAnalytics } from "../src/analytics/performance";
-import { dashboardRequestAuthorized, createDashboardSnapshot, formatSseEvent, type DashboardRuntime, type DashboardSnapshotCache } from "../src/dashboard/worker-api";
+import {
+  dashboardRequestAuthorized,
+  createDashboardSnapshot,
+  formatSseEvent,
+  type DashboardRuntime,
+  type DashboardSnapshotCache,
+} from "../src/dashboard/worker-api";
 import type { AppConfig } from "../src/config";
 import { LatencyMonitor } from "../src/latency/metrics";
 import type { DashboardSignal, LiveExecutionReadiness } from "../src/types";
@@ -198,43 +204,67 @@ function tradingActivity(now: number): TradingActivitySnapshot {
       platform: "kalshi",
       connectionStatus: "live",
       lastUpdatedAt: now - 100,
-      portfolio: { platform: "kalshi", portfolioValue: 25, cashValue: 20, dayChangeDollars: 1, dayChangePercent: 0.04, lastUpdatedAt: now - 100 },
+      portfolio: {
+        platform: "kalshi",
+        portfolioValue: 25,
+        cashValue: 20,
+        dayChangeDollars: 1,
+        dayChangePercent: 0.04,
+        lastUpdatedAt: now - 100,
+      },
       positions: [],
       openOrders: [],
-      history: [{
-        id: "kalshi-activity",
-        activity: "Buy",
-        marketName: "KXBTC15M",
-        outcome: "NO",
-        shares: 5,
-        value: -2.5,
-        timeMs: now - 100,
-        venueOrderId: "kalshi-order",
-        clientOrderId: "kalshi-client",
-        status: "filled",
-      }],
-      sparkline: [{ timestamp: now - 86_400_000, value: 24 }, { timestamp: now, value: 25 }],
+      history: [
+        {
+          id: "kalshi-activity",
+          activity: "Buy",
+          marketName: "KXBTC15M",
+          outcome: "NO",
+          shares: 5,
+          value: -2.5,
+          timeMs: now - 100,
+          venueOrderId: "kalshi-order",
+          clientOrderId: "kalshi-client",
+          status: "filled",
+        },
+      ],
+      sparkline: [
+        { timestamp: now - 86_400_000, value: 24 },
+        { timestamp: now, value: 25 },
+      ],
     },
     polymarket: {
       platform: "polymarket",
       connectionStatus: "live",
       lastUpdatedAt: now - 100,
-      portfolio: { platform: "polymarket", portfolioValue: 35, cashValue: 30, dayChangeDollars: -1, dayChangePercent: -0.03, lastUpdatedAt: now - 100 },
+      portfolio: {
+        platform: "polymarket",
+        portfolioValue: 35,
+        cashValue: 30,
+        dayChangeDollars: -1,
+        dayChangePercent: -0.03,
+        lastUpdatedAt: now - 100,
+      },
       positions: [],
       openOrders: [],
-      history: [{
-        id: "poly-activity",
-        activity: "Buy",
-        marketName: "btc-updown-15m",
-        outcome: "YES",
-        shares: 5,
-        value: -2,
-        timeMs: now - 100,
-        venueOrderId: "poly-order",
-        clientOrderId: "poly-client",
-        status: "matched",
-      }],
-      sparkline: [{ timestamp: now - 86_400_000, value: 36 }, { timestamp: now, value: 35 }],
+      history: [
+        {
+          id: "poly-activity",
+          activity: "Buy",
+          marketName: "btc-updown-15m",
+          outcome: "YES",
+          shares: 5,
+          value: -2,
+          timeMs: now - 100,
+          venueOrderId: "poly-order",
+          clientOrderId: "poly-client",
+          status: "matched",
+        },
+      ],
+      sparkline: [
+        { timestamp: now - 86_400_000, value: 36 },
+        { timestamp: now, value: 35 },
+      ],
     },
   };
 }
@@ -249,20 +279,32 @@ test("dashboard bearer token accepts valid requests and rejects missing or inval
 test("dashboard snapshot includes books, scanner status, recent signals, live candidates, and logs", async () => {
   const books = new BookStore();
   const now = 1_800_000_000_000;
-  books.setPolymarketContracts([contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, updatedAt: now })]);
-  books.setKalshiContracts([contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now })]);
+  books.setPolymarketContracts([
+    contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, updatedAt: now }),
+  ]);
+  books.setKalshiContracts([
+    contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, updatedAt: now }),
+  ]);
   const runtime: DashboardRuntime = {
     config: config(),
     books,
     signals: {
       listRecentSignals: async () => [signal()],
-      listFilledSignalsSince: async () => [signal({
-        updatedAt: new Date(now - 1_000).toISOString(),
-        kalshiFillPrice: 0.51,
-        polymarketFillPrice: 0.41,
-      })],
+      listFilledSignalsSince: async () => [
+        signal({
+          updatedAt: new Date(now - 1_000).toISOString(),
+          kalshiFillPrice: 0.51,
+          polymarketFillPrice: 0.41,
+        }),
+      ],
     },
-    getScannerStatus: () => ({ scanning: false, lastScanAt: now - 500, lastCandidateCount: 1, queuedExecutions: 0, activeExecutions: 0 }),
+    getScannerStatus: () => ({
+      scanning: false,
+      lastScanAt: now - 500,
+      lastCandidateCount: 1,
+      queuedExecutions: 0,
+      activeExecutions: 0,
+    }),
     getDiscoveryState: () => ({ lastDiscoveryAt: now - 1000, lastDiscoveryError: null }),
     getPolymarketDiagnostics: () => ({
       marketsFound: 1,
@@ -276,39 +318,40 @@ test("dashboard snapshot includes books, scanner status, recent signals, live ca
       skippedReasons: [],
       markets: [],
     }),
-    getExecutionReadiness: () => ({
-      mode: "live",
-      liveTrading: true,
-      protectedOnly: true,
-      orderSize: 1,
-      orderType: "FOK",
-      takerPriceCushionCents: 2,
-      minExpiryMs: 30_000,
-      maxTradesPerWindow: 3,
-      collateralBufferDollars: 0.25,
-      partialFillLocked: false,
-      circuitBreakerLocked: false,
-      circuitBreakerReason: null,
-      circuitBreaker: null,
-      kalshi: { configured: true, ready: true, reason: null, balance: null, allowance: null, lastCheckedAt: now },
-      polymarket: {
-        configured: true,
-        ready: false,
-        reason: "Polymarket collateral balance 0 is below required canary collateral 1",
-        balance: 0,
-        allowance: 10,
-        lastCheckedAt: now,
-        signerAddress: "0x1111...2222",
-        funderAddress: "0x3333...4444",
-        signatureType: 2,
-        collateralBalanceRaw: 0,
-        collateralBalanceNormalized: 0,
-        collateralAllowanceRaw: 10_000_000,
-        collateralAllowanceNormalized: 10,
-        requiredCollateral: 1,
-      },
-      lastAttempt: null,
-    } as unknown as LiveExecutionReadiness),
+    getExecutionReadiness: () =>
+      ({
+        mode: "live",
+        liveTrading: true,
+        protectedOnly: true,
+        orderSize: 1,
+        orderType: "FOK",
+        takerPriceCushionCents: 2,
+        minExpiryMs: 30_000,
+        maxTradesPerWindow: 3,
+        collateralBufferDollars: 0.25,
+        partialFillLocked: false,
+        circuitBreakerLocked: false,
+        circuitBreakerReason: null,
+        circuitBreaker: null,
+        kalshi: { configured: true, ready: true, reason: null, balance: null, allowance: null, lastCheckedAt: now },
+        polymarket: {
+          configured: true,
+          ready: false,
+          reason: "Polymarket collateral balance 0 is below required canary collateral 1",
+          balance: 0,
+          allowance: 10,
+          lastCheckedAt: now,
+          signerAddress: "0x1111...2222",
+          funderAddress: "0x3333...4444",
+          signatureType: 2,
+          collateralBalanceRaw: 0,
+          collateralBalanceNormalized: 0,
+          collateralAllowanceRaw: 10_000_000,
+          collateralAllowanceNormalized: 10,
+          requiredCollateral: 1,
+        },
+        lastAttempt: null,
+      }) as unknown as LiveExecutionReadiness,
     getLogs: () => [{ timestamp: new Date(now).toISOString(), severity: "INFO", category: "SCANNER", message: "ok" }],
     getLatencySnapshot: (latencyNow, snapshotBuildMs) => {
       const latency = new LatencyMonitor();
@@ -372,7 +415,13 @@ test("dashboard snapshot cache avoids querying heavy DB-backed sections on every
         return [signal()];
       },
     },
-    getScannerStatus: () => ({ scanning: false, lastScanAt: now, lastCandidateCount: 0, queuedExecutions: 0, activeExecutions: 0 }),
+    getScannerStatus: () => ({
+      scanning: false,
+      lastScanAt: now,
+      lastCandidateCount: 0,
+      queuedExecutions: 0,
+      activeExecutions: 0,
+    }),
     getDiscoveryState: () => ({ lastDiscoveryAt: now, lastDiscoveryError: null }),
     getLogs: () => [],
   };
@@ -418,7 +467,13 @@ test("dashboard snapshot uses hot analytics provider without polling filled sign
         stale: false,
       });
     },
-    getScannerStatus: () => ({ scanning: false, lastScanAt: now, lastCandidateCount: 0, queuedExecutions: 0, activeExecutions: 0 }),
+    getScannerStatus: () => ({
+      scanning: false,
+      lastScanAt: now,
+      lastCandidateCount: 0,
+      queuedExecutions: 0,
+      activeExecutions: 0,
+    }),
     getDiscoveryState: () => ({ lastDiscoveryAt: now, lastDiscoveryError: null }),
     getLogs: () => [],
   };
@@ -431,7 +486,7 @@ test("dashboard snapshot uses hot analytics provider without polling filled sign
 
 test("dashboard stream events are valid SSE snapshot frames", () => {
   const frame = formatSseEvent("snapshot", { ok: true });
-  assert.equal(frame, "event: snapshot\ndata: {\"ok\":true}\n\n");
+  assert.equal(frame, 'event: snapshot\ndata: {"ok":true}\n\n');
 });
 
 test("dashboard stream can emit sanitized trading activity frames", () => {

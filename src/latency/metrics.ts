@@ -16,7 +16,7 @@ function roundMs(value: number | null): number | null {
 export function summarizeLatencySamples(samples: number[], latestOverride?: number | null): DashboardLatencyStats {
   const numeric = samples.filter((sample) => Number.isFinite(sample) && sample >= 0);
   const sorted = [...numeric].sort((left, right) => left - right);
-  const latest = latestOverride === undefined ? numeric.at(-1) ?? null : latestOverride;
+  const latest = latestOverride === undefined ? (numeric.at(-1) ?? null) : latestOverride;
   return {
     latestMs: roundMs(latest ?? null),
     p50Ms: roundMs(percentile(sorted, 50)),

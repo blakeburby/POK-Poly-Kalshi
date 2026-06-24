@@ -13,13 +13,13 @@ The strategy only considers protected structures:
 
 ## Documentation map
 
-| Doc | Read it for |
-| --- | --- |
+| Doc                                            | Read it for                                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------- |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the system is shaped: data flow, module map, invariants, glossary. **Start here.** |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | Local setup, the `npm run verify` gate, house conventions, deploy discipline. |
-| [docs/ENVIRONMENT.md](./docs/ENVIRONMENT.md) | Every environment variable, its type, default, and purpose. |
-| [RUNBOOK.md](./RUNBOOK.md) | Production operations: pause/resume, deploy flow, lock resolution, incident response. |
-| [docs/](./docs) | Design notes and dated audits (incl. the 2026-06-23 architecture audit). |
+| [CONTRIBUTING.md](./CONTRIBUTING.md)           | Local setup, the `npm run verify` gate, house conventions, deploy discipline.          |
+| [docs/ENVIRONMENT.md](./docs/ENVIRONMENT.md)   | Every environment variable, its type, default, and purpose.                            |
+| [RUNBOOK.md](./RUNBOOK.md)                     | Production operations: pause/resume, deploy flow, lock resolution, incident response.  |
+| [docs/](./docs)                                | Design notes and dated audits (incl. the 2026-06-23 architecture audit).               |
 
 ## Quick start
 

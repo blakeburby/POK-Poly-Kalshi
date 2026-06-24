@@ -66,7 +66,9 @@ function boolFrom(value: unknown): boolean | null {
 }
 
 function percentile(values: Array<number | null>, quantile: number): number | null {
-  const sorted = values.filter((value): value is number => value != null && Number.isFinite(value)).sort((a, b) => a - b);
+  const sorted = values
+    .filter((value): value is number => value != null && Number.isFinite(value))
+    .sort((a, b) => a - b);
   if (sorted.length === 0) return null;
   const index = (sorted.length - 1) * quantile;
   const lower = Math.floor(index);
@@ -116,7 +118,11 @@ function failureClass(row: {
   firstLegStatus: string | null;
 }): string {
   if (row.completedTwoSided) return "completed_two_sided";
-  if (row.firstLegFilled && !row.hedgeFilled && row.failureReason?.toLowerCase().includes("outside configured hedge range")) {
+  if (
+    row.firstLegFilled &&
+    !row.hedgeFilled &&
+    row.failureReason?.toLowerCase().includes("outside configured hedge range")
+  ) {
     return "first_leg_filled_hedge_skipped_range";
   }
   if (row.firstLegFilled && !row.hedgeFilled) return "first_leg_filled_no_hedge";
@@ -125,9 +131,9 @@ function failureClass(row: {
   }
   if (!row.firstLegFilled) return "first_leg_no_fill";
   if (
-    row.hedgeFilled
-    && row.polymarketFillCount > 0
-    && Math.abs(row.kalshiFillCount - row.polymarketFillCount) > 0.000001
+    row.hedgeFilled &&
+    row.polymarketFillCount > 0 &&
+    Math.abs(row.kalshiFillCount - row.polymarketFillCount) > 0.000001
   ) {
     return "two_sided_mismatched_size";
   }
@@ -138,11 +144,12 @@ function classify(row: AttemptRow): ClassifiedAttempt {
   const timings = row.execution_timings ?? {};
   const kalshiFillCount = numberFrom(row.kalshi_fill_count) ?? 0;
   const polymarketFillCount = numberFrom(row.polymarket_fill_count) ?? 0;
-  const completedTwoSided = row.action === "filled"
-    && row.partial_fill !== true
-    && kalshiFillCount > 0
-    && polymarketFillCount > 0
-    && Math.abs(kalshiFillCount - polymarketFillCount) <= 0.000001;
+  const completedTwoSided =
+    row.action === "filled" &&
+    row.partial_fill !== true &&
+    kalshiFillCount > 0 &&
+    polymarketFillCount > 0 &&
+    Math.abs(kalshiFillCount - polymarketFillCount) <= 0.000001;
   const lead = leadingVenue(row.execution_strategy, timings);
   const firstLegFilled = lead === "kalshi" ? kalshiFillCount > 0 : polymarketFillCount > 0;
   const hedgeFilled = lead === "kalshi" ? polymarketFillCount > 0 : kalshiFillCount > 0;
@@ -201,7 +208,8 @@ async function main(): Promise<void> {
   const limit = parseLimit();
   const pool = new pg.Pool({ connectionString });
   try {
-    const result = await pool.query<AttemptRow>(`
+    const result = await pool.query<AttemptRow>(
+      `
       SELECT
         id::TEXT,
         created_at,
@@ -226,7 +234,9 @@ async function main(): Promise<void> {
         AND execution_strategy IN ('polymarket_first_exact', 'parallel_quick', 'kalshi_first_exact', 'kalshi_rest_then_cross')
       ORDER BY created_at DESC, id DESC
       LIMIT $1
-    `, [Math.max(limit, 20)]);
+    `,
+      [Math.max(limit, 20)],
+    );
     const attempts = result.rows.map(classify);
     const lastN = attempts.slice(0, limit);
     const firstLegFilled = lastN.filter((attempt) => attempt.firstLegFilled);
@@ -249,11 +259,26 @@ async function main(): Promise<void> {
       firstLegFillRate: roundMetric(rate(lastN.map((attempt) => attempt.firstLegFilled))),
       hedgeFillRateAmongFirstLegFills: roundMetric(rate(firstLegFilled.map((attempt) => attempt.hedgeFilled))),
       avgTotalMs: roundMetric(average(lastN.map((attempt) => attempt.totalMs))),
-      p95TotalMs: roundMetric(percentile(lastN.map((attempt) => attempt.totalMs), 0.95)),
+      p95TotalMs: roundMetric(
+        percentile(
+          lastN.map((attempt) => attempt.totalMs),
+          0.95,
+        ),
+      ),
       avgPolymarketRttMs: roundMetric(average(lastN.map((attempt) => attempt.polymarketRttMs))),
-      p95PolymarketRttMs: roundMetric(percentile(lastN.map((attempt) => attempt.polymarketRttMs), 0.95)),
+      p95PolymarketRttMs: roundMetric(
+        percentile(
+          lastN.map((attempt) => attempt.polymarketRttMs),
+          0.95,
+        ),
+      ),
       avgKalshiRttMs: roundMetric(average(lastN.map((attempt) => attempt.kalshiRttMs))),
-      p95KalshiRttMs: roundMetric(percentile(lastN.map((attempt) => attempt.kalshiRttMs), 0.95)),
+      p95KalshiRttMs: roundMetric(
+        percentile(
+          lastN.map((attempt) => attempt.kalshiRttMs),
+          0.95,
+        ),
+      ),
       avgExpectedExecutableEdge: roundMetric(average(lastN.map((attempt) => attempt.expectedExecutableEdge))),
       avgRealizedGuaranteedProfit: roundMetric(average(lastN.map((attempt) => attempt.realizedGuaranteedProfit))),
       failureBreakdown,

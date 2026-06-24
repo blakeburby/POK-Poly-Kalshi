@@ -30,10 +30,23 @@ export interface ScannerOptions {
   liveExecutionQualityGateEnabled?: boolean;
   liveExecutionQualityOptions?: LiveExecutionQualityOptions;
   liveExposure?: {
-    liveSubmittedAttemptBlockReason?(candidate: ArbCandidate, now: number, maxTradesPerWindow: number): Promise<string | null>;
+    liveSubmittedAttemptBlockReason?(
+      candidate: ArbCandidate,
+      now: number,
+      maxTradesPerWindow: number,
+    ): Promise<string | null>;
     liveExactExposureBlockReason?(now: number): Promise<string | null>;
-    liveExecutionQualityBlockReason?(candidate: ArbCandidate, now: number, options: LiveExecutionQualityOptions): Promise<string | null>;
-    liveExposureBlockReason(candidate: ArbCandidate, now: number, maxTradesPerWindow: number, maxUnresolvedExposureDollars?: number): Promise<string | null>;
+    liveExecutionQualityBlockReason?(
+      candidate: ArbCandidate,
+      now: number,
+      options: LiveExecutionQualityOptions,
+    ): Promise<string | null>;
+    liveExposureBlockReason(
+      candidate: ArbCandidate,
+      now: number,
+      maxTradesPerWindow: number,
+      maxUnresolvedExposureDollars?: number,
+    ): Promise<string | null>;
     observeSignal?(signal: DashboardSignal): void;
   };
   liveLocks?: LiveExecutionLockWriter;
@@ -128,8 +141,9 @@ export class CrossVenueArbScanner {
           return [];
         }
       }
-      const candidates = pairExecutableCandidates(polymarket, kalshi, this.options.minProfitDollars)
-        .sort((left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs);
+      const candidates = pairExecutableCandidates(polymarket, kalshi, this.options.minProfitDollars).sort(
+        (left, right) => right.guaranteedProfit - left.guaranteedProfit || left.expiryMs - right.expiryMs,
+      );
       const protectedCandidates: ArbCandidate[] = [];
       for (const candidate of candidates) {
         const blockReason = protectedCandidateBlockReason(candidate, this.options.minProfitDollars);
@@ -227,7 +241,10 @@ export class CrossVenueArbScanner {
   // H4: whether a FAILED attempt should trip the re-entry throttle. A zero-exposure no-fill (no shares on
   // either leg) took no position, so when liveReentrySkipZeroExposure is on it must NOT bench a still-
   // profitable window for the reentry interval. Default (flag off) throttles every failed attempt.
-  private shouldThrottleFailedAttempt(result: { kalshiFillCount?: number | null; polymarketFillCount?: number | null }): boolean {
+  private shouldThrottleFailedAttempt(result: {
+    kalshiFillCount?: number | null;
+    polymarketFillCount?: number | null;
+  }): boolean {
     if (!this.options.liveReentrySkipZeroExposure) return true;
     return (result.kalshiFillCount ?? 0) > 0 || (result.polymarketFillCount ?? 0) > 0;
   }
@@ -251,7 +268,8 @@ export class CrossVenueArbScanner {
       const executionStartedAt = Date.now();
       const result = await this.executor.execute(candidate);
       this.options.latency?.recordExecution(Date.now() - executionStartedAt);
-      if (result.executionTimings?.hotGateMs != null) this.options.latency?.recordHotGate?.(result.executionTimings.hotGateMs);
+      if (result.executionTimings?.hotGateMs != null)
+        this.options.latency?.recordHotGate?.(result.executionTimings.hotGateMs);
       result.executionTimings = { ...result.executionTimings, preSubmitDbMs: insertMs };
       const updateStartedAt = Date.now();
       const updatedSignal = await this.signals.updateSignal(signalId, result);
@@ -274,7 +292,8 @@ export class CrossVenueArbScanner {
         });
       }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
-      else if (result.action === "failed" && result.executionGroupId && this.shouldThrottleFailedAttempt(result)) this.reentry.recordAttempt(candidate.pairKey, now);
+      else if (result.action === "failed" && result.executionGroupId && this.shouldThrottleFailedAttempt(result))
+        this.reentry.recordAttempt(candidate.pairKey, now);
       this.logCandidateProcessed(candidate, result);
     } catch (error) {
       const updatedSignal = await this.signals.updateSignal(signalId, {
@@ -297,7 +316,8 @@ export class CrossVenueArbScanner {
       const executionStartedAt = Date.now();
       const result = await this.executor.execute(candidate);
       this.options.latency?.recordExecution(Date.now() - executionStartedAt);
-      if (result.executionTimings?.hotGateMs != null) this.options.latency?.recordHotGate?.(result.executionTimings.hotGateMs);
+      if (result.executionTimings?.hotGateMs != null)
+        this.options.latency?.recordHotGate?.(result.executionTimings.hotGateMs);
       result.executionTimings = { ...result.executionTimings, preSubmitDbMs: 0 };
 
       const insertStartedAt = Date.now();
@@ -332,7 +352,8 @@ export class CrossVenueArbScanner {
         });
       }
       if (result.action === "filled") this.reentry.recordFill(candidate.pairKey, now);
-      else if (result.action === "failed" && result.executionGroupId && this.shouldThrottleFailedAttempt(result)) this.reentry.recordAttempt(candidate.pairKey, now);
+      else if (result.action === "failed" && result.executionGroupId && this.shouldThrottleFailedAttempt(result))
+        this.reentry.recordAttempt(candidate.pairKey, now);
       this.logCandidateProcessed(candidate, result);
     } catch (error) {
       const failureReason = error instanceof Error ? error.message : String(error);
@@ -373,23 +394,33 @@ export class CrossVenueArbScanner {
     for (const key of this.liveLegKeys(candidate)) {
       if (this.activeLiveLegs.has(key)) return `live leg already reserved in this scan: ${key}`;
     }
-    const submittedAttemptReason = await this.options.liveExposure?.liveSubmittedAttemptBlockReason?.(candidate, now, maxTrades);
+    const submittedAttemptReason = await this.options.liveExposure?.liveSubmittedAttemptBlockReason?.(
+      candidate,
+      now,
+      maxTrades,
+    );
     if (submittedAttemptReason) return submittedAttemptReason;
     if (this.options.liveExactExposureRequired) {
       const exactExposureReason = await this.options.liveExposure?.liveExactExposureBlockReason?.(now);
       if (exactExposureReason) return exactExposureReason;
     }
     if (this.options.liveExecutionQualityGateEnabled && this.options.liveExecutionQualityOptions) {
-      const qualityReason = await this.options.liveExposure?.liveExecutionQualityBlockReason?.(candidate, now, this.options.liveExecutionQualityOptions);
+      const qualityReason = await this.options.liveExposure?.liveExecutionQualityBlockReason?.(
+        candidate,
+        now,
+        this.options.liveExecutionQualityOptions,
+      );
       if (qualityReason) return qualityReason;
     }
     if (this.options.liveAutoHardlocksEnabled === false) return null;
-    return await this.options.liveExposure?.liveExposureBlockReason(
-      candidate,
-      now,
-      maxTrades,
-      this.options.maxUnresolvedExposureDollars,
-    ) ?? null;
+    return (
+      (await this.options.liveExposure?.liveExposureBlockReason(
+        candidate,
+        now,
+        maxTrades,
+        this.options.maxUnresolvedExposureDollars,
+      )) ?? null
+    );
   }
 
   private logCandidateProcessed(

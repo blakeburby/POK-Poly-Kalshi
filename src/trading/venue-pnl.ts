@@ -37,18 +37,33 @@ const num = (v: unknown): number | null => {
 };
 const firstNum = (r: Rec | null, keys: string[]): number | null => {
   if (!r) return null;
-  for (const k of keys) { const n = num(r[k]); if (n != null) return n; }
+  for (const k of keys) {
+    const n = num(r[k]);
+    if (n != null) return n;
+  }
   return null;
 };
-const str = (v: unknown): string | null => { const s = v == null ? null : String(v).trim(); return s || null; };
-const firstStr = (r: Rec | null, keys: string[]): string | null => { if (!r) return null; for (const k of keys) { const s = str(r[k]); if (s) return s; } return null; };
+const str = (v: unknown): string | null => {
+  const s = v == null ? null : String(v).trim();
+  return s || null;
+};
+const firstStr = (r: Rec | null, keys: string[]): string | null => {
+  if (!r) return null;
+  for (const k of keys) {
+    const s = str(r[k]);
+    if (s) return s;
+  }
+  return null;
+};
 const round = (n: number): number => Math.round(n * 1e6) / 1e6;
 const sum = (xs: (number | null)[]): number => round(xs.reduce<number>((a, x) => a + (x ?? 0), 0));
-const arr = (v: unknown): Rec[] => Array.isArray(v) ? v.filter((x): x is Rec => !!x && typeof x === "object") : [];
+const arr = (v: unknown): Rec[] => (Array.isArray(v) ? v.filter((x): x is Rec => !!x && typeof x === "object") : []);
 /** Kalshi money: bare field is cents, `*_dollars` is dollars. */
 const money = (r: Rec | null, centsKeys: string[], dollarKeys: string[]): number => {
-  const d = firstNum(r, dollarKeys); if (d != null) return d;
-  const c = firstNum(r, centsKeys); return c == null ? 0 : c / 100;
+  const d = firstNum(r, dollarKeys);
+  if (d != null) return d;
+  const c = firstNum(r, centsKeys);
+  return c == null ? 0 : c / 100;
 };
 
 async function fetchJson(fetchFn: FetchFn, url: URL, init: RequestInit, timeoutMs: number): Promise<unknown> {
@@ -71,7 +86,12 @@ async function kalshiAll(config: AppConfig, fetchFn: FetchFn, path: string, key:
     const url = new URL(config.kalshiApiBase);
     url.pathname = url.pathname.replace(/\/$/, "") + path;
     url.search = new URLSearchParams(cursor ? { limit: "500", cursor } : { limit: "500" }).toString();
-    const payload = await fetchJson(fetchFn, url, { method: "GET", headers: getKalshiHeaders("GET", url.pathname + url.search) }, KALSHI_TIMEOUT_MS) as Rec;
+    const payload = (await fetchJson(
+      fetchFn,
+      url,
+      { method: "GET", headers: getKalshiHeaders("GET", url.pathname + url.search) },
+      KALSHI_TIMEOUT_MS,
+    )) as Rec;
     out.push(...arr(payload[key]));
     cursor = str(payload.cursor) ?? "";
     if (!cursor) break;
@@ -80,7 +100,19 @@ async function kalshiAll(config: AppConfig, fetchFn: FetchFn, path: string, key:
 }
 
 function emptyLeg(platform: VenuePnlLeg["platform"], connectionStatus: TradingConnectionState): VenuePnlLeg {
-  return { platform, connectionStatus, realizedTakeHome: 0, feesPaid: 0, grossRevenue: 0, cost: 0, openExposure: 0, settledCount: 0, openCount: 0, unredeemedCount: 0, lastUpdatedAt: null };
+  return {
+    platform,
+    connectionStatus,
+    realizedTakeHome: 0,
+    feesPaid: 0,
+    grossRevenue: 0,
+    cost: 0,
+    openExposure: 0,
+    settledCount: 0,
+    openCount: 0,
+    unredeemedCount: 0,
+    lastUpdatedAt: null,
+  };
 }
 
 /** Pure computation from already-fetched Kalshi rows (no network/auth) — unit-testable. */
@@ -88,15 +120,29 @@ export function kalshiLegFromRows(positions: Rec[], settlements: Rec[], now: num
   const isBtc = (r: Rec) => KALSHI_BTC15M.test(firstStr(r, ["ticker", "market_ticker", "event_ticker"]) ?? "");
   const settled = settlements.filter(isBtc);
   const grossRevenue = sum(settled.map((s) => money(s, ["revenue"], ["revenue_dollars"])));
-  const cost = sum(settled.map((s) => (firstNum(s, ["yes_total_cost_dollars"]) ?? 0) + (firstNum(s, ["no_total_cost_dollars"]) ?? 0)));
+  const cost = sum(
+    settled.map((s) => (firstNum(s, ["yes_total_cost_dollars"]) ?? 0) + (firstNum(s, ["no_total_cost_dollars"]) ?? 0)),
+  );
   const feesPaid = sum(settled.map((s) => firstNum(s, ["fee_cost", "fees_dollars"])));
-  const openBtc = positions.filter((p) => isBtc(p) && Math.abs(firstNum(p, ["position", "position_fp", "net_position"]) ?? 0) > 1e-6);
-  const openExposure = sum(openBtc.map((p) => money(p, ["market_value", "market_exposure"], ["market_exposure_dollars", "market_value_dollars"])));
+  const openBtc = positions.filter(
+    (p) => isBtc(p) && Math.abs(firstNum(p, ["position", "position_fp", "net_position"]) ?? 0) > 1e-6,
+  );
+  const openExposure = sum(
+    openBtc.map((p) =>
+      money(p, ["market_value", "market_exposure"], ["market_exposure_dollars", "market_value_dollars"]),
+    ),
+  );
   return {
-    platform: "kalshi", connectionStatus: "live",
+    platform: "kalshi",
+    connectionStatus: "live",
     realizedTakeHome: round(grossRevenue - cost - feesPaid),
-    feesPaid, grossRevenue, cost, openExposure,
-    settledCount: settled.length, openCount: openBtc.length, unredeemedCount: 0,
+    feesPaid,
+    grossRevenue,
+    cost,
+    openExposure,
+    settledCount: settled.length,
+    openCount: openBtc.length,
+    unredeemedCount: 0,
     lastUpdatedAt: now,
   };
 }
@@ -130,11 +176,15 @@ export function polymarketLegFromRows(positions: Rec[], now: number): VenuePnlLe
   const open = btc.filter((p) => !isEnded(p) && (firstNum(p, ["size"]) ?? 0) > 1e-6);
   const openExposure = sum(open.map((p) => firstNum(p, ["currentValue", "current_value", "value"])));
   return {
-    platform: "polymarket", connectionStatus: "live",
+    platform: "polymarket",
+    connectionStatus: "live",
     realizedTakeHome,
     feesPaid: 0, // Polymarket CLOB trading fee is ~0; cashPnl is already take-home.
-    grossRevenue: round(realizedTakeHome + cost), cost, openExposure,
-    settledCount: ended.length, openCount: open.length,
+    grossRevenue: round(realizedTakeHome + cost),
+    cost,
+    openExposure,
+    settledCount: ended.length,
+    openCount: open.length,
     unredeemedCount: btc.filter((p) => p.redeemable === true).length,
     lastUpdatedAt: now,
   };
@@ -156,7 +206,11 @@ async function polymarketLeg(config: AppConfig, fetchFn: FetchFn, now: number): 
   }
 }
 
-export async function computeVenuePnl(config: AppConfig, now = Date.now(), fetchFn: FetchFn = fetch): Promise<VenuePnlSnapshot> {
+export async function computeVenuePnl(
+  config: AppConfig,
+  now = Date.now(),
+  fetchFn: FetchFn = fetch,
+): Promise<VenuePnlSnapshot> {
   const [kalshi, polymarket] = await Promise.all([
     kalshiLeg(config, fetchFn, now),
     polymarketLeg(config, fetchFn, now),

@@ -15,9 +15,12 @@ function lastScanAgeMs(status: ScannerStatus, now: number): number | null {
 }
 
 function publicVenueReadiness(venue: VenueExecutionReadiness, includeGeoblock = false): Record<string, unknown> {
-  const geoblockReason = includeGeoblock && (venue.geoblockBlocked === true || venue.reason?.toLowerCase().includes("geoblock"))
-    ? venue.reason ?? "geoblock_blocked"
-    : venue.ready ? null : "not_ready";
+  const geoblockReason =
+    includeGeoblock && (venue.geoblockBlocked === true || venue.reason?.toLowerCase().includes("geoblock"))
+      ? (venue.reason ?? "geoblock_blocked")
+      : venue.ready
+        ? null
+        : "not_ready";
   return {
     configured: venue.configured,
     ready: venue.ready,
@@ -25,16 +28,19 @@ function publicVenueReadiness(venue: VenueExecutionReadiness, includeGeoblock = 
     lastCheckedAt: venue.lastCheckedAt,
     ...(includeGeoblock
       ? {
-        geoblockBlocked: venue.geoblockBlocked ?? null,
-        geoblockCountry: venue.geoblockCountry ?? null,
-        geoblockRegion: venue.geoblockRegion ?? null,
-        geoblockCheckedAt: venue.geoblockCheckedAt ?? null,
-      }
+          geoblockBlocked: venue.geoblockBlocked ?? null,
+          geoblockCountry: venue.geoblockCountry ?? null,
+          geoblockRegion: venue.geoblockRegion ?? null,
+          geoblockCheckedAt: venue.geoblockCheckedAt ?? null,
+        }
       : {}),
   };
 }
 
-function publicExecutionReadiness(readiness: LiveExecutionReadiness | null | undefined, error: unknown): Record<string, unknown> | undefined {
+function publicExecutionReadiness(
+  readiness: LiveExecutionReadiness | null | undefined,
+  error: unknown,
+): Record<string, unknown> | undefined {
   if (error != null) {
     return {
       included: true,
@@ -45,13 +51,14 @@ function publicExecutionReadiness(readiness: LiveExecutionReadiness | null | und
   if (!readiness) return undefined;
   const userStreamsReady = readiness.userStreams.ready;
   const reconciliationClean = readiness.reconciliation.clean;
-  const safeToPlaceOrders = readiness.liveTrading
-    && readiness.kalshi.ready
-    && readiness.polymarket.ready
-    && userStreamsReady
-    && reconciliationClean
-    && !readiness.partialFillLocked
-    && !readiness.circuitBreakerLocked;
+  const safeToPlaceOrders =
+    readiness.liveTrading &&
+    readiness.kalshi.ready &&
+    readiness.polymarket.ready &&
+    userStreamsReady &&
+    reconciliationClean &&
+    !readiness.partialFillLocked &&
+    !readiness.circuitBreakerLocked;
   return {
     included: true,
     safeToPlaceOrders,

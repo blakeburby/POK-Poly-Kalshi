@@ -217,9 +217,30 @@ test("lead/lag gate blocks high-confidence adverse Polymarket-leading buckets", 
 
 test("rolling book history trims samples without persistence writes", () => {
   const history = new RollingBookHistory(5, 1_000);
-  const old = contract({ venue: "kalshi", contractId: "kalshi", strike: 1500, noAsk: 0.52, noBid: 0.51, updatedAt: now - 2_000 });
-  const recent = contract({ venue: "kalshi", contractId: "kalshi", strike: 1500, noAsk: 0.53, noBid: 0.52, updatedAt: now - 500 });
-  const latest = contract({ venue: "kalshi", contractId: "kalshi", strike: 1500, noAsk: 0.54, noBid: 0.53, updatedAt: now });
+  const old = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1500,
+    noAsk: 0.52,
+    noBid: 0.51,
+    updatedAt: now - 2_000,
+  });
+  const recent = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1500,
+    noAsk: 0.53,
+    noBid: 0.52,
+    updatedAt: now - 500,
+  });
+  const latest = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1500,
+    noAsk: 0.54,
+    noBid: 0.53,
+    updatedAt: now,
+  });
 
   history.record(old, "no", old.updatedAt);
   history.record(recent, "no", recent.updatedAt);

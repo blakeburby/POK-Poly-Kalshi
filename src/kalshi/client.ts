@@ -4,7 +4,11 @@ import { getKalshiWebsocketHeaders } from "./auth";
 import { logEvent, logThrottle } from "../logger";
 import type { BookLevel } from "../types";
 import { computeRateLimitBackoffDelay, isRateLimitError } from "../ws/reconnect";
-import { ReconnectingWebSocketClient, type RawWebSocket, type ReconnectingWebSocketClientOptions } from "../ws/reconnecting-websocket-client";
+import {
+  ReconnectingWebSocketClient,
+  type RawWebSocket,
+  type ReconnectingWebSocketClientOptions,
+} from "../ws/reconnecting-websocket-client";
 
 type WebSocketFactory = (url: string, options: { headers: Record<string, string> }) => RawWebSocket;
 
@@ -82,7 +86,7 @@ function numberOrNull(value: unknown): number | null {
 }
 
 function rawRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function parseLevel(value: unknown): BookLevel | null {
@@ -187,22 +191,36 @@ export class KalshiOrderbookParser {
 
     const state = this.getState(marketTicker);
     if (
-      type === "orderbook_snapshot"
-      || record.yes
-      || record.no
-      || record.yes_bids
-      || record.no_bids
-      || record.yes_dollars
-      || record.no_dollars
-      || record.yes_dollars_fp
-      || record.no_dollars_fp
+      type === "orderbook_snapshot" ||
+      record.yes ||
+      record.no ||
+      record.yes_bids ||
+      record.no_bids ||
+      record.yes_dollars ||
+      record.no_dollars ||
+      record.yes_dollars_fp ||
+      record.no_dollars_fp
     ) {
       state.yesBids.clear();
       state.noBids.clear();
-      for (const level of extractLevels(record, ["yes", "yes_bids", "yes_bid", "yes_levels", "yes_dollars", "yes_dollars_fp"])) {
+      for (const level of extractLevels(record, [
+        "yes",
+        "yes_bids",
+        "yes_bid",
+        "yes_levels",
+        "yes_dollars",
+        "yes_dollars_fp",
+      ])) {
         setBookLevel(state.yesBids, level.price, level.size);
       }
-      for (const level of extractLevels(record, ["no", "no_bids", "no_bid", "no_levels", "no_dollars", "no_dollars_fp"])) {
+      for (const level of extractLevels(record, [
+        "no",
+        "no_bids",
+        "no_bid",
+        "no_levels",
+        "no_dollars",
+        "no_dollars_fp",
+      ])) {
         setBookLevel(state.noBids, level.price, level.size);
       }
     }
@@ -213,7 +231,7 @@ export class KalshiOrderbookParser {
       const delta = numberOrNull(record.delta ?? record.delta_fp ?? record.size_delta ?? record.quantity_delta);
       const absoluteSize = normalizeSize(record.size ?? record.quantity ?? record.count);
       const book = side.includes("no") ? state.noBids : state.yesBids;
-      const currentSize = price == null ? null : book.get(price) ?? 0;
+      const currentSize = price == null ? null : (book.get(price) ?? 0);
       const nextSize = absoluteSize ?? (delta == null || currentSize == null ? null : currentSize + delta);
       setBookLevel(book, price, nextSize);
     }
@@ -291,7 +309,11 @@ export class KalshiTickerClient extends ReconnectingWebSocketClient {
     if (this.socket?.readyState === WebSocket.OPEN && previousFingerprint !== nextFingerprint) {
       this.subscriptionFingerprint = nextFingerprint;
       this.socket.send(JSON.stringify(buildKalshiSubscribeMessage(this.messageId++, this.desired)));
-      logEvent({ category: "KALSHI", message: "websocket subscription refreshed", context: { subscriptions: this.desired.size } });
+      logEvent({
+        category: "KALSHI",
+        message: "websocket subscription refreshed",
+        context: { subscriptions: this.desired.size },
+      });
       return;
     }
     this.ensureSocket();

@@ -67,7 +67,15 @@ export function StatTile({
   className?: string;
 }) {
   const toneClass =
-    tone === "up" ? "text-up" : tone === "down" ? "text-down" : tone === "amber" ? "text-amber" : tone === "cyan" ? "text-cyan" : "text-fg";
+    tone === "up"
+      ? "text-up"
+      : tone === "down"
+        ? "text-down"
+        : tone === "amber"
+          ? "text-amber"
+          : tone === "cyan"
+            ? "text-cyan"
+            : "text-fg";
   return (
     <div className={cn("flex flex-col gap-1 rounded-md border border-line bg-surface px-3 py-2.5", className)}>
       <Label>{label}</Label>

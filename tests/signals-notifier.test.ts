@@ -5,7 +5,9 @@ import { DashboardSignalsNotifier } from "../src/dashboard/signals-notifier";
 test("subscribe receives notifyChanged; unsubscribe stops further delivery", () => {
   const n = new DashboardSignalsNotifier();
   let count = 0;
-  const unsubscribe = n.subscribe(() => { count += 1; });
+  const unsubscribe = n.subscribe(() => {
+    count += 1;
+  });
   assert.equal(n.subscriberCount, 1);
 
   n.notifyChanged();
@@ -24,9 +26,14 @@ test("subscribe receives notifyChanged; unsubscribe stops further delivery", () 
 
 test("notifyChanged fans out to every subscriber", () => {
   const n = new DashboardSignalsNotifier();
-  let a = 0, b = 0;
-  n.subscribe(() => { a += 1; });
-  n.subscribe(() => { b += 1; });
+  let a = 0,
+    b = 0;
+  n.subscribe(() => {
+    a += 1;
+  });
+  n.subscribe(() => {
+    b += 1;
+  });
   assert.equal(n.subscriberCount, 2);
 
   n.notifyChanged();
@@ -37,8 +44,12 @@ test("notifyChanged fans out to every subscriber", () => {
 test("a throwing subscriber cannot break delivery to the others or the caller", () => {
   const n = new DashboardSignalsNotifier();
   let reached = 0;
-  n.subscribe(() => { throw new Error("one stream blew up"); });
-  n.subscribe(() => { reached += 1; });
+  n.subscribe(() => {
+    throw new Error("one stream blew up");
+  });
+  n.subscribe(() => {
+    reached += 1;
+  });
 
   assert.doesNotThrow(() => n.notifyChanged());
   assert.equal(reached, 1, "the healthy subscriber still fired");

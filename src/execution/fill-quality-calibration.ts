@@ -115,8 +115,10 @@ function normalizedStatus(value: string | null): string {
 function isUnknownOrTimeout(row: FillQualityCalibrationRow): boolean {
   const statuses = [row.kalshiStatus, row.polymarketStatus].map(normalizedStatus);
   const errors = [row.kalshiError, row.polymarketError].map(normalizedStatus);
-  return statuses.some((status) => status === "unknown" || status === "timeout")
-    || errors.some((error) => error.includes("timeout") || error.includes("timed out") || error.includes("unknown"));
+  return (
+    statuses.some((status) => status === "unknown" || status === "timeout") ||
+    errors.some((error) => error.includes("timeout") || error.includes("timed out") || error.includes("unknown"))
+  );
 }
 
 function orderSize(row: FillQualityCalibrationRow): number | null {
@@ -138,11 +140,13 @@ function isProfitableExactPair(row: FillQualityCalibrationRow): boolean {
 }
 
 function isBadAttempt(row: FillQualityCalibrationRow): boolean {
-  return row.partialFill
-    || row.action === "failed"
-    || isUnknownOrTimeout(row)
-    || !isProfitableExactPair(row)
-    || (row.realizedGuaranteedProfit != null && row.realizedGuaranteedProfit <= 0);
+  return (
+    row.partialFill ||
+    row.action === "failed" ||
+    isUnknownOrTimeout(row) ||
+    !isProfitableExactPair(row) ||
+    (row.realizedGuaranteedProfit != null && row.realizedGuaranteedProfit <= 0)
+  );
 }
 
 function expectedEdge(row: FillQualityCalibrationRow): number | null {
@@ -187,7 +191,9 @@ function probabilityBuckets(rows: FillQualityCalibrationRow[]): FillQualityCalib
   }
   return Array.from(buckets.entries())
     .sort(([left], [right]) => left - right)
-    .map(([index, bucketRows]) => bucketStats(`${(index / 10).toFixed(1)}-${((index + 1) / 10).toFixed(1)}`, bucketRows));
+    .map(([index, bucketRows]) =>
+      bucketStats(`${(index / 10).toFixed(1)}-${((index + 1) / 10).toFixed(1)}`, bucketRows),
+    );
 }
 
 function expectedEdgeDeciles(rows: FillQualityCalibrationRow[]): FillQualityCalibrationBucket[] {
@@ -211,7 +217,10 @@ function expectedEdgeDeciles(rows: FillQualityCalibrationRow[]): FillQualityCali
     });
 }
 
-function directionality(rows: FillQualityCalibrationRow[], minSpread: number): FillQualityCalibrationReport["directionality"] {
+function directionality(
+  rows: FillQualityCalibrationRow[],
+  minSpread: number,
+): FillQualityCalibrationReport["directionality"] {
   const sorted = rows
     .filter((row) => pairedFillProbability(row) != null)
     .sort((left, right) => (pairedFillProbability(left) ?? 0) - (pairedFillProbability(right) ?? 0));
@@ -240,8 +249,10 @@ export function buildFillQualityCalibrationReport(
   const minExpectedEdge = options.minExpectedEdge ?? DEFAULT_MIN_EXPECTED_EDGE;
   const minSamples = options.minSamples ?? DEFAULT_MIN_SAMPLES;
   const badAttemptReductionTarget = options.badAttemptReductionTarget ?? DEFAULT_BAD_ATTEMPT_REDUCTION_TARGET;
-  const maxProfitableFillEliminationRate = options.maxProfitableFillEliminationRate ?? DEFAULT_MAX_PROFITABLE_FILL_ELIMINATION_RATE;
-  const minTopBottomExactFillRateSpread = options.minTopBottomExactFillRateSpread ?? DEFAULT_MIN_TOP_BOTTOM_EXACT_FILL_RATE_SPREAD;
+  const maxProfitableFillEliminationRate =
+    options.maxProfitableFillEliminationRate ?? DEFAULT_MAX_PROFITABLE_FILL_ELIMINATION_RATE;
+  const minTopBottomExactFillRateSpread =
+    options.minTopBottomExactFillRateSpread ?? DEFAULT_MIN_TOP_BOTTOM_EXACT_FILL_RATE_SPREAD;
   const rows = inputRows.filter((row) => row.executionGroupId != null && row.fillQualitySnapshot != null);
   const sortedByTime = rows
     .filter((row) => row.createdAt != null)
@@ -262,15 +273,21 @@ export function buildFillQualityCalibrationReport(
   };
   const dir = directionality(rows, minTopBottomExactFillRateSpread);
   const reasons: string[] = [];
-  if (rows.length < minSamples) reasons.push(`need at least ${minSamples} submitted scored attempts; found ${rows.length}`);
-  if (!dir.passed) reasons.push(`predicted paired-fill buckets are not directionally valid by ${minTopBottomExactFillRateSpread}`);
+  if (rows.length < minSamples)
+    reasons.push(`need at least ${minSamples} submitted scored attempts; found ${rows.length}`);
+  if (!dir.passed)
+    reasons.push(`predicted paired-fill buckets are not directionally valid by ${minTopBottomExactFillRateSpread}`);
   if ((gateSimulation.badAttemptReductionRate ?? 0) < badAttemptReductionTarget) {
-    reasons.push(`simulated gate blocks ${(gateSimulation.badAttemptReductionRate ?? 0).toFixed(3)} of bad attempts; need ${badAttemptReductionTarget}`);
+    reasons.push(
+      `simulated gate blocks ${(gateSimulation.badAttemptReductionRate ?? 0).toFixed(3)} of bad attempts; need ${badAttemptReductionTarget}`,
+    );
   }
   if (gateSimulation.profitableFillEliminationRate == null) {
     reasons.push("no profitable exact paired fills available for elimination check");
   } else if (gateSimulation.profitableFillEliminationRate > maxProfitableFillEliminationRate) {
-    reasons.push(`simulated gate blocks ${gateSimulation.profitableFillEliminationRate.toFixed(3)} of profitable exact fills; max ${maxProfitableFillEliminationRate}`);
+    reasons.push(
+      `simulated gate blocks ${gateSimulation.profitableFillEliminationRate.toFixed(3)} of profitable exact fills; max ${maxProfitableFillEliminationRate}`,
+    );
   }
 
   return {

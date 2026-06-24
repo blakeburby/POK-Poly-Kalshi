@@ -53,7 +53,10 @@ function normalizedOrderStatus(message: Record<string, unknown>): string {
   return type.toLowerCase() || "unknown";
 }
 
-export function buildPolymarketUserSubscribeMessage(creds: ApiKeyCreds, conditionIds: Iterable<string>): Record<string, unknown> {
+export function buildPolymarketUserSubscribeMessage(
+  creds: ApiKeyCreds,
+  conditionIds: Iterable<string>,
+): Record<string, unknown> {
   return {
     auth: {
       apiKey: creds.key,
@@ -75,7 +78,8 @@ export function parsePolymarketUserStreamPayload(raw: unknown, receivedAtMs = Da
   const messages = Array.isArray(raw) ? raw : [raw];
   const events: VenueOrderEventInput[] = [];
   for (const message of messages) {
-    const record = message && typeof message === "object" && !Array.isArray(message) ? message as Record<string, unknown> : null;
+    const record =
+      message && typeof message === "object" && !Array.isArray(message) ? (message as Record<string, unknown>) : null;
     if (!record) continue;
     const eventType = normalizeEventType(record.event_type);
     if (eventType === "trade") {
@@ -115,9 +119,7 @@ export function parsePolymarketUserStreamPayload(raw: unknown, receivedAtMs = Da
         side: stringOrNull(record.side),
         status: normalizedOrderStatus(record),
         fillCount: matchedSize,
-        remainingCount: originalSize != null && matchedSize != null
-          ? Math.max(0, originalSize - matchedSize)
-          : null,
+        remainingCount: originalSize != null && matchedSize != null ? Math.max(0, originalSize - matchedSize) : null,
         fillPrice: numberOrNull(record.price),
         fee: numberOrNull(record.fee),
         exchangeTimestampMs: timestampMs(record.timestamp),
@@ -195,9 +197,14 @@ export class PolymarketUserStreamClient {
 
   private async ensureSocket(): Promise<void> {
     if (this.desired.size === 0) return;
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING))
+      return;
 
-    logEvent({ category: "POLYMARKET_USER", message: "user websocket connecting", context: { subscriptions: this.desired.size } });
+    logEvent({
+      category: "POLYMARKET_USER",
+      message: "user websocket connecting",
+      context: { subscriptions: this.desired.size },
+    });
     const socket = this.wsFactory(this.url);
     this.socket = socket;
     this.intentionalClose = false;
@@ -220,13 +227,23 @@ export class PolymarketUserStreamClient {
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.state = { ...this.state, lastError: reason };
-        logEvent({ severity: "ERROR", category: "POLYMARKET_USER", message: "user websocket parse error", context: { error: reason } });
+        logEvent({
+          severity: "ERROR",
+          category: "POLYMARKET_USER",
+          message: "user websocket parse error",
+          context: { error: reason },
+        });
       }
     });
 
     socket.on("error", (error: Error) => {
       this.state = { ...this.state, lastError: error.message, reason: error.message };
-      logEvent({ severity: "ERROR", category: "POLYMARKET_USER", message: "user websocket error", context: { error: error.message } });
+      logEvent({
+        severity: "ERROR",
+        category: "POLYMARKET_USER",
+        message: "user websocket error",
+        context: { error: error.message },
+      });
     });
 
     socket.on("close", (_code: number, reason: Buffer) => {
@@ -249,7 +266,12 @@ export class PolymarketUserStreamClient {
     this.intentionalClose = true;
     this.clearHeartbeat();
     this.socket = null;
-    this.state = { ...this.state, connected: false, subscribed: false, reason: "refreshing Polymarket user subscriptions" };
+    this.state = {
+      ...this.state,
+      connected: false,
+      subscribed: false,
+      reason: "refreshing Polymarket user subscriptions",
+    };
     socket.close();
     void this.ensureSocket();
   }
@@ -259,11 +281,20 @@ export class PolymarketUserStreamClient {
       const creds = await this.credentialsFactory();
       socket.send(JSON.stringify(buildPolymarketUserSubscribeMessage(creds, this.desired)));
       this.state = { ...this.state, subscribed: true, reason: null };
-      logEvent({ category: "POLYMARKET_USER", message: "user websocket subscribed", context: { subscriptions: this.desired.size } });
+      logEvent({
+        category: "POLYMARKET_USER",
+        message: "user websocket subscribed",
+        context: { subscriptions: this.desired.size },
+      });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.state = { ...this.state, subscribed: false, reason, lastError: reason };
-      logEvent({ severity: "ERROR", category: "POLYMARKET_USER", message: "user websocket auth failed", context: { error: reason } });
+      logEvent({
+        severity: "ERROR",
+        category: "POLYMARKET_USER",
+        message: "user websocket auth failed",
+        context: { error: reason },
+      });
     }
   }
 

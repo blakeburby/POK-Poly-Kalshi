@@ -1,6 +1,13 @@
 import type { BinaryContract } from "../src/types";
 
-export function contract(input: Partial<BinaryContract> & { venue: "kalshi" | "polymarket"; contractId: string; strike: number; expiryMs?: number }): BinaryContract {
+export function contract(
+  input: Partial<BinaryContract> & {
+    venue: "kalshi" | "polymarket";
+    contractId: string;
+    strike: number;
+    expiryMs?: number;
+  },
+): BinaryContract {
   const yesAsk = input.yesAsk === undefined ? 0.4 : input.yesAsk;
   const noAsk = input.noAsk === undefined ? 0.5 : input.noAsk;
   const yesBid = input.yesBid ?? null;

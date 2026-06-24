@@ -18,11 +18,13 @@ function roundMetric(value: number): number {
 function isExactPair(signal: DashboardSignal): boolean {
   const kalshiCount = signal.kalshiFillCount ?? 0;
   const polymarketCount = signal.polymarketFillCount ?? 0;
-  return signal.action === "filled"
-    && signal.partialFill !== true
-    && kalshiCount > 0
-    && polymarketCount > 0
-    && Math.abs(kalshiCount - polymarketCount) <= EPSILON;
+  return (
+    signal.action === "filled" &&
+    signal.partialFill !== true &&
+    kalshiCount > 0 &&
+    polymarketCount > 0 &&
+    Math.abs(kalshiCount - polymarketCount) <= EPSILON
+  );
 }
 
 function isPolymarketTimeoutOrUnknown(signal: DashboardSignal): boolean {
@@ -34,10 +36,12 @@ function isPolymarketTimeoutOrUnknown(signal: DashboardSignal): boolean {
 function isMismatch(signal: DashboardSignal): boolean {
   const kalshiCount = signal.kalshiFillCount ?? 0;
   const polymarketCount = signal.polymarketFillCount ?? 0;
-  return signal.partialFill === true
-    || Math.abs(kalshiCount - polymarketCount) > EPSILON
-    || ["unknown", "unexpected_fill_count"].includes(String(signal.kalshiStatus ?? "").toLowerCase())
-    || ["unknown", "unexpected_fill_count"].includes(String(signal.polymarketStatus ?? "").toLowerCase());
+  return (
+    signal.partialFill === true ||
+    Math.abs(kalshiCount - polymarketCount) > EPSILON ||
+    ["unknown", "unexpected_fill_count"].includes(String(signal.kalshiStatus ?? "").toLowerCase()) ||
+    ["unknown", "unexpected_fill_count"].includes(String(signal.polymarketStatus ?? "").toLowerCase())
+  );
 }
 
 function average(values: number[]): number | null {
@@ -68,23 +72,33 @@ export function buildLiveExecutionQualityStatus(
   const sampleCount = samples.length;
   const exactPairs = samples.filter(isExactPair).length;
   const exactPairFillRate = sampleCount === 0 ? null : roundMetric(exactPairs / sampleCount);
-  const polymarketTimeoutRate = sampleCount === 0 ? null : roundMetric(samples.filter(isPolymarketTimeoutOrUnknown).length / sampleCount);
+  const polymarketTimeoutRate =
+    sampleCount === 0 ? null : roundMetric(samples.filter(isPolymarketTimeoutOrUnknown).length / sampleCount);
   const mismatchRate = sampleCount === 0 ? null : roundMetric(samples.filter(isMismatch).length / sampleCount);
-  const avgPolymarketRttMs = average(samples
-    .map((signal) => signal.executionTimings?.polymarketOrderRttMs ?? signal.executionTimings?.polymarketRttMs ?? null)
-    .filter((value): value is number => value != null && Number.isFinite(value)));
-  const avgMismatchCostDollars = average(samples
-    .map(mismatchCost)
-    .filter((value): value is number => value != null && Number.isFinite(value)));
+  const avgPolymarketRttMs = average(
+    samples
+      .map(
+        (signal) => signal.executionTimings?.polymarketOrderRttMs ?? signal.executionTimings?.polymarketRttMs ?? null,
+      )
+      .filter((value): value is number => value != null && Number.isFinite(value)),
+  );
+  const avgMismatchCostDollars = average(
+    samples.map(mismatchCost).filter((value): value is number => value != null && Number.isFinite(value)),
+  );
   const projectedEdge = candidate?.guaranteedProfit ?? null;
-  const estimatedExecutableEdge = projectedEdge == null || exactPairFillRate == null
-    ? null
-    : roundMetric(projectedEdge * exactPairFillRate - (avgMismatchCostDollars ?? 0));
+  const estimatedExecutableEdge =
+    projectedEdge == null || exactPairFillRate == null
+      ? null
+      : roundMetric(projectedEdge * exactPairFillRate - (avgMismatchCostDollars ?? 0));
 
   let reason: string | null = null;
   if (!options.enabled) {
     reason = null;
-  } else if (sampleCount >= options.minSamples && exactPairFillRate != null && exactPairFillRate < options.minExactFillRate) {
+  } else if (
+    sampleCount >= options.minSamples &&
+    exactPairFillRate != null &&
+    exactPairFillRate < options.minExactFillRate
+  ) {
     reason = `live execution quality blocked: Polymarket exact paired fill rate ${(exactPairFillRate * 100).toFixed(1)}% below ${(options.minExactFillRate * 100).toFixed(1)}% over ${sampleCount} samples`;
   } else if (sampleCount >= options.minSamples && estimatedExecutableEdge != null && estimatedExecutableEdge < 0) {
     reason = `live execution quality blocked: estimated executable edge ${estimatedExecutableEdge.toFixed(4)} below 0 after recent fill/mismatch costs`;

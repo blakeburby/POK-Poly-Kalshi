@@ -18,9 +18,18 @@ export function HealthView({ snap }: { snap: DashboardSnapshot }) {
   return (
     <ViewScroll>
       <Grid>
-        <GridPanel title="System Health · Live Strategy Checks" dot="live" span={5} bodyClassName="grid grid-cols-1 gap-1.5 sm:grid-cols-2" pulse>
+        <GridPanel
+          title="System Health · Live Strategy Checks"
+          dot="live"
+          span={5}
+          bodyClassName="grid grid-cols-1 gap-1.5 sm:grid-cols-2"
+          pulse
+        >
           {checks.map((c) => (
-            <div key={c.key} className="flex items-center gap-2 rounded-sm border border-line/60 bg-surface-2/30 px-2.5 py-2">
+            <div
+              key={c.key}
+              className="flex items-center gap-2 rounded-sm border border-line/60 bg-surface-2/30 px-2.5 py-2"
+            >
               <StatusDot tone={c.tone} pulse={c.tone === "live"} className="size-1.5" />
               <div className="flex min-w-0 flex-1 flex-col leading-tight">
                 <span className="truncate text-[11px] text-fg-secondary">{c.label}</span>
@@ -41,14 +50,33 @@ export function HealthView({ snap }: { snap: DashboardSnapshot }) {
           )}
         </GridPanel>
 
-        <GridPanel title="User Streams" dot={e?.userStreams.ready ? "live" : "stale"} span={3} bodyClassName="flex flex-col gap-2.5">
+        <GridPanel
+          title="User Streams"
+          dot={e?.userStreams.ready ? "live" : "stale"}
+          span={3}
+          bodyClassName="flex flex-col gap-2.5"
+        >
           {e ? (
             <>
-              <StreamRow label="Kalshi WS" connected={e.userStreams.kalshi.connected} subscribed={e.userStreams.kalshi.subscribed} lastEventAt={e.userStreams.kalshi.lastEventAt} now={now} />
-              <StreamRow label="Polymarket WS" connected={e.userStreams.polymarket.connected} subscribed={e.userStreams.polymarket.subscribed} lastEventAt={e.userStreams.polymarket.lastEventAt} now={now} />
+              <StreamRow
+                label="Kalshi WS"
+                connected={e.userStreams.kalshi.connected}
+                subscribed={e.userStreams.kalshi.subscribed}
+                lastEventAt={e.userStreams.kalshi.lastEventAt}
+                now={now}
+              />
+              <StreamRow
+                label="Polymarket WS"
+                connected={e.userStreams.polymarket.connected}
+                subscribed={e.userStreams.polymarket.subscribed}
+                lastEventAt={e.userStreams.polymarket.lastEventAt}
+                now={now}
+              />
               <div className="mt-1 flex items-center justify-between border-t border-line/60 pt-2.5">
                 <span className="font-mono text-[10px] uppercase tracking-wide text-fg-muted">Confirm Lag</span>
-                <span className="font-mono text-[12px] tabular-nums text-fg">{fmtMs(e.userStreams.confirmationLagMs)}</span>
+                <span className="font-mono text-[12px] tabular-nums text-fg">
+                  {fmtMs(e.userStreams.confirmationLagMs)}
+                </span>
               </div>
             </>
           ) : (
@@ -58,8 +86,17 @@ export function HealthView({ snap }: { snap: DashboardSnapshot }) {
       </Grid>
 
       <Grid>
-        <GridPanel title="Scanner & Pipeline Heartbeat" dot={snap.scanner.scanning ? "live" : "stale"} span={6} bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <HStat label="Scanning" value={snap.scanner.scanning ? "ACTIVE" : "IDLE"} tone={snap.scanner.scanning ? "live" : "stale"} />
+        <GridPanel
+          title="Scanner & Pipeline Heartbeat"
+          dot={snap.scanner.scanning ? "live" : "stale"}
+          span={6}
+          bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3"
+        >
+          <HStat
+            label="Scanning"
+            value={snap.scanner.scanning ? "ACTIVE" : "IDLE"}
+            tone={snap.scanner.scanning ? "live" : "stale"}
+          />
           <HStat label="Last Scan" value={fmtMs(snap.scanner.lastScanAgeMs ?? null)} tone="neutral" />
           <HStat label="Candidates" value={String(snap.scanner.lastCandidateCount)} tone="neutral" />
           <HStat label="Queued Exec" value={String(snap.scanner.queuedExecutions ?? 0)} tone="neutral" />
@@ -70,16 +107,33 @@ export function HealthView({ snap }: { snap: DashboardSnapshot }) {
           <HStat label="Exec Dur p50" value={fmtMs(lat?.execution.durationMs.p50Ms ?? null)} tone="neutral" />
         </GridPanel>
 
-        <GridPanel title="Pipeline Latency & Feed" dot="info" span={6} bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <GridPanel
+          title="Pipeline Latency & Feed"
+          dot="info"
+          span={6}
+          bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3"
+        >
           <HStat label="Snapshot Build" value={fmtMs(lat?.dashboard.snapshotBuildMs.latestMs ?? null)} tone="neutral" />
           <HStat label="Snapshot Age" value={fmtMs(lat?.dashboard.snapshotAgeMs ?? null)} tone="neutral" />
           <HStat label="Stream Interval" value={fmtMs(lat?.dashboard.streamIntervalMs ?? null)} tone="neutral" />
           <HStat label="DB Insert" value={fmtMs(lat?.persistence.insertMs.p50Ms ?? null)} tone="neutral" />
           <HStat label="DB Update" value={fmtMs(lat?.persistence.updateMs.p50Ms ?? null)} tone="neutral" />
           <HStat label="Hot Gate" value={fmtMs(lat?.execution.hotGateMs.p50Ms ?? null)} tone="neutral" />
-          <HStat label="Chainlink Tick" value={fmtRelative(snap.diagnostics?.polymarket?.lastChainlinkTickAt ?? null, now)} tone="neutral" />
-          <HStat label="Analytics Mode" value={snap.analytics?.realtime?.mode === "hot_cache" ? "HOT" : "DB"} tone={snap.analytics?.realtime?.stale ? "stale" : "live"} />
-          <HStat label="Discovery Err" value={snap.discovery.lastDiscoveryError ? "ERROR" : "OK"} tone={snap.discovery.lastDiscoveryError ? "halt" : "live"} />
+          <HStat
+            label="Chainlink Tick"
+            value={fmtRelative(snap.diagnostics?.polymarket?.lastChainlinkTickAt ?? null, now)}
+            tone="neutral"
+          />
+          <HStat
+            label="Analytics Mode"
+            value={snap.analytics?.realtime?.mode === "hot_cache" ? "HOT" : "DB"}
+            tone={snap.analytics?.realtime?.stale ? "stale" : "live"}
+          />
+          <HStat
+            label="Discovery Err"
+            value={snap.discovery.lastDiscoveryError ? "ERROR" : "OK"}
+            tone={snap.discovery.lastDiscoveryError ? "halt" : "live"}
+          />
         </GridPanel>
       </Grid>
 
@@ -100,7 +154,9 @@ function VenueReady({ label, v, accent }: { label: string; v: VenueExecutionRead
         </div>
         <span className="flex items-center gap-1.5">
           <StatusDot tone={v.ready ? "live" : "halt"} className="size-1.5" />
-          <span className={cn("font-mono text-[10px] uppercase", v.ready ? "text-up" : "text-down")}>{v.ready ? "READY" : "NOT READY"}</span>
+          <span className={cn("font-mono text-[10px] uppercase", v.ready ? "text-up" : "text-down")}>
+            {v.ready ? "READY" : "NOT READY"}
+          </span>
         </span>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10.5px]">
@@ -134,13 +190,16 @@ function StreamRow({
         <StatusDot tone={tone} pulse={tone === "live"} className="size-1.5" />
         <span className="text-[11px] text-fg-secondary">{label}</span>
       </div>
-      <span className="font-mono text-[10px] tabular-nums text-fg-muted">{lastEventAt ? fmtRelative(lastEventAt, now) : "—"}</span>
+      <span className="font-mono text-[10px] tabular-nums text-fg-muted">
+        {lastEventAt ? fmtRelative(lastEventAt, now) : "—"}
+      </span>
     </div>
   );
 }
 
 function HStat({ label, value, tone }: { label: string; value: string; tone: StatusTone | "neutral" }) {
-  const text = tone === "live" ? "text-up" : tone === "halt" ? "text-down" : tone === "stale" ? "text-amber" : "text-fg";
+  const text =
+    tone === "live" ? "text-up" : tone === "halt" ? "text-down" : tone === "stale" ? "text-amber" : "text-fg";
   return (
     <div className="rounded-sm border border-line/60 bg-surface-2/30 px-2.5 py-2">
       <div className="font-mono text-[9px] uppercase tracking-wide text-fg-muted">{label}</div>
@@ -172,7 +231,10 @@ function LogTape({ logs, now }: { logs: DashboardLogEntry[]; now: number }) {
       {logs.map((l, i) => {
         const t = new Date(l.timestamp).getTime();
         return (
-          <div key={i} className="flex min-w-[560px] items-center gap-3 border-b border-line/30 px-3 py-1 hover:bg-surface-2/40">
+          <div
+            key={i}
+            className="flex min-w-[560px] items-center gap-3 border-b border-line/30 px-3 py-1 hover:bg-surface-2/40"
+          >
             <StatusDot tone={sevTone[l.severity]} className="size-1" />
             <span className="w-20 shrink-0 tabular-nums text-fg-faint">{fmtClock(t, true).slice(0, 12)}</span>
             <span

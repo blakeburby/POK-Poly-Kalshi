@@ -34,33 +34,33 @@ Production state after containment:
 
 All submitted rows by strategy:
 
-| Strategy | Rows | Filled | Partials | Realized Sum | Avg Projected Edge | Avg Expected Executable Edge |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| null/early | 1017 | 6 | 3 | 0.0000 | 0.0500 | null |
-| polymarket_first_exact | 870 | 18 | 467 | 11.9479 | 0.0242 | -1.3321 |
-| parallel_fak | 113 | 3 | 103 | -3.9341 | 0.0300 | null |
-| parallel_fok | 101 | 9 | 80 | -1.7018 | 0.0324 | null |
-| parallel_limit_rest | 4 | 1 | 3 | 0.0600 | 0.0700 | null |
-| sequential_hedge | 2 | 0 | 2 | 0.0000 | 0.1150 | null |
-| parallel_canary | 1 | 0 | 0 | 0.0464 | 0.0500 | null |
+| Strategy               | Rows | Filled | Partials | Realized Sum | Avg Projected Edge | Avg Expected Executable Edge |
+| ---------------------- | ---: | -----: | -------: | -----------: | -----------------: | ---------------------------: |
+| null/early             | 1017 |      6 |        3 |       0.0000 |             0.0500 |                         null |
+| polymarket_first_exact |  870 |     18 |      467 |      11.9479 |             0.0242 |                      -1.3321 |
+| parallel_fak           |  113 |      3 |      103 |      -3.9341 |             0.0300 |                         null |
+| parallel_fok           |  101 |      9 |       80 |      -1.7018 |             0.0324 |                         null |
+| parallel_limit_rest    |    4 |      1 |        3 |       0.0600 |             0.0700 |                         null |
+| sequential_hedge       |    2 |      0 |        2 |       0.0000 |             0.1150 |                         null |
+| parallel_canary        |    1 |      0 |        0 |       0.0464 |             0.0500 |                         null |
 
 Recent rows since `2026-05-28`:
 
-| Class | Rows | Partials | Realized Sum | Avg Expected Executable Edge |
-| --- | ---: | ---: | ---: | ---: |
-| Polymarket-only | 226 | 226 | 0.0000 | -3.0577 |
-| Zero-both | 71 | 0 | 0.0000 | -1.7999 |
-| Near mismatch <= 1 | 13 | 13 | 0.6675 | -1.5447 |
+| Class              | Rows | Partials | Realized Sum | Avg Expected Executable Edge |
+| ------------------ | ---: | -------: | -----------: | ---------------------------: |
+| Polymarket-only    |  226 |      226 |       0.0000 |                      -3.0577 |
+| Zero-both          |   71 |        0 |       0.0000 |                      -1.7999 |
+| Near mismatch <= 1 |   13 |       13 |       0.6675 |                      -1.5447 |
 
 Recent Polymarket-only exposure by day:
 
-| Day UTC | Rows | Polymarket Shares | Avg Fill Price |
-| --- | ---: | ---: | ---: |
-| 2026-05-28 | 26 | 214.5571 | 0.6604 |
-| 2026-05-29 | 31 | 259.6003 | 0.4503 |
-| 2026-05-30 | 77 | 639.6845 | 0.5506 |
-| 2026-05-31 | 83 | 688.4309 | 0.5783 |
-| 2026-06-01 | 9 | 74.2263 | 0.7200 |
+| Day UTC    | Rows | Polymarket Shares | Avg Fill Price |
+| ---------- | ---: | ----------------: | -------------: |
+| 2026-05-28 |   26 |          214.5571 |         0.6604 |
+| 2026-05-29 |   31 |          259.6003 |         0.4503 |
+| 2026-05-30 |   77 |          639.6845 |         0.5506 |
+| 2026-05-31 |   83 |          688.4309 |         0.5783 |
+| 2026-06-01 |    9 |           74.2263 |         0.7200 |
 
 The trade cap worked mechanically at `3` attempts per expiry, but that still allowed repeated unhedged or partial attempts in the same expiry window.
 
@@ -119,4 +119,3 @@ Do not resume `ARB_ENABLED=true` until:
 - Current Polymarket-only exposure is reconciled.
 - `/health` and `/dashboard/snapshot` show venues and user streams ready.
 - A dry run confirms the bot skips before Polymarket when Kalshi collateral is insufficient.
-

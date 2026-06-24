@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, validateConfig } from "../src/config";
-import { depthWeightedAsk, evaluateLiveQuoteQuality, executableLiquidityWithinBand, captureShadowLadder, expectedKalshiFeePerShare, selectExecutableSize } from "../src/execution/quote-quality";
+import {
+  depthWeightedAsk,
+  evaluateLiveQuoteQuality,
+  executableLiquidityWithinBand,
+  captureShadowLadder,
+  expectedKalshiFeePerShare,
+  selectExecutableSize,
+} from "../src/execution/quote-quality";
 import { buildGuaranteedCandidate } from "../src/scanner/payoff";
 import type { AppConfig } from "../src/config";
 import type { BinaryContract } from "../src/types";
@@ -36,12 +43,19 @@ test("config defaults the live minimum edge to one cent", () => {
   assert.equal(loadConfig({ LIVE_QUOTE_SKEW_BOTH_FRESH_ENABLED: "false" }).liveQuoteSkewBothFreshEnabled, false);
   // P1.4: the hot-path balance-coverage relaxation defaults ON; opt out restores the strict warmed-coverage skip.
   assert.equal(loadConfig({}).liveHotReadinessBalanceCoverageEnabled, true);
-  assert.equal(loadConfig({ LIVE_HOT_READINESS_BALANCE_COVERAGE_ENABLED: "false" }).liveHotReadinessBalanceCoverageEnabled, false);
+  assert.equal(
+    loadConfig({ LIVE_HOT_READINESS_BALANCE_COVERAGE_ENABLED: "false" }).liveHotReadinessBalanceCoverageEnabled,
+    false,
+  );
 });
 
 test("validateConfig fails fast on missing live secrets and passes monitor-only / fully-credentialed boots", () => {
   const kalshiEnv = { KALSHI_API_KEY_ID: "k", KALSHI_PRIVATE_KEY: "pk" };
-  const fullCfg = loadConfig({ DATABASE_URL: "postgres://x", POLYMARKET_PRIVATE_KEY: "0xkey", POLYMARKET_SIGNATURE_TYPE: "0" });
+  const fullCfg = loadConfig({
+    DATABASE_URL: "postgres://x",
+    POLYMARKET_PRIVATE_KEY: "0xkey",
+    POLYMARKET_SIGNATURE_TYPE: "0",
+  });
 
   // Live + every credential present -> boots.
   assert.doesNotThrow(() => validateConfig(fullCfg, kalshiEnv));
@@ -49,11 +63,18 @@ test("validateConfig fails fast on missing live secrets and passes monitor-only 
   assert.doesNotThrow(() => validateConfig(fullCfg, { KALSHI_API_KEY_ID: "k", KALSHI_PRIVATE_KEY_B64: "b64" }));
 
   // Live + missing Polymarket key / Kalshi creds -> aborts with a legible message.
-  assert.throws(() => validateConfig(loadConfig({ DATABASE_URL: "postgres://x" }), kalshiEnv), /POLYMARKET_PRIVATE_KEY/);
+  assert.throws(
+    () => validateConfig(loadConfig({ DATABASE_URL: "postgres://x" }), kalshiEnv),
+    /POLYMARKET_PRIVATE_KEY/,
+  );
   assert.throws(() => validateConfig(fullCfg, {}), /KALSHI_API_KEY_ID/);
   // A proxy/safe signature type (non-EOA) requires the funder address.
   assert.throws(
-    () => validateConfig(loadConfig({ DATABASE_URL: "postgres://x", POLYMARKET_PRIVATE_KEY: "0xkey", POLYMARKET_SIGNATURE_TYPE: "2" }), kalshiEnv),
+    () =>
+      validateConfig(
+        loadConfig({ DATABASE_URL: "postgres://x", POLYMARKET_PRIVATE_KEY: "0xkey", POLYMARKET_SIGNATURE_TYPE: "2" }),
+        kalshiEnv,
+      ),
     /FUNDER/,
   );
 
@@ -70,16 +91,22 @@ test("W2: dynamic sizing config defaults to a single-point band (byte-identical)
   assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5", LIVE_MAX_ORDER_SIZE: "20" }).liveMaxOrderSize, 20);
   assert.equal(loadConfig({ LIVE_ORDER_SIZE: "5", LIVE_MAX_ORDER_SIZE: "3" }).liveMaxOrderSize, 5); // clamped >= min
   // Guard: dynamic sizing requires serialized execution (the selector uses a per-execution field).
-  assert.throws(() => loadConfig({ LIVE_DYNAMIC_SIZING_ENABLED: "true", ARB_EXECUTION_CONCURRENCY: "2" }), /ARB_EXECUTION_CONCURRENCY=1/);
+  assert.throws(
+    () => loadConfig({ LIVE_DYNAMIC_SIZING_ENABLED: "true", ARB_EXECUTION_CONCURRENCY: "2" }),
+    /ARB_EXECUTION_CONCURRENCY=1/,
+  );
   assert.doesNotThrow(() => loadConfig({ LIVE_DYNAMIC_SIZING_ENABLED: "true", ARB_EXECUTION_CONCURRENCY: "1" }));
 });
 
 test("depthWeightedAsk computes order-size VWAP and fails when depth is insufficient", () => {
-  const vwap = depthWeightedAsk([
-    { price: 0.4, size: 2 },
-    { price: 0.42, size: 3 },
-    { price: 0.6, size: 10 },
-  ], 5);
+  const vwap = depthWeightedAsk(
+    [
+      { price: 0.4, size: 2 },
+      { price: 0.42, size: 3 },
+      { price: 0.6, size: 10 },
+    ],
+    5,
+  );
 
   assert.equal(vwap?.vwap, 0.412);
   assert.equal(vwap?.worstAsk, 0.42);
@@ -116,27 +143,52 @@ test("live quote quality rejects stale, skewed, shallow, tick-changing, and raw 
   assert.equal(ok.ok, true);
   assert.equal(ok.snapshot.projectedEdgeAfterFees, 0.1);
 
-  const stale = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 751 }] }, config, now);
+  const stale = evaluateLiveQuoteQuality(
+    candidate,
+    { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 751 }] },
+    config,
+    now,
+  );
   assert.equal(stale.ok, false);
   assert.match(stale.reason ?? "", /stale/);
 
   // Strict-mode (flag off): an absolute quote skew over the sync limit is rejected even when both books are fresh.
-  const skewed = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 300 }] }, safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSkewBothFreshEnabled: false }), now);
+  const skewed = evaluateLiveQuoteQuality(
+    candidate,
+    { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 300 }] },
+    safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSkewBothFreshEnabled: false }),
+    now,
+  );
   assert.equal(skewed.ok, false);
   assert.match(skewed.reason ?? "", /quote skew/);
 
-  const shallow = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, yesAskLevels: [{ price: 0.4, size: 4 }] }] }, config, now);
+  const shallow = evaluateLiveQuoteQuality(
+    candidate,
+    { kalshi: [kalshi], polymarket: [{ ...poly, yesAskLevels: [{ price: 0.4, size: 4 }] }] },
+    config,
+    now,
+  );
   assert.equal(shallow.ok, false);
   assert.match(shallow.reason ?? "", /depth/);
 
-  const tickChanged = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, tickSize: 0.01, tickSizeChangedAt: now - 100 }] }, config, now);
+  const tickChanged = evaluateLiveQuoteQuality(
+    candidate,
+    { kalshi: [kalshi], polymarket: [{ ...poly, tickSize: 0.01, tickSizeChangedAt: now - 100 }] },
+    config,
+    now,
+  );
   assert.equal(tickChanged.ok, false);
   assert.match(tickChanged.reason ?? "", /tick size/);
 
-  const noEdge = evaluateLiveQuoteQuality(candidate, {
-    kalshi: [{ ...kalshi, noAsk: 0.56, noAskLevels: [{ price: 0.56, size: 5 }] }],
-    polymarket: [{ ...poly, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }] }],
-  }, config, now);
+  const noEdge = evaluateLiveQuoteQuality(
+    candidate,
+    {
+      kalshi: [{ ...kalshi, noAsk: 0.56, noAskLevels: [{ price: 0.56, size: 5 }] }],
+      polymarket: [{ ...poly, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }] }],
+    },
+    config,
+    now,
+  );
   assert.equal(noEdge.ok, false);
   assert.match(noEdge.reason ?? "", /cushioned executable edge 0.0400 below threshold 0.0500/);
 });
@@ -164,17 +216,32 @@ test("P1.3: skew gate relaxes when both books are individually fresh, keeps prot
   const books = { kalshi: [kalshi], polymarket: [poly] };
 
   // Default (flag on): both books within liveQuoteMaxAgeMs (1000ms) -> skew alone no longer drops a fillable pair.
-  const relaxed = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250 }), now);
+  const relaxed = evaluateLiveQuoteQuality(
+    candidate,
+    books,
+    safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250 }),
+    now,
+  );
   assert.equal(relaxed.ok, true);
 
   // Flag off: strict absolute-skew gate still rejects the same pair.
-  const strict = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250, liveQuoteSkewBothFreshEnabled: false }), now);
+  const strict = evaluateLiveQuoteQuality(
+    candidate,
+    books,
+    safetyConfig({ liveQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250, liveQuoteSkewBothFreshEnabled: false }),
+    now,
+  );
   assert.equal(strict.ok, false);
   assert.match(strict.reason ?? "", /quote skew/);
 
   // Default (flag on) but the older (Polymarket) book is beyond the tight liveQuoteMaxAgeMs while still inside its
   // own laxer freshness bound -> the skew protection still bites (we don't trade a genuinely stale-vs-fresh pair).
-  const stillStale = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveQuoteMaxAgeMs: 200, livePolymarketQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250 }), now);
+  const stillStale = evaluateLiveQuoteQuality(
+    candidate,
+    books,
+    safetyConfig({ liveQuoteMaxAgeMs: 200, livePolymarketQuoteMaxAgeMs: 1_000, liveQuoteSyncMaxSkewMs: 250 }),
+    now,
+  );
   assert.equal(stillStale.ok, false);
   assert.match(stillStale.reason ?? "", /quote skew/);
 });
@@ -212,10 +279,15 @@ test("live quote quality enforces minimum book depth above order size without ra
   assert.equal(enoughDepth.snapshot.polymarket?.maxBuyPrice, 0.4);
   assert.deepEqual(enoughDepth.snapshot.polymarket?.levelsConsumed, [{ price: 0.4, size: 5 }]);
 
-  const underDepth = evaluateLiveQuoteQuality(candidate, {
-    kalshi: [kalshi],
-    polymarket: [{ ...poly, yesAskLevels: [{ price: 0.4, size: 5 }] }],
-  }, config, now);
+  const underDepth = evaluateLiveQuoteQuality(
+    candidate,
+    {
+      kalshi: [kalshi],
+      polymarket: [{ ...poly, yesAskLevels: [{ price: 0.4, size: 5 }] }],
+    },
+    config,
+    now,
+  );
   assert.equal(underDepth.ok, false);
   assert.match(underDepth.reason ?? "", /polymarket yes depth 5 below required 10/);
 });
@@ -247,10 +319,15 @@ test("live quote quality uses raw VWAP edge without extra live edge buffers", ()
   assert.equal(fiveCentEdge.snapshot.projectedEdge, 0.05);
   assert.equal(fiveCentEdge.snapshot.projectedEdgeAfterFees, 0.05);
 
-  const fourCentEdge = evaluateLiveQuoteQuality(candidate, {
-    kalshi: [{ ...kalshi, noAsk: 0.56, noAskLevels: [{ price: 0.56, size: 5 }] }],
-    polymarket: [poly],
-  }, config, now);
+  const fourCentEdge = evaluateLiveQuoteQuality(
+    candidate,
+    {
+      kalshi: [{ ...kalshi, noAsk: 0.56, noAskLevels: [{ price: 0.56, size: 5 }] }],
+      polymarket: [poly],
+    },
+    config,
+    now,
+  );
   assert.equal(fourCentEdge.ok, false);
   assert.equal(fourCentEdge.snapshot.projectedEdge, 0.04);
   assert.match(fourCentEdge.reason ?? "", /cushioned executable edge 0.0400 below threshold 0.0500/);
@@ -288,10 +365,15 @@ test("live quote quality gates on cushioned executable edge and applies cushion 
   assert.equal(rawFiveCentEdge.polymarketMaxBuyPrice, 0.42);
   assert.match(rawFiveCentEdge.reason ?? "", /cushioned executable edge 0.0100 below threshold 0.0500/);
 
-  const rawNineCentEdge = evaluateLiveQuoteQuality(candidate, {
-    kalshi: [{ ...kalshi, noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 5 }] }],
-    polymarket: [poly],
-  }, config, now);
+  const rawNineCentEdge = evaluateLiveQuoteQuality(
+    candidate,
+    {
+      kalshi: [{ ...kalshi, noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 5 }] }],
+      polymarket: [poly],
+    },
+    config,
+    now,
+  );
   assert.equal(rawNineCentEdge.ok, true);
   assert.equal(rawNineCentEdge.snapshot.projectedEdge, 0.09);
   assert.equal(rawNineCentEdge.snapshot.projectedEdgeAfterFees, 0.05);
@@ -312,12 +394,21 @@ test("W1: expectedKalshiFeePerShare models the venue fee (~0.07*p*(1-p), 0 at th
 test("W1: fee-aware gate subtracts the expected Kalshi fee from the edge; byte-identical when off", () => {
   const now = 1_800_000_000_000;
   const poly = contract({
-    venue: "polymarket", contractId: "poly", strike: 1500,
-    yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }], yesTokenId: "yes-token", updatedAt: now,
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
   });
   const kalshi = contract({
-    venue: "kalshi", contractId: "kalshi", strike: 1502,
-    noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 5 }], updatedAt: now,
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.51,
+    noAskLevels: [{ price: 0.51, size: 5 }],
+    updatedAt: now,
   });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
@@ -331,7 +422,12 @@ test("W1: fee-aware gate subtracts the expected Kalshi fee from the edge; byte-i
 
   // Flag ON: subtract expectedKalshiFee(kalshiVwap 0.51)=0.0175 -> after-fee edge 0.0325 < 0.05 -> correctly
   // rejected (the trade was only "profitable" because the old gate ignored fees).
-  const on = evaluateLiveQuoteQuality(candidate, books, safetyConfig({ liveTakerPriceCushionCents: 2, liveFeeAwareGateEnabled: true }), now);
+  const on = evaluateLiveQuoteQuality(
+    candidate,
+    books,
+    safetyConfig({ liveTakerPriceCushionCents: 2, liveFeeAwareGateEnabled: true }),
+    now,
+  );
   assert.equal(on.snapshot.projectedEdgeAtLimit, 0.05);
   assert.equal(on.snapshot.expectedKalshiFeePerShare, 0.0175);
   assert.equal(on.snapshot.projectedEdgeAfterFees, 0.0325);
@@ -341,58 +437,181 @@ test("W1: fee-aware gate subtracts the expected Kalshi fee from the edge; byte-i
 
 test("W2: selectExecutableSize returns liveOrderSize when dynamic sizing is off or the band is a single point", () => {
   const now = 1_800_000_000_000;
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 50 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 50 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
   // off -> static
-  assert.equal(selectExecutableSize(candidate, books, safetyConfig({ liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20 }), null, now), 5);
+  assert.equal(
+    selectExecutableSize(
+      candidate,
+      books,
+      safetyConfig({ liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20 }),
+      null,
+      now,
+    ),
+    5,
+  );
   // on but single-point band -> static
-  assert.equal(selectExecutableSize(candidate, books, safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 5 }), null, now), 5);
+  assert.equal(
+    selectExecutableSize(
+      candidate,
+      books,
+      safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 5 }),
+      null,
+      now,
+    ),
+    5,
+  );
 });
 
 test("W2: selectExecutableSize scales UP to the largest size that still clears the gate on deep books", () => {
   const now = 1_800_000_000_000;
   // Polymarket deep & tight; Kalshi deep enough at a price that keeps the edge >= 0.05 up to size 20.
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 50 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 50 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
   // cushion 0, edge = 1-(0.5+0.4)=0.10 >= 0.05 at every size up to 50; slippage 0 -> picks the MAX (20).
-  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 10 });
+  const config = safetyConfig({
+    liveDynamicSizingEnabled: true,
+    liveOrderSize: 5,
+    liveMinOrderSize: 5,
+    liveMaxOrderSize: 20,
+    liveDynamicSizingMaxKalshiSlippageCents: 10,
+  });
   assert.equal(selectExecutableSize(candidate, books, config, null, now), 20);
 });
 
 test("W2: selectExecutableSize CAPS at the size where thin Kalshi depth pushes the edge below threshold", () => {
   const now = 1_800_000_000_000;
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 50 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
   // Kalshi: 10 shares at 0.51 (edge 0.09), then a cliff to 0.60 (edge 0.00 < 0.05). Sizes >10 fail the gate.
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.51, noAskLevels: [{ price: 0.51, size: 10 }, { price: 0.6, size: 50 }], updatedAt: now });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.51,
+    noAskLevels: [
+      { price: 0.51, size: 10 },
+      { price: 0.6, size: 50 },
+    ],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
-  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 20 });
+  const config = safetyConfig({
+    liveDynamicSizingEnabled: true,
+    liveOrderSize: 5,
+    liveMinOrderSize: 5,
+    liveMaxOrderSize: 20,
+    liveDynamicSizingMaxKalshiSlippageCents: 20,
+  });
   assert.equal(selectExecutableSize(candidate, books, config, null, now), 10);
 });
 
 test("W2: selectExecutableSize CAPS on the Kalshi slippage band even when the edge would still clear", () => {
   const now = 1_800_000_000_000;
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.3, yesAskLevels: [{ price: 0.3, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.3,
+    yesAskLevels: [{ price: 0.3, size: 50 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
   // Kalshi: 10 @ 0.5, then 0.52 (edge still 1-(0.52+0.3)=0.18 >= 0.05, but worstAsk-topAsk = 2c slippage).
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }, { price: 0.52, size: 50 }], updatedAt: now });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [
+      { price: 0.5, size: 10 },
+      { price: 0.52, size: 50 },
+    ],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
   // 1c slippage band -> sizes >10 (which need the 0.52 level, 2c slippage) are rejected -> cap at 10.
-  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 1 });
+  const config = safetyConfig({
+    liveDynamicSizingEnabled: true,
+    liveOrderSize: 5,
+    liveMinOrderSize: 5,
+    liveMaxOrderSize: 20,
+    liveDynamicSizingMaxKalshiSlippageCents: 1,
+  });
   assert.equal(selectExecutableSize(candidate, books, config, null, now), 10);
 });
 
 test("M2: selectExecutableSize sizes DOWN to fit available Kalshi cash instead of skipping the window", () => {
   const now = 1_800_000_000_000;
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 50 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 50 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
-  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 10 });
+  const config = safetyConfig({
+    liveDynamicSizingEnabled: true,
+    liveOrderSize: 5,
+    liveMinOrderSize: 5,
+    liveMaxOrderSize: 20,
+    liveDynamicSizingMaxKalshiSlippageCents: 10,
+  });
   // Cash-unaware (null): deep book -> picks the MAX.
   assert.equal(selectExecutableSize(candidate, books, config, null, now), 20);
   // Cash-aware with ~$6: the size-20 Kalshi reserve (~$10) doesn't fit, so it sizes DOWN to the largest
@@ -403,11 +622,33 @@ test("M2: selectExecutableSize sizes DOWN to fit available Kalshi cash instead o
 
 test("W2: selectExecutableSize respects the bankroll bound (caps when Kalshi collateral exceeds cash)", () => {
   const now = 1_800_000_000_000;
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 50 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 50 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 50 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
   const books = { kalshi: [kalshi], polymarket: [poly] };
-  const config = safetyConfig({ liveDynamicSizingEnabled: true, liveOrderSize: 5, liveMinOrderSize: 5, liveMaxOrderSize: 20, liveDynamicSizingMaxKalshiSlippageCents: 10, liveCollateralBufferDollars: 0.25 });
+  const config = safetyConfig({
+    liveDynamicSizingEnabled: true,
+    liveOrderSize: 5,
+    liveMinOrderSize: 5,
+    liveMaxOrderSize: 20,
+    liveDynamicSizingMaxKalshiSlippageCents: 10,
+    liveCollateralBufferDollars: 0.25,
+  });
   // Kalshi collateral at size S ~= S*0.5 + 0.25. Cash $5.5 -> max S ~= 10 (10*0.5+0.25=5.25 <= 5.5; 11 -> 5.75 > 5.5).
   assert.equal(selectExecutableSize(candidate, books, config, 5.5, now), 10);
 });
@@ -462,7 +703,11 @@ test("first-leg cross offset (P1-5) deepens only the Polymarket limit and the ed
 test("Polymarket leg honors a tighter freshness bound than Kalshi (P2-10)", () => {
   const now = 1_800_000_000_000;
   // General bar 1000ms; Polymarket tightened to 300ms (the staleness-prone CLOB leg).
-  const config = safetyConfig({ liveQuoteMaxAgeMs: 1_000, livePolymarketQuoteMaxAgeMs: 300, liveQuoteSyncMaxSkewMs: 500 });
+  const config = safetyConfig({
+    liveQuoteMaxAgeMs: 1_000,
+    livePolymarketQuoteMaxAgeMs: 300,
+    liveQuoteSyncMaxSkewMs: 500,
+  });
   const poly = contract({
     venue: "polymarket",
     contractId: "poly",
@@ -488,7 +733,12 @@ test("Polymarket leg honors a tighter freshness bound than Kalshi (P2-10)", () =
   assert.match(stale.reason ?? "", /polymarket .* quote is stale: age 400ms exceeds 300ms/);
 
   // A fresher Polymarket quote (200ms) passes both bars.
-  const fresh = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 200 }] }, config, now);
+  const fresh = evaluateLiveQuoteQuality(
+    candidate,
+    { kalshi: [kalshi], polymarket: [{ ...poly, updatedAt: now - 200 }] },
+    config,
+    now,
+  );
   assert.equal(fresh.ok, true);
 });
 
@@ -522,10 +772,15 @@ test("live quote quality accepts one-cent cushioned edge and rejects just below 
   assert.equal(oneCentEdge.snapshot.projectedPremiumAtLimit, 0.99);
   assert.equal(oneCentEdge.snapshot.projectedEdgeAfterFees, 0.01);
 
-  const belowOneCent = evaluateLiveQuoteQuality(candidate, {
-    kalshi: [kalshi],
-    polymarket: [{ ...poly, yesAsk: 0.4301, yesAskLevels: [{ price: 0.4301, size: 5 }] }],
-  }, config, now);
+  const belowOneCent = evaluateLiveQuoteQuality(
+    candidate,
+    {
+      kalshi: [kalshi],
+      polymarket: [{ ...poly, yesAsk: 0.4301, yesAskLevels: [{ price: 0.4301, size: 5 }] }],
+    },
+    config,
+    now,
+  );
   assert.equal(belowOneCent.ok, false);
   assert.equal(belowOneCent.snapshot.projectedEdgeAfterFees, 0.0099);
   assert.match(belowOneCent.reason ?? "", /cushioned executable edge 0.0099 below threshold 0.0100/);
@@ -575,8 +830,23 @@ test("executableLiquidityWithinBand sums only contracts within the price band of
 test("T2.5 anti-dust guard is default-inert: serialized snapshot omits the guard fields and behavior is unchanged", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig(); // both knobs default 0
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 5 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 5 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 5 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 5 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
@@ -589,10 +859,33 @@ test("T2.5 anti-dust guard is default-inert: serialized snapshot omits the guard
 
 test("T2.5 liquidity guard rejects a single-lot dust quote at size 1 that the edge gate alone would accept", () => {
   const now = 1_800_000_000_000;
-  const config = safetyConfig({ liveOrderSize: 1, liveMinBookDepthShares: 5, liveMinExecutableLiquidityShares: 5, liveMaxExecutableAskSlippageCents: 2 });
+  const config = safetyConfig({
+    liveOrderSize: 1,
+    liveMinBookDepthShares: 5,
+    liveMinExecutableLiquidityShares: 5,
+    liveMaxExecutableAskSlippageCents: 2,
+  });
   // One real contract at the marketable top (0.40), the rest of the book far above the band.
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.95, size: 50 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 1 },
+      { price: 0.95, size: 50 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 10 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
@@ -603,9 +896,29 @@ test("T2.5 liquidity guard rejects a single-lot dust quote at size 1 that the ed
 
 test("T2.5 guard passes a genuine shallow-real book at size 1", () => {
   const now = 1_800_000_000_000;
-  const config = safetyConfig({ liveOrderSize: 1, liveMinBookDepthShares: 5, liveMinExecutableLiquidityShares: 5, liveMaxExecutableAskSlippageCents: 2 });
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 6 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 6 }], updatedAt: now });
+  const config = safetyConfig({
+    liveOrderSize: 1,
+    liveMinBookDepthShares: 5,
+    liveMinExecutableLiquidityShares: 5,
+    liveMaxExecutableAskSlippageCents: 2,
+  });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [{ price: 0.4, size: 6 }],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 6 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
@@ -617,8 +930,26 @@ test("T2.5 guard passes a genuine shallow-real book at size 1", () => {
 test("T2.5 slippage guard independently rejects a thin top backed only by far-away depth", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig({ liveOrderSize: 5, liveMinBookDepthShares: 5, liveMaxExecutableAskSlippageCents: 1 });
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.6, size: 10 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 1 },
+      { price: 0.6, size: 10 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 10 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
@@ -629,8 +960,26 @@ test("T2.5 slippage guard independently rejects a thin top backed only by far-aw
 test("T2.5 guard composes: an existing staleness reason still wins over the guard", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig({ liveOrderSize: 1, liveMinBookDepthShares: 5, liveMinExecutableLiquidityShares: 5 });
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.95, size: 50 }], yesTokenId: "yes-token", updatedAt: now - 5_000 });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.5, noAskLevels: [{ price: 0.5, size: 10 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 1 },
+      { price: 0.95, size: 50 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now - 5_000,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.5,
+    noAskLevels: [{ price: 0.5, size: 10 }],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const result = evaluateLiveQuoteQuality(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
@@ -643,8 +992,29 @@ test("T2.5 guard composes: an existing staleness reason still wins over the guar
 test("captureShadowLadder probes each configured size and flags insufficient depth", () => {
   const now = 1_800_000_000_000;
   const config = safetyConfig({ liveOrderSize: 5, liveShadowLadderProbeSizes: [1, 2, 3, 5, 8] });
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 2 }, { price: 0.42, size: 3 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.4, noAskLevels: [{ price: 0.4, size: 2 }, { price: 0.42, size: 3 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 2 },
+      { price: 0.42, size: 3 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.4,
+    noAskLevels: [
+      { price: 0.4, size: 2 },
+      { price: 0.42, size: 3 },
+    ],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const ladder = captureShadowLadder(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);
@@ -665,8 +1035,29 @@ test("captureShadowLadder surfaces phantom collapse: large top-of-book edge that
   const now = 1_800_000_000_000;
   const config = safetyConfig({ liveOrderSize: 5, liveShadowLadderProbeSizes: [1, 5, 11] });
   // topAsk sum 0.88 (>=10c top-of-book edge) but the size-5 VWAP collapses the edge to ~3c.
-  const poly = contract({ venue: "polymarket", contractId: "poly", strike: 1500, yesAsk: 0.4, yesAskLevels: [{ price: 0.4, size: 1 }, { price: 0.5, size: 9 }], yesTokenId: "yes-token", updatedAt: now });
-  const kalshi = contract({ venue: "kalshi", contractId: "kalshi", strike: 1502, noAsk: 0.48, noAskLevels: [{ price: 0.48, size: 1 }, { price: 0.49, size: 9 }], updatedAt: now });
+  const poly = contract({
+    venue: "polymarket",
+    contractId: "poly",
+    strike: 1500,
+    yesAsk: 0.4,
+    yesAskLevels: [
+      { price: 0.4, size: 1 },
+      { price: 0.5, size: 9 },
+    ],
+    yesTokenId: "yes-token",
+    updatedAt: now,
+  });
+  const kalshi = contract({
+    venue: "kalshi",
+    contractId: "kalshi",
+    strike: 1502,
+    noAsk: 0.48,
+    noAskLevels: [
+      { price: 0.48, size: 1 },
+      { price: 0.49, size: 9 },
+    ],
+    updatedAt: now,
+  });
   const candidate = candidateFrom(poly, kalshi);
 
   const ladder = captureShadowLadder(candidate, { kalshi: [kalshi], polymarket: [poly] }, config, now);

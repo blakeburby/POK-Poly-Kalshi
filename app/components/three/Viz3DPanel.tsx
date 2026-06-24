@@ -7,7 +7,9 @@ import type { Point3, AxisDef } from "./axes";
 const Scene3D = dynamic(() => import("./Scene3D").then((m) => m.Scene3D), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center font-mono text-[11px] text-fg-faint">initializing WebGL…</div>
+    <div className="flex h-full items-center justify-center font-mono text-[11px] text-fg-faint">
+      initializing WebGL…
+    </div>
   ),
 });
 
@@ -17,7 +19,10 @@ interface Props {
   plane?: { value: number; axisMin: number; axisMax: number; label: string };
 }
 
-class WebGLBoundary extends React.Component<{ children: React.ReactNode; fallback: React.ReactNode }, { failed: boolean }> {
+class WebGLBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { failed: boolean }
+> {
   state = { failed: false };
   static getDerivedStateFromError() {
     return { failed: true };
@@ -40,7 +45,9 @@ export function Viz3DPanel({ points, axes, plane }: Props) {
       {points.length ? (
         <Scene3D points={points} axes={axes} plane={plane} />
       ) : (
-        <div className="flex h-full items-center justify-center font-mono text-[11px] text-fg-faint">no data points</div>
+        <div className="flex h-full items-center justify-center font-mono text-[11px] text-fg-faint">
+          no data points
+        </div>
       )}
     </WebGLBoundary>
   );
