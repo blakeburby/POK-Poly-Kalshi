@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # 22.x supports `node --test --test-isolation=none` (the test script); 20.x does not
           cache: npm
 
       - name: Install dependencies
@@ -47,5 +47,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # 22.x supports `node --test --test-isolation=none` (the test script); 20.x does not
       - run: npx --yes prettier@3.4.2 --check .
