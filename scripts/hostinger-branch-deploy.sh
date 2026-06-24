@@ -107,7 +107,13 @@ apply_deploy_env_policy() {
   set_env_value LIVE_ORDER_SIZE 5
   set_env_value LIVE_MIN_BOOK_DEPTH_SHARES 10
   set_env_value LIVE_POLYMARKET_FIRST_MIN_FILL_SHARES ""
-  set_env_value LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES ""
+  # Overfill tolerance band = MAX_FILL_SHARES - LIVE_ORDER_SIZE. The default (order_size+1 = 6 -> band 1 share)
+  # is a FIXED absolute value that does not scale with dynamic sizing, so a benign, fully-hedged few-percent
+  # overfill on a large dynamic-size order (e.g. 31.43/30) blew past the 1-share band and hard-locked trading
+  # for ~18h (lockId 30). 15 -> band 10 shares: tolerates realistic hedged overfills (the residual is still
+  # cap-quarantined; the loss-cap below remains the independent unbounded-loss backstop). Operator choice
+  # 2026-06-24: "kill nuisance overfill halts, keep loss-cap".
+  set_env_value LIVE_POLYMARKET_FIRST_MAX_FILL_SHARES 15
   set_env_value LIVE_KALSHI_MIN_CASH_DOLLARS 5
   set_env_value LIVE_RECONCILE_BEFORE_TRADE true
   set_env_value LIVE_AUTO_HARDLOCKS_ENABLED true
