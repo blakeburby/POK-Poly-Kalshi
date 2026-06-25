@@ -60,7 +60,16 @@ export function pairByStrike(all: EnrichedPos[]): StrikePairing[] {
     if (pos.strike == null) continue;
     let row = map.get(pos.strike);
     if (!row) {
-      row = { strike: pos.strike, kShares: 0, pShares: 0, kVal: 0, pVal: 0, matched: 0, residual: 0, residualVenue: null };
+      row = {
+        strike: pos.strike,
+        kShares: 0,
+        pShares: 0,
+        kVal: 0,
+        pVal: 0,
+        matched: 0,
+        residual: 0,
+        residualVenue: null,
+      };
       map.set(pos.strike, row);
     }
     if (pos.venue === "kalshi") {
@@ -81,8 +90,14 @@ export function pairByStrike(all: EnrichedPos[]): StrikePairing[] {
 
 export function PositionsView({ snap }: { snap: DashboardSnapshot }) {
   const now = useNow(1000);
-  const kPos = React.useMemo(() => enrich(snap.tradingActivity?.kalshi.positions, "kalshi"), [snap.tradingActivity?.kalshi.positions]);
-  const pPos = React.useMemo(() => enrich(snap.tradingActivity?.polymarket.positions, "polymarket"), [snap.tradingActivity?.polymarket.positions]);
+  const kPos = React.useMemo(
+    () => enrich(snap.tradingActivity?.kalshi.positions, "kalshi"),
+    [snap.tradingActivity?.kalshi.positions],
+  );
+  const pPos = React.useMemo(
+    () => enrich(snap.tradingActivity?.polymarket.positions, "polymarket"),
+    [snap.tradingActivity?.polymarket.positions],
+  );
   const all = React.useMemo(() => [...kPos, ...pPos], [kPos, pPos]);
   const pairs = React.useMemo(() => pairByStrike(all), [all]);
 
@@ -105,8 +120,18 @@ export function PositionsView({ snap }: { snap: DashboardSnapshot }) {
   return (
     <ViewScroll>
       <Grid>
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Open Positions" value={fmtInt(all.length)} sub={`${kPos.length} K · ${pPos.length} P`} />
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Gross Value" value={fmtUsd(grossValue)} tone="cyan" />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Open Positions"
+          value={fmtInt(all.length)}
+          sub={`${kPos.length} K · ${pPos.length} P`}
+        />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Gross Value"
+          value={fmtUsd(grossValue)}
+          tone="cyan"
+        />
         <StatTile
           className="col-span-6 sm:col-span-3 xl:col-span-2"
           label="Hedged Strikes"
@@ -119,7 +144,9 @@ export function PositionsView({ snap }: { snap: DashboardSnapshot }) {
           label="Naked Residual"
           value={nakedShares > 0 ? fmtInt(nakedShares) : "Clean"}
           tone={nakedShares > 0 ? "amber" : "up"}
-          sub={nakedShares > 0 ? `${nakedStrikes.length} strike${nakedStrikes.length === 1 ? "" : "s"}` : "fully paired"}
+          sub={
+            nakedShares > 0 ? `${nakedStrikes.length} strike${nakedStrikes.length === 1 ? "" : "s"}` : "fully paired"
+          }
         />
       </Grid>
 
@@ -325,7 +352,9 @@ function OpenOrdersPanel({ snap, now }: { snap: DashboardSnapshot; now: number }
 
 function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
   return (
-    <th className={cn("px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}>
+    <th
+      className={cn("px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}
+    >
       {children}
     </th>
   );

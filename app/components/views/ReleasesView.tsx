@@ -94,10 +94,32 @@ export function ReleasesView() {
   return (
     <ViewScroll>
       <Grid>
-        <StatTile className="col-span-6 xl:col-span-3" label="Markets Tracked" value={String(releases.length)} tone="cyan" />
-        <StatTile className="col-span-6 xl:col-span-3" label="New · 24h" value={String(newCount)} tone={newCount > 0 ? "up" : "neutral"} />
-        <StatTile className="col-span-6 xl:col-span-3" label="Kalshi" value={String(kCount)} sub={errors.kalshi ? "feed error" : "open markets"} tone={errors.kalshi ? "amber" : "neutral"} />
-        <StatTile className="col-span-6 xl:col-span-3" label="Polymarket" value={String(pCount)} sub={errors.polymarket ? "feed error" : "active events"} tone={errors.polymarket ? "amber" : "neutral"} />
+        <StatTile
+          className="col-span-6 xl:col-span-3"
+          label="Markets Tracked"
+          value={String(releases.length)}
+          tone="cyan"
+        />
+        <StatTile
+          className="col-span-6 xl:col-span-3"
+          label="New · 24h"
+          value={String(newCount)}
+          tone={newCount > 0 ? "up" : "neutral"}
+        />
+        <StatTile
+          className="col-span-6 xl:col-span-3"
+          label="Kalshi"
+          value={String(kCount)}
+          sub={errors.kalshi ? "feed error" : "open markets"}
+          tone={errors.kalshi ? "amber" : "neutral"}
+        />
+        <StatTile
+          className="col-span-6 xl:col-span-3"
+          label="Polymarket"
+          value={String(pCount)}
+          sub={errors.polymarket ? "feed error" : "active events"}
+          tone={errors.polymarket ? "amber" : "neutral"}
+        />
       </Grid>
 
       <GridPanel
@@ -169,7 +191,9 @@ export function ReleasesView() {
                   return (
                     <tr key={`${r.venue}-${r.id}`} className="border-b border-line/30 hover:bg-surface-2/40">
                       <td className="px-3 py-2">
-                        <Badge variant={r.venue === "kalshi" ? "kalshi" : "poly"}>{r.venue === "kalshi" ? "K" : "P"}</Badge>
+                        <Badge variant={r.venue === "kalshi" ? "kalshi" : "poly"}>
+                          {r.venue === "kalshi" ? "K" : "P"}
+                        </Badge>
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
@@ -184,8 +208,12 @@ export function ReleasesView() {
                       <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-muted">
                         {fmtUntil(r.closeTime, now)}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-secondary">{fmtCompact(r.volume)}</td>
-                      <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-secondary">{fmtCompact(r.liquidity)}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-secondary">
+                        {fmtCompact(r.volume)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-fg-secondary">
+                        {fmtCompact(r.liquidity)}
+                      </td>
                       <td className="px-3 py-2 text-right">
                         {r.url ? (
                           <a
@@ -212,7 +240,9 @@ export function ReleasesView() {
 
 function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
   return (
-    <th className={cn("px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}>
+    <th
+      className={cn("px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}
+    >
       {children}
     </th>
   );

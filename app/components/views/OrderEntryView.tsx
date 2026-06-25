@@ -36,7 +36,7 @@ export function OrderEntryView({ snap }: { snap: DashboardSnapshot }) {
 
   const contracts = venue === "kalshi" ? snap.books.kalshi : snap.books.polymarket;
   const strikes = [...new Set(contracts.map((c) => c.strike))].sort((a, b) => a - b);
-  const sel = strike != null && strikes.includes(strike) ? strike : strikes[Math.floor(strikes.length / 2)] ?? null;
+  const sel = strike != null && strikes.includes(strike) ? strike : (strikes[Math.floor(strikes.length / 2)] ?? null);
   const contract = contracts.find((c) => c.strike === sel) ?? null;
   const book = contract ? levelsFor(contract, side) : null;
 
@@ -153,8 +153,20 @@ export function OrderEntryView({ snap }: { snap: DashboardSnapshot }) {
         <div className="col-span-12 flex flex-col gap-3 lg:col-span-7">
           <Grid>
             <StatTile className="col-span-6 xl:col-span-3" label="Notional Cost" value={fmtUsd(cost)} tone="cyan" />
-            <StatTile className="col-span-6 xl:col-span-3" label="Max Profit" value={fmtUsd(maxProfit)} tone="up" sub="if resolves in-the-money" />
-            <StatTile className="col-span-6 xl:col-span-3" label="Max Loss" value={fmtUsd(maxLoss)} tone="down" sub="if resolves worthless" />
+            <StatTile
+              className="col-span-6 xl:col-span-3"
+              label="Max Profit"
+              value={fmtUsd(maxProfit)}
+              tone="up"
+              sub="if resolves in-the-money"
+            />
+            <StatTile
+              className="col-span-6 xl:col-span-3"
+              label="Max Loss"
+              value={fmtUsd(maxLoss)}
+              tone="down"
+              sub="if resolves worthless"
+            />
             <StatTile
               className="col-span-6 xl:col-span-3"
               label="Marketability"

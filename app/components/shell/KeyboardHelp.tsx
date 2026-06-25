@@ -51,7 +51,9 @@ export function KeyboardHelp() {
       <CenterContent title="Keyboard shortcuts">
         <div className="flex items-center gap-2.5 border-b border-line px-3.5 py-3">
           <Keyboard className="size-4 shrink-0 text-fg-muted" strokeWidth={1.75} />
-          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-fg-secondary">Keyboard Shortcuts</span>
+          <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-fg-secondary">
+            Keyboard Shortcuts
+          </span>
           <Kbd className="ml-auto">esc</Kbd>
         </div>
 

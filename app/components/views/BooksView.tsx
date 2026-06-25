@@ -35,7 +35,7 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
   const sel =
     selectedStrike != null && allStrikes.includes(selectedStrike)
       ? selectedStrike
-      : allStrikes[Math.floor(allStrikes.length / 2)] ?? null;
+      : (allStrikes[Math.floor(allStrikes.length / 2)] ?? null);
 
   const kc = snap.books.kalshi.find((c) => c.strike === sel);
   const pc = snap.books.polymarket.find((c) => c.strike === sel);

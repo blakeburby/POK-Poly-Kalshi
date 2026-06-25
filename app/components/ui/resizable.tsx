@@ -15,10 +15,7 @@ export const ResizablePane = Panel;
 export function ResizeHandle({ className }: { className?: string }) {
   return (
     <PanelResizeHandle
-      className={cn(
-        "group relative flex w-2 shrink-0 items-center justify-center outline-none",
-        className,
-      )}
+      className={cn("group relative flex w-2 shrink-0 items-center justify-center outline-none", className)}
     >
       <div className="h-10 w-px rounded-full bg-line-strong transition-colors group-hover:bg-cyan/60 group-data-[resize-handle-state=drag]:bg-cyan" />
     </PanelResizeHandle>

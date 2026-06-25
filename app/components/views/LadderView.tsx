@@ -22,7 +22,10 @@ const VENUE_ACCENT: Record<Venue, string> = {
   polymarket: "var(--color-poly)",
 };
 
-function sideLevels(c: BinaryContract, side: Side): { bids: BookLevel[]; asks: BookLevel[]; bestBid: number | null; bestAsk: number | null } {
+function sideLevels(
+  c: BinaryContract,
+  side: Side,
+): { bids: BookLevel[]; asks: BookLevel[]; bestBid: number | null; bestAsk: number | null } {
   if (side === "yes") {
     return { bids: c.yesBidLevels ?? [], asks: c.yesAskLevels ?? [], bestBid: c.yesBid, bestAsk: c.yesAsk };
   }
@@ -56,15 +59,15 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
 
   const strikes = React.useMemo(
     () =>
-      Array.from(
-        new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike)),
-      ).sort((a, b) => a - b),
+      Array.from(new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike))).sort(
+        (a, b) => a - b,
+      ),
     [snap.books.kalshi, snap.books.polymarket],
   );
   const sel =
     selectedStrike != null && strikes.includes(selectedStrike)
       ? selectedStrike
-      : strikes[Math.floor(strikes.length / 2)] ?? null;
+      : (strikes[Math.floor(strikes.length / 2)] ?? null);
 
   const kc = snap.books.kalshi.find((c) => c.strike === sel) ?? null;
   const pc = snap.books.polymarket.find((c) => c.strike === sel) ?? null;
@@ -81,15 +84,7 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
 
   return (
     <ViewScroll>
-      <ControlBar
-        strikes={strikes}
-        sel={sel}
-        onSel={setSelectedStrike}
-        side={side}
-        onSide={setSide}
-        kc={kc}
-        pc={pc}
-      />
+      <ControlBar strikes={strikes} sel={sel} onSel={setSelectedStrike} side={side} onSide={setSide} kc={kc} pc={pc} />
 
       <Grid>
         <GridPanel
@@ -151,12 +146,7 @@ function ControlBar({
       : null;
 
   return (
-    <GridPanel
-      title="Ladder Controls"
-      dot="info"
-      span={12}
-      bodyClassName="flex flex-wrap items-center gap-x-6 gap-y-3"
-    >
+    <GridPanel title="Ladder Controls" dot="info" span={12} bodyClassName="flex flex-wrap items-center gap-x-6 gap-y-3">
       <div className="flex flex-col gap-1.5">
         <Label>Strike · BTC</Label>
         <div className="flex flex-wrap gap-1">
@@ -377,7 +367,12 @@ function LadderRow({
             style={{ width: `${bidPct}%` }}
           />
         ) : null}
-        <span className={cn("relative z-10 font-mono text-[11px] tabular-nums", bidSize != null ? "text-up" : "text-fg-faint")}>
+        <span
+          className={cn(
+            "relative z-10 font-mono text-[11px] tabular-nums",
+            bidSize != null ? "text-up" : "text-fg-faint",
+          )}
+        >
           {bidSize != null ? fmtInt(bidSize) : ""}
         </span>
       </div>
@@ -406,7 +401,12 @@ function LadderRow({
             style={{ width: `${askPct}%` }}
           />
         ) : null}
-        <span className={cn("relative z-10 font-mono text-[11px] tabular-nums", askSize != null ? "text-down" : "text-fg-faint")}>
+        <span
+          className={cn(
+            "relative z-10 font-mono text-[11px] tabular-nums",
+            askSize != null ? "text-down" : "text-fg-faint",
+          )}
+        >
           {askSize != null ? fmtInt(askSize) : ""}
         </span>
       </div>

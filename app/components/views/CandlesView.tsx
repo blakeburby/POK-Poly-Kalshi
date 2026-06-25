@@ -133,7 +133,9 @@ export function CandleChartPanel({
           </div>
           <div className="flex items-end gap-4">
             <div className="flex flex-col">
-              <Label>{asset}-USD · {granLabel}</Label>
+              <Label>
+                {asset}-USD · {granLabel}
+              </Label>
               <span className="font-mono text-[22px] leading-none tabular-nums text-fg">{fmtPrice(last?.c)}</span>
             </div>
             <span

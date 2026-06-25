@@ -30,8 +30,7 @@ function sampleBook(c: BinaryContract | null): Sample | null {
   };
   add(c.yesBidLevels, -1);
   add(c.yesAskLevels, 1);
-  const midC =
-    c.yesBid != null && c.yesAsk != null ? Math.round(((c.yesBid + c.yesAsk) / 2) * 100) : null;
+  const midC = c.yesBid != null && c.yesAsk != null ? Math.round(((c.yesBid + c.yesAsk) / 2) * 100) : null;
   return book.size ? { t: Date.now(), book, midC } : null;
 }
 
@@ -90,7 +89,8 @@ export function LiquidityHeatmap({
     <div>
       <div className="flex items-center justify-between px-2 pb-1">
         <span className="font-mono text-[10px] uppercase tracking-wide text-fg-faint">
-          bid walls <span className="text-up">green</span> · ask walls <span className="text-down">red</span> · y=price ¢ · x=time
+          bid walls <span className="text-up">green</span> · ask walls <span className="text-down">red</span> · y=price
+          ¢ · x=time
         </span>
         <div className="inline-flex overflow-hidden rounded-sm border border-line">
           {(["kalshi", "polymarket"] as Venue[]).map((v) => (

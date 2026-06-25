@@ -86,8 +86,8 @@ export function buildEvents(snap: DashboardSnapshot): TapeEvent[] {
       pairKey: s.pairKey,
       edge:
         s.action === "filled"
-          ? s.realizedGuaranteedProfit ?? s.guaranteedProfit
-          : s.expectedExecutableEdge ?? s.guaranteedProfit,
+          ? (s.realizedGuaranteedProfit ?? s.guaranteedProfit)
+          : (s.expectedExecutableEdge ?? s.guaranteedProfit),
       detail: signalDetail(s, kind),
     });
   }
@@ -130,12 +130,43 @@ export function TapeView({ snap }: { snap: DashboardSnapshot }) {
   return (
     <ViewScroll>
       <Grid>
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Fills" value={String(counts.fill + counts.partial)} tone="up" sub={`${counts.partial} partial`} />
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Skips" value={String(counts.skip)} tone="neutral" />
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Fails" value={String(counts.fail)} tone={counts.fail > 0 ? "down" : "neutral"} />
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Quarantines" value={String(counts.quarantine)} tone={counts.quarantine > 0 ? "amber" : "neutral"} />
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Fill Rate" value={fillRate != null ? fmtPct(fillRate) : "—"} tone={fillRate != null && fillRate >= 0.7 ? "up" : "amber"} />
-        <StatTile className="col-span-6 sm:col-span-3 xl:col-span-2" label="Warnings" value={String(counts.warn + counts.error)} tone={counts.error > 0 ? "down" : counts.warn > 0 ? "amber" : "neutral"} />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Fills"
+          value={String(counts.fill + counts.partial)}
+          tone="up"
+          sub={`${counts.partial} partial`}
+        />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Skips"
+          value={String(counts.skip)}
+          tone="neutral"
+        />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Fails"
+          value={String(counts.fail)}
+          tone={counts.fail > 0 ? "down" : "neutral"}
+        />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Quarantines"
+          value={String(counts.quarantine)}
+          tone={counts.quarantine > 0 ? "amber" : "neutral"}
+        />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Fill Rate"
+          value={fillRate != null ? fmtPct(fillRate) : "—"}
+          tone={fillRate != null && fillRate >= 0.7 ? "up" : "amber"}
+        />
+        <StatTile
+          className="col-span-6 sm:col-span-3 xl:col-span-2"
+          label="Warnings"
+          value={String(counts.warn + counts.error)}
+          tone={counts.error > 0 ? "down" : counts.warn > 0 ? "amber" : "neutral"}
+        />
       </Grid>
 
       <GridPanel
@@ -204,7 +235,12 @@ export function TapeView({ snap }: { snap: DashboardSnapshot }) {
                           <span className="text-fg-faint">{e.pairKey ?? "system"}</span>
                         )}
                       </td>
-                      <td className={cn("px-3 py-1.5 text-right", (e.edge ?? 0) > 0 ? "text-up" : (e.edge ?? 0) < 0 ? "text-down" : "text-fg-faint")}>
+                      <td
+                        className={cn(
+                          "px-3 py-1.5 text-right",
+                          (e.edge ?? 0) > 0 ? "text-up" : (e.edge ?? 0) < 0 ? "text-down" : "text-fg-faint",
+                        )}
+                      >
                         {e.edge != null ? fmtCents(e.edge, true) : "—"}
                       </td>
                       <td className="max-w-[320px] truncate px-3 py-1.5 text-fg-muted" title={e.detail}>
@@ -224,7 +260,9 @@ export function TapeView({ snap }: { snap: DashboardSnapshot }) {
 
 function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
   return (
-    <th className={cn("px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}>
+    <th
+      className={cn("px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-wide", right ? "text-right" : "text-left")}
+    >
       {children}
     </th>
   );

@@ -179,7 +179,11 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
         dot="info"
         span={12}
         bodyClassName="h-[240px] p-2"
-        right={<span className="font-mono text-[10px] text-fg-faint">last {perTradePnls.length} fills · cumulative cyan</span>}
+        right={
+          <span className="font-mono text-[10px] text-fg-faint">
+            last {perTradePnls.length} fills · cumulative cyan
+          </span>
+        }
       >
         {perTradePnls.length > 1 ? (
           <EChart height={216} option={perTradePnlOption(perTradePnls, fmt$)} />

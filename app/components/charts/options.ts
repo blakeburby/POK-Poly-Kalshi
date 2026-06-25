@@ -504,7 +504,12 @@ export function perTradePnlOption(pnls: number[], fmt: (v: number) => string): E
   return {
     animation: false,
     grid: { ...baseGrid, right: 44, bottom: 4 },
-    tooltip: { ...baseTooltip, trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v) => fmt(Number(v)) },
+    tooltip: {
+      ...baseTooltip,
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      valueFormatter: (v) => fmt(Number(v)),
+    },
     xAxis: {
       type: "category",
       data: pnls.map((_, i) => String(i + 1)),

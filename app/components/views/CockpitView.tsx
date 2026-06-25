@@ -37,15 +37,15 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
 
   const strikes = React.useMemo(
     () =>
-      Array.from(
-        new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike)),
-      ).sort((a, b) => a - b),
+      Array.from(new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike))).sort(
+        (a, b) => a - b,
+      ),
     [snap.books.kalshi, snap.books.polymarket],
   );
   const sel =
     selectedStrike != null && strikes.includes(selectedStrike)
       ? selectedStrike
-      : strikes[Math.floor(strikes.length / 2)] ?? null;
+      : (strikes[Math.floor(strikes.length / 2)] ?? null);
   const kc = snap.books.kalshi.find((c) => c.strike === sel) ?? null;
   const pc = snap.books.polymarket.find((c) => c.strike === sel) ?? null;
 
@@ -118,7 +118,12 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
               right={<span className="font-mono text-[10px] text-fg-faint">{candidates.length} structures</span>}
               bodyClassName="overflow-auto p-0"
             >
-              <CandidateTable candidates={candidates} threshold={threshold} selected={selectedCand} onSelect={setSelectedCand} />
+              <CandidateTable
+                candidates={candidates}
+                threshold={threshold}
+                selected={selectedCand}
+                onSelect={setSelectedCand}
+              />
             </GridPanel>
           </ResizablePane>
         </ResizableGroup>
@@ -147,7 +152,11 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
               accent={VENUE_ACCENT.polymarket}
               bodyClassName="overflow-auto p-0"
             >
-              {pc ? <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Polymarket book</Empty>}
+              {pc ? (
+                <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} />
+              ) : (
+                <Empty>No Polymarket book</Empty>
+              )}
             </GridPanel>
           </ResizablePane>
           <ResizeHandle />
@@ -163,7 +172,12 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
       <div className="flex flex-col gap-3 lg:hidden">
         <CandleChartPanel chartHeight={280} showTiles={false} />
         <GridPanel title="Edge / Opportunity" dot={candidates.length ? "live" : "idle"} span={12} bodyClassName="p-0">
-          <CandidateTable candidates={candidates} threshold={threshold} selected={selectedCand} onSelect={setSelectedCand} />
+          <CandidateTable
+            candidates={candidates}
+            threshold={threshold}
+            selected={selectedCand}
+            onSelect={setSelectedCand}
+          />
         </GridPanel>
         <GridPanel title="Kalshi · DOM" accent={VENUE_ACCENT.kalshi} span={12} bodyClassName="p-0">
           {kc ? <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Kalshi book</Empty>}
