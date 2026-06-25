@@ -1,35 +1,19 @@
 ---
 name: deploy
-description: Ship committed POK-Poly-Kalshi changes to production — the live worker (guarded Hostinger flow) and/or the Vercel dashboard — while keeping `main` in lockstep with the deploy branch. Use when deploying to prod, releasing, or syncing branches.
+description: Ship committed POK-Poly-Kalshi changes to production — the live worker (guarded Hostinger flow) and/or the Vercel dashboard, both deploying from `main`. Use when deploying to prod or releasing.
 ---
 
 # Deploy to production
 
-The live worker AND the Vercel dashboard both deploy from the **`hostinger-exact-share-readiness`** branch. The production worker is the Montreal Lightsail box **`root@15.175.128.184`** (the old Kuala Lumpur `187.77.145.117` box is powered off). The database (Railway) and dashboard tunnel (`api.pokstrategies.com`) are shared/unchanged across deploys.
-
-## ⚠️ Invariant — `main` is never behind
-
-**`main` and `hostinger-exact-share-readiness` MUST always point to the same commit.** `main` must mirror exactly what is live. After ANY push to the deploy branch, immediately fast-forward `main`:
-
-```bash
-git push origin hostinger-exact-share-readiness
-git push origin hostinger-exact-share-readiness:main   # always a clean fast-forward (branch ⊇ main)
-```
-
-Never commit to `main` independently. Confirm they match after every deploy:
-
-```bash
-git rev-parse origin/main origin/hostinger-exact-share-readiness   # the two SHAs must be identical
-```
+The live worker AND the Vercel dashboard both deploy from **`main`**. The production worker is the Montreal Lightsail box **`root@15.175.128.184`** (the old Kuala Lumpur `187.77.145.117` box is powered off). The database (Railway) and dashboard tunnel (`api.pokstrategies.com`) are shared/unchanged across deploys. (There is no separate deploy branch — the legacy `hostinger-exact-share-readiness` branch was retired; the `hostinger:*` script names are historical.)
 
 ## 1. Pre-deploy (push first — the deploy fetches `origin`)
 
-The guarded worker deploy checks out `origin/hostinger-exact-share-readiness`, so **unpushed commits do not ship**. Always:
+The guarded worker deploy checks out `origin/main`, so **unpushed commits do not ship**. Always:
 
 ```bash
-git push origin hostinger-exact-share-readiness          # ship the commit to origin
-git push origin hostinger-exact-share-readiness:main     # keep main in lockstep (the invariant)
-npm test && npm run build:worker                          # green before shipping
+git push origin main               # ship the commit to origin
+npm test && npm run build:worker   # green before shipping
 ```
 
 ## 2. Worker (`src/` — the trading engine)
@@ -63,6 +47,6 @@ vercel --prod --yes   # linked project pok-poly-kalshi-dashboard; auto-aliases p
 
 - Worker: `arbEnabled=true`, breaker clear, `reconciliationClean=true`, scanning (`lastScanAgeMs` small).
 - Dashboard: `https://pokstrategies.com` serves HTTP 200 and reflects the change.
-- Branches: `origin/main == origin/hostinger-exact-share-readiness`.
+- Branch: the box checkout (`/opt/pok-poly-kalshi`) is on `main` at `origin/main`.
 
 Production deploys, breaker clears, and prod env edits are outward-facing/irreversible — confirm with the operator before each unless already authorized in the session.

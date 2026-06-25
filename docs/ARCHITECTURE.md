@@ -111,8 +111,8 @@ live in `live_execution_locks` and are cleared only through a guarded settlement
 - **Centralized config.** Env is read only in `config.ts`; everything else takes a typed `AppConfig`.
 - **Flag-gated changes.** Behavioral changes ship behind a config flag, default to byte-identical prior
   behavior, and are validated by tests + both typechecks before deploy (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
-- **Branch lockstep.** `main` and the deploy branch `hostinger-exact-share-readiness` always point at the same
-  commit; every deploy-branch push is mirrored to `main`.
+- **Deploy from `main`.** The worker and dashboard both deploy from `main` (the guarded script checks out
+  `origin/main`); there is no separate deploy branch or mirror step.
 
 ## Glossary
 

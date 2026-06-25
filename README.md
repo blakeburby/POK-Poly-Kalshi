@@ -41,14 +41,12 @@ npm run verify                              # typecheck (src + tests) + full tes
 
 ## Branching & deploys
 
-> **Invariant:** `main` and `hostinger-exact-share-readiness` always point at the same commit; `main` is never
-> behind. Both the worker and the dashboard deploy from `hostinger-exact-share-readiness`.
+> Both the worker and the dashboard deploy from `main`. Push your commit and deploy — there is no separate
+> deploy branch to keep in lockstep.
 
 ```bash
-git push origin hostinger-exact-share-readiness
-git push origin hostinger-exact-share-readiness:main          # mirror — always a clean fast-forward
-git rev-parse origin/main origin/hostinger-exact-share-readiness   # the two SHAs must match
+git push origin main          # ship the commit to origin; the guarded deploy checks out origin/main
 ```
 
-Do not commit to `main` independently. See the guarded deploy flow in [RUNBOOK.md](./RUNBOOK.md) and the
+See the guarded deploy flow in [RUNBOOK.md](./RUNBOOK.md) and the
 `/deploy` skill (`.claude/skills/deploy/`).

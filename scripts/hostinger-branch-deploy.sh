@@ -6,7 +6,7 @@ if [ -z "${HOSTINGER_SSH_TARGET:-}" ]; then
   exit 2
 fi
 
-DEPLOY_BRANCH="${DEPLOY_BRANCH:-hostinger-exact-share-readiness}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 APP_DIR="${HOSTINGER_APP_DIR:-/opt/pok-poly-kalshi}"
 ENV_FILE="${HOSTINGER_ENV_FILE:-/etc/pok-poly-kalshi/worker.env}"
 RESTORE_ARB_AFTER_DEPLOY="${RESTORE_ARB_AFTER_DEPLOY:-true}"

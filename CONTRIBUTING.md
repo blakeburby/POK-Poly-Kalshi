@@ -55,9 +55,8 @@ CI (`.github/workflows/ci.yml`) runs the same `build:worker` + `typecheck:test` 
 
 ## Branch & deploy discipline
 
-- **Lockstep invariant:** `main` and the deploy branch `hostinger-exact-share-readiness` always point at the
-  same commit. After pushing the deploy branch, mirror it:
-  `git push origin hostinger-exact-share-readiness:main`.
+- **Deploy from `main`:** the worker and dashboard both deploy from `main` (the guarded script checks out
+  `origin/main`). Push your commit to `main` and deploy — there is no separate deploy branch or mirror step.
 - **Deploy** is a guarded script that pauses entries, builds, restarts, checks readiness, and re-arms — see
   [RUNBOOK.md](./RUNBOOK.md). Never restructure the worker entry points (`tsx src/index.ts`, `npm run migrate`)
   or move modules the deploy depends on without updating the deploy path and re-verifying.

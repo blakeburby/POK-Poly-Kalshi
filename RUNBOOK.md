@@ -125,7 +125,7 @@ The browser never receives venue secrets or the worker bearer token. It is read-
 
 Railway worker deploys are not the production path. Keep Railway only as a possible Postgres provider through `DATABASE_URL`.
 
-1. Create and push a dedicated branch, normally `hostinger-exact-share-readiness` (kept in lockstep with `main`).
+1. Commit and push to `main` — the guarded deploy checks out `origin/main` (there is no separate deploy branch).
 2. Set `HOSTINGER_SSH_TARGET` to the production box SSH target (the AWS Lightsail instance).
 3. Run the read-only precheck:
 
@@ -133,10 +133,10 @@ Railway worker deploys are not the production path. Keep Railway only as a possi
 HOSTINGER_SSH_TARGET=user@host npm run hostinger:precheck
 ```
 
-4. Deploy the branch:
+4. Deploy (defaults to `main`):
 
 ```bash
-HOSTINGER_SSH_TARGET=user@host DEPLOY_BRANCH=hostinger-exact-share-readiness npm run hostinger:deploy
+HOSTINGER_SSH_TARGET=user@host npm run hostinger:deploy
 ```
 
 The deploy script backs up `/etc/pok-poly-kalshi/worker.env`, applies the exact-share safety env policy (`LIVE_ORDER_SIZE=5`, exact Polymarket evidence bounds, `LIVE_KALSHI_MIN_CASH_DOLLARS=30`, hardlocks on, reconciliation on), pauses `ARB_ENABLED` if it was true, checks out the branch in `/opt/pok-poly-kalshi`, runs `npm ci` and `npm run build:worker`, restarts `pok-worker` so systemd runs migrations with the service env, and restores `ARB_ENABLED=true` only after public and protected readiness are green. If readiness fails, leave entries paused and inspect the printed readiness summary before changing any safety setting.
