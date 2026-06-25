@@ -25,6 +25,29 @@ const Overlay = React.forwardRef<
 ));
 Overlay.displayName = "DialogOverlay";
 
+/** Centered modal (command palette). */
+export const CenterContent = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { title?: string }
+>(({ className, children, title, ...props }, ref) => (
+  <DialogPrimitive.Portal>
+    <Overlay />
+    <DialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed left-1/2 top-[16%] z-50 w-[92vw] max-w-[560px] -translate-x-1/2 overflow-hidden rounded-lg border border-line-strong bg-surface shadow-2xl outline-none",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:duration-150",
+        className,
+      )}
+      {...props}
+    >
+      {title ? <DialogPrimitive.Title className="sr-only">{title}</DialogPrimitive.Title> : null}
+      {children}
+    </DialogPrimitive.Content>
+  </DialogPrimitive.Portal>
+));
+CenterContent.displayName = "CenterContent";
+
 /** Right-side sheet (trade detail drawer). */
 export const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,

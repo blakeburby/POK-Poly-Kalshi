@@ -9,6 +9,8 @@ import { NavRail } from "@/components/shell/NavRail";
 import { HealthRail } from "@/components/shell/HealthRail";
 import { StatusBar } from "@/components/shell/StatusBar";
 import { MobileNav } from "@/components/shell/MobileNav";
+import { CommandPalette } from "@/components/shell/CommandPalette";
+import { KeyboardHelp } from "@/components/shell/KeyboardHelp";
 import { ViewRouter } from "@/components/views/ViewRouter";
 import { StatusDot } from "@/components/ui/stat";
 
@@ -30,6 +32,8 @@ export default function DashboardApp({ dashboardName }: { dashboardName?: string
         </div>
         <StatusBar />
         <MobileNav />
+        <CommandPalette />
+        <KeyboardHelp />
       </div>
     </TooltipProvider>
   );

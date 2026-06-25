@@ -5,10 +5,12 @@ import type { DashboardSnapshot, BinaryContract, BookLevel, Venue } from "@/lib/
 import { ViewScroll, Grid, GridPanel } from "./_layout";
 import { EChart } from "@/components/charts/echart";
 import { depthOption } from "@/components/charts/options";
+import { LiquidityHeatmap } from "./LiquidityHeatmap";
 import { Empty, StatusDot } from "@/components/ui/stat";
 import { fmtCents, fmtMs, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
+import { useDashboardStore } from "@/store/dashboard-store";
 
 function cumulative(levels: BookLevel[] | undefined): Array<[number, number]> {
   if (!levels?.length) return [];
@@ -24,12 +26,16 @@ function cumulative(levels: BookLevel[] | undefined): Array<[number, number]> {
 export function BooksView({ snap }: { snap: DashboardSnapshot }) {
   const now = useNow(1000);
   const staleMs = snap.health.staleBookMs;
-  const [strike, setStrike] = React.useState<number | null>(null);
+  const selectedStrike = useDashboardStore((s) => s.selectedStrike);
+  const setSelectedStrike = useDashboardStore((s) => s.setSelectedStrike);
 
   const allStrikes = Array.from(
     new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike)),
   ).sort((a, b) => a - b);
-  const sel = strike ?? allStrikes[Math.floor(allStrikes.length / 2)] ?? null;
+  const sel =
+    selectedStrike != null && allStrikes.includes(selectedStrike)
+      ? selectedStrike
+      : allStrikes[Math.floor(allStrikes.length / 2)] ?? null;
 
   const kc = snap.books.kalshi.find((c) => c.strike === sel);
   const pc = snap.books.polymarket.find((c) => c.strike === sel);
@@ -46,7 +52,7 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
             now={now}
             staleMs={staleMs}
             sel={sel}
-            onSel={setStrike}
+            onSel={setSelectedStrike}
           />
         </GridPanel>
         <GridPanel title="Polymarket · Order Book" dot="info" accent="var(--color-poly)" span={4} bodyClassName="p-0">
@@ -56,7 +62,7 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
             now={now}
             staleMs={staleMs}
             sel={sel}
-            onSel={setStrike}
+            onSel={setSelectedStrike}
           />
         </GridPanel>
         <GridPanel
@@ -75,6 +81,16 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
 
       <GridPanel title="Cross-Venue Same-Expiry Comparison" dot="info" span={12} bodyClassName="p-0">
         <CompareTable snap={snap} now={now} staleMs={staleMs} />
+      </GridPanel>
+
+      <GridPanel
+        title={`Liquidity Heatmap · ${sel != null ? `BTC ${sel.toLocaleString()}` : "—"} (YES book)`}
+        dot="live"
+        pulse
+        span={12}
+        bodyClassName="h-[300px] p-2"
+      >
+        <LiquidityHeatmap kalshi={kc ?? null} polymarket={pc ?? null} />
       </GridPanel>
 
       <Grid>

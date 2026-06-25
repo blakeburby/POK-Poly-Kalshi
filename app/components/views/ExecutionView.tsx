@@ -99,7 +99,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
           bodyClassName="h-[280px] p-2"
           right={<span className="font-mono text-[10px] text-fg-muted">y=x perfect</span>}
         >
-          {calBins.length ? <EChart option={calibrationOption(calBins)} /> : <Empty />}
+          {calBins.length ? <EChart height={256} option={calibrationOption(calBins)} /> : <Empty />}
         </GridPanel>
         <GridPanel
           title="Edge Capture · Projected → Realized"
@@ -112,7 +112,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
             </span>
           }
         >
-          <EChart option={waterfallOption(wf, (v) => fmtCents(v, true))} />
+          <EChart height={256} option={waterfallOption(wf, (v) => fmtCents(v, true))} />
         </GridPanel>
         <GridPanel title="Venue Latency Profile" dot="info" span={3} bodyClassName="flex flex-col justify-center gap-3">
           <LatencyRow
@@ -150,6 +150,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
         >
           {scatter.length ? (
             <EChart
+              height={216}
               option={scatterOption({
                 points: scatter,
                 xName: "time",
@@ -165,7 +166,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
           )}
         </GridPanel>
         <GridPanel title="Slippage Distribution" dot="info" span={4} bodyClassName="h-[240px] p-2">
-          {slipDist.length ? <EChart option={histogramOption(slipDist)} /> : <Empty />}
+          {slipDist.length ? <EChart height={216} option={histogramOption(slipDist)} /> : <Empty />}
         </GridPanel>
       </Grid>
 

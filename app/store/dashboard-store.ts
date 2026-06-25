@@ -15,6 +15,12 @@ export type ViewId =
   | "venuePnl"
   | "edge"
   | "books"
+  | "ladder"
+  | "positions"
+  | "tape"
+  | "orderEntry"
+  | "candles"
+  | "releases"
   | "health"
   | "threeD";
 
@@ -24,10 +30,15 @@ interface DashboardState {
   lastEventAt: number | null;
   view: ViewId;
   reducedMotion: boolean;
+  commandOpen: boolean;
+  /** Cross-view selected BTC strike (Ladder/Books share it; the command palette can set it). */
+  selectedStrike: number | null;
   setSnapshot: (snapshot: DashboardSnapshot, source: FeedSource) => void;
   setSource: (source: FeedSource) => void;
   setView: (view: ViewId) => void;
   setReducedMotion: (v: boolean) => void;
+  setCommandOpen: (v: boolean) => void;
+  setSelectedStrike: (strike: number | null) => void;
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
@@ -36,10 +47,14 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   lastEventAt: null,
   view: "overview",
   reducedMotion: false,
+  commandOpen: false,
+  selectedStrike: null,
   setSnapshot: (snapshot, source) => set({ snapshot, source, lastEventAt: Date.now() }),
   setSource: (source) => set({ source }),
   setView: (view) => set({ view }),
   setReducedMotion: (reducedMotion) => set({ reducedMotion }),
+  setCommandOpen: (commandOpen) => set({ commandOpen }),
+  setSelectedStrike: (selectedStrike) => set({ selectedStrike }),
 }));
 
 function demoMode(): boolean {

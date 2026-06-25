@@ -32,7 +32,14 @@ export function StatusBar() {
           <span className="tabular-nums text-fg-secondary">{v}</span>
         </span>
       ))}
-      <span className="ml-auto shrink-0 tabular-nums text-fg-secondary">{fmtClock(now, true)}</span>
+      <button
+        onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }))}
+        title="Keyboard shortcuts"
+        className="ml-auto shrink-0 uppercase tracking-wide text-fg-faint transition-colors hover:text-fg-secondary"
+      >
+        ? shortcuts
+      </button>
+      <span className="shrink-0 tabular-nums text-fg-secondary">{fmtClock(now, true)}</span>
     </footer>
   );
 }

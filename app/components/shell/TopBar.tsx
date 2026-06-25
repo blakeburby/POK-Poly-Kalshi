@@ -7,6 +7,7 @@ import { fmtClock, fmtRelative, type StatusTone } from "@/lib/format";
 import { useNow } from "@/hooks/useNow";
 import { StatusDot } from "@/components/ui/stat";
 import { MobileHealthSheet } from "@/components/shell/MobileHealthSheet";
+import { PriceTicker } from "@/components/shell/PriceTicker";
 import { cn } from "@/lib/utils";
 
 const sourceMeta: Record<FeedSource, { tone: StatusTone; label: string }> = {
@@ -60,6 +61,8 @@ export function TopBar() {
         value={snap?.execution?.userStreams.polymarket.connected ? "up" : "down"}
         tone={snap?.execution?.userStreams.polymarket.connected ? "live" : "halt"}
       />
+
+      <PriceTicker />
 
       <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-4">
         {op ? (

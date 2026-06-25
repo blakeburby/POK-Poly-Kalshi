@@ -10,6 +10,12 @@ import { LedgerView } from "./LedgerView";
 import { VenuePnlView } from "./VenuePnlView";
 import { EdgeView } from "./EdgeView";
 import { BooksView } from "./BooksView";
+import { LadderView } from "./LadderView";
+import { PositionsView } from "./PositionsView";
+import { TapeView } from "./TapeView";
+import { OrderEntryView } from "./OrderEntryView";
+import { CandlesView } from "./CandlesView";
+import { ReleasesView } from "./ReleasesView";
 import { HealthView } from "./HealthView";
 import { ThreeDView } from "./ThreeDView";
 
@@ -35,6 +41,18 @@ export function ViewRouter() {
       return <EdgeView snap={snap} />;
     case "books":
       return <BooksView snap={snap} />;
+    case "ladder":
+      return <LadderView snap={snap} />;
+    case "positions":
+      return <PositionsView snap={snap} />;
+    case "tape":
+      return <TapeView snap={snap} />;
+    case "orderEntry":
+      return <OrderEntryView snap={snap} />;
+    case "candles":
+      return <CandlesView />;
+    case "releases":
+      return <ReleasesView />;
     case "health":
       return <HealthView snap={snap} />;
     case "threeD":

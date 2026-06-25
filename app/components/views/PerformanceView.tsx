@@ -10,6 +10,7 @@ import {
   drawdownAreaOption,
   histogramOption,
   waterfallOption,
+  perTradePnlOption,
 } from "@/components/charts/options";
 import { Empty } from "@/components/ui/stat";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -54,6 +55,13 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
   ];
 
   const net = usd(a.netPnl);
+
+  // Per-trade realized P&L for filled trades, oldest→newest (recentSignals is newest-first).
+  const perTradePnls = (snap.recentSignals ?? [])
+    .filter((s) => s.action === "filled")
+    .slice(0, 80)
+    .reverse()
+    .map((s) => usd(s.realizedGuaranteedProfit ?? s.guaranteedProfit ?? 0));
 
   return (
     <ViewScroll>
@@ -120,7 +128,7 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
           }
         >
           {equityPts.length > 1 ? (
-            <EChart option={equityAreaOption(equityPts, { positive: net >= 0, fmt: fmt$ })} />
+            <EChart height={256} option={equityAreaOption(equityPts, { positive: net >= 0, fmt: fmt$ })} />
           ) : (
             <Empty />
           )}
@@ -136,13 +144,13 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
             </span>
           }
         >
-          <EChart option={waterfallOption(waterfall, (v) => fmtUsd(v, { sign: true }))} />
+          <EChart height={256} option={waterfallOption(waterfall, (v) => fmtUsd(v, { sign: true }))} />
         </GridPanel>
       </Grid>
 
       <Grid>
         <GridPanel title="Per-Bucket Net PnL + Drawdown" dot="live" span={7} bodyClassName="h-[240px] p-2">
-          <EChart option={pnlBarsDrawdownOption(bars, fmt$)} />
+          <EChart height={216} option={pnlBarsDrawdownOption(bars, fmt$)} />
         </GridPanel>
         <GridPanel
           title="Rolling Drawdown"
@@ -153,18 +161,32 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
             <span className="font-mono text-[11px] tabular-nums text-amber">max {fmtUsd(usd(a.maxDrawdown))}</span>
           }
         >
-          <EChart option={drawdownAreaOption(ddPts, fmt$)} />
+          <EChart height={216} option={drawdownAreaOption(ddPts, fmt$)} />
         </GridPanel>
       </Grid>
 
       <Grid>
         <GridPanel title="PnL Distribution" dot="info" span={4} bodyClassName="h-[220px] p-2">
-          <EChart option={histogramOption(pnlDist)} />
+          <EChart height={196} option={histogramOption(pnlDist)} />
         </GridPanel>
         <GridPanel title="PnL / Win-Rate Heatmap" dot="info" span={8} bodyClassName="h-[220px]">
           <HeatmapStrip buckets={a.heatmap} usd={usd} />
         </GridPanel>
       </Grid>
+
+      <GridPanel
+        title="Per-Trade P&L · realized + cumulative"
+        dot="info"
+        span={12}
+        bodyClassName="h-[240px] p-2"
+        right={<span className="font-mono text-[10px] text-fg-faint">last {perTradePnls.length} fills · cumulative cyan</span>}
+      >
+        {perTradePnls.length > 1 ? (
+          <EChart height={216} option={perTradePnlOption(perTradePnls, fmt$)} />
+        ) : (
+          <Empty>No filled trades in window</Empty>
+        )}
+      </GridPanel>
     </ViewScroll>
   );
 }

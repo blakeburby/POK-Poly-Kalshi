@@ -350,3 +350,194 @@ export function waterfallOption(
     ],
   } satisfies EChartsOption;
 }
+
+export interface Candle {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
+/** Candlestick + volume, two stacked grids sharing a time category axis (TradingView-style). */
+export function candlestickOption(candles: Candle[], fmt: (v: number) => string): EChartsOption {
+  const cats = candles.map((c) => c.t);
+  const ohlc = candles.map((c) => [c.o, c.c, c.l, c.h]);
+  const vol = candles.map((c) => ({
+    value: c.v,
+    itemStyle: { color: c.c >= c.o ? "rgba(38,214,124,0.45)" : "rgba(255,92,92,0.45)" },
+  }));
+  const fmtTime = (t: number) => {
+    const d = new Date(t);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  return {
+    animation: false,
+    grid: [
+      { left: 8, right: 60, top: 10, height: "64%", containLabel: true },
+      { left: 8, right: 60, top: "78%", height: "15%", containLabel: true },
+    ],
+    tooltip: { ...baseTooltip, trigger: "axis", axisPointer: { type: "cross" } },
+    axisPointer: { link: [{ xAxisIndex: "all" }] },
+    xAxis: [
+      {
+        type: "category",
+        data: cats,
+        gridIndex: 0,
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: CHART.line } },
+        axisTick: { show: false },
+        axisLabel: { show: false },
+        splitLine: { show: false },
+      },
+      {
+        type: "category",
+        data: cats,
+        gridIndex: 1,
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: CHART.line } },
+        axisTick: { show: false },
+        axisLabel: { ...axisLabel, formatter: (v: string) => fmtTime(Number(v)), hideOverlap: true },
+        splitLine: { show: false },
+      },
+    ] as unknown as XAXisComponentOption[],
+    yAxis: [
+      {
+        gridIndex: 0,
+        scale: true,
+        position: "right",
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { ...axisLabel, formatter: (v: number) => fmt(Number(v)) },
+        splitLine,
+      },
+      {
+        gridIndex: 1,
+        scale: true,
+        position: "right",
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { show: false },
+        splitLine: { show: false },
+      },
+    ] as unknown as YAXisComponentOption[],
+    series: [
+      {
+        type: "candlestick",
+        data: ohlc,
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        itemStyle: {
+          color: CHART.up,
+          color0: CHART.down,
+          borderColor: CHART.up,
+          borderColor0: CHART.down,
+        },
+      },
+      { type: "bar", data: vol, xAxisIndex: 1, yAxisIndex: 1, barWidth: "55%" },
+    ],
+  } satisfies EChartsOption;
+}
+
+/**
+ * Bookmap-style liquidity heatmap: x = time samples, y = price buckets, colour = signed resting
+ * size (bid-heavy → green, ask-heavy → red). `cells` are [xIdx, yIdx, signedSize].
+ */
+export function liquidityHeatmapOption(
+  cols: string[],
+  rows: string[],
+  cells: Array<[number, number, number]>,
+  maxAbs: number,
+): EChartsOption {
+  return {
+    animation: false,
+    grid: { left: 8, right: 14, top: 10, bottom: 8, containLabel: true },
+    tooltip: {
+      ...baseTooltip,
+      position: "top",
+      formatter: (p: unknown) => {
+        const d = (p as { data: [number, number, number] }).data;
+        const side = d[2] >= 0 ? "ask" : "bid";
+        return `${rows[d[1]]} · ${cols[d[0]]}<br/>${side} ${Math.abs(d[2]).toLocaleString()}`;
+      },
+    },
+    xAxis: {
+      type: "category",
+      data: cols,
+      axisLine: { lineStyle: { color: CHART.line } },
+      axisTick: { show: false },
+      axisLabel: { ...axisLabel, hideOverlap: true },
+      splitArea: { show: false },
+    },
+    yAxis: {
+      type: "category",
+      data: rows,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { ...axisLabel, hideOverlap: true },
+      splitArea: { show: false },
+    },
+    visualMap: {
+      min: -maxAbs,
+      max: maxAbs,
+      show: false,
+      calculable: false,
+      inRange: { color: [CHART.up, "#0e3d28", CHART.surface, "#421a1c", CHART.down] },
+    },
+    series: [
+      {
+        type: "heatmap",
+        data: cells,
+        progressive: 0,
+        itemStyle: { borderColor: "transparent", borderWidth: 0 },
+        emphasis: { itemStyle: { borderColor: CHART.fgMuted, borderWidth: 1 } },
+      },
+    ],
+  } satisfies EChartsOption;
+}
+
+/** Per-trade realized P&L bars (green win / red loss) with a cumulative line on a second axis. */
+export function perTradePnlOption(pnls: number[], fmt: (v: number) => string): EChartsOption {
+  let run = 0;
+  const cum = pnls.map((p) => (run += p));
+  return {
+    animation: false,
+    grid: { ...baseGrid, right: 44, bottom: 4 },
+    tooltip: { ...baseTooltip, trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v) => fmt(Number(v)) },
+    xAxis: {
+      type: "category",
+      data: pnls.map((_, i) => String(i + 1)),
+      axisLine: { lineStyle: { color: CHART.line } },
+      axisTick: { show: false },
+      axisLabel: { ...axisLabel, hideOverlap: true },
+    },
+    yAxis: [
+      valueAxis(fmt),
+      {
+        type: "value",
+        position: "right",
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { ...axisLabel, formatter: fmt },
+        splitLine: { show: false },
+        scale: true,
+      } as unknown as YAXisComponentOption,
+    ],
+    series: [
+      {
+        type: "bar",
+        data: pnls.map((p) => ({ value: p, itemStyle: { color: p >= 0 ? CHART.up : CHART.down, opacity: 0.8 } })),
+        barWidth: pnls.length > 60 ? "85%" : "55%",
+      },
+      {
+        type: "line",
+        yAxisIndex: 1,
+        data: cum,
+        showSymbol: false,
+        smooth: 0.1,
+        lineStyle: { color: CHART.cyan, width: 1.4 },
+      },
+    ],
+  } satisfies EChartsOption;
+}
