@@ -1794,6 +1794,124 @@ export class LiveExecutor implements ArbExecutor {
     }
   }
 
+  // C1 residual-only (default-off): sell ONLY the unhedged delta |kalshiFill - polymarketFill| of a partial
+  // hedge, keeping the min(...) pair hedged. Polymarket SELL adapter only. Returns flattened=false (fall
+  // through to the unchanged quarantine path, no regression) when a leg is non-terminal, no adapter exists,
+  // the FOK sell does not fully fill, or the executor's INDEPENDENT loss/size re-check fails. Never opens new
+  // exposure (it can only shrink the over-filled leg toward the already-hedged pair).
+  private async attemptResidualUnwind(
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    legs: { kalshi: ArbLeg; polymarket: ArbLeg },
+    executionGroupId: string,
+  ): Promise<VenueUnwindOutcome | null> {
+    const kalshiFill = kalshi.fillCount ?? 0;
+    const polymarketFill = polymarket.fillCount ?? 0;
+    const delta = Math.abs(kalshiFill - polymarketFill);
+    if (delta <= 0.000001) return { flattened: false, reason: "no unhedged residual" };
+    const hedgedPair = Math.min(kalshiFill, polymarketFill);
+    // Both legs must be confirmation-terminal so a late counter-leg fill cannot change the delta mid-unwind
+    // (which could make us sell already-hedged shares). Decline -> quarantine on any ambiguous/unknown leg.
+    if (
+      this.config.liveAutoUnwindRequireTerminalCounterLeg &&
+      (isTimeoutOrUnknownResult(kalshi) || isTimeoutOrUnknownResult(polymarket))
+    ) {
+      return { flattened: false, reason: "residual unwind requires both legs terminal (counter-leg unconfirmed)" };
+    }
+    // Only the larger-filled venue holds the residual. Polymarket has a SELL adapter; a Kalshi residual has
+    // none yet, so it falls through to quarantine (no regression).
+    const polymarketIsLarger = polymarketFill > kalshiFill;
+    const filled = polymarketIsLarger
+      ? {
+          client: this.polymarketClient,
+          leg: legs.polymarket,
+          fillPrice: polymarket.fillPrice,
+          totalFilled: polymarketFill,
+        }
+      : { client: this.kalshiClient, leg: legs.kalshi, fillPrice: kalshi.fillPrice, totalFilled: kalshiFill };
+    if (!filled.client.unwindPosition) {
+      return { flattened: false, reason: `no unwind adapter for ${filled.client.venue}` };
+    }
+    const maxLossDollars = Math.max(0, (this.config.liveAutoUnwindMaxLossCentsPerShare / 100) * delta);
+    const clientOrderId = `${executionGroupId}:unwind`;
+    // Register the SELL with the confirmation monitor BEFORE it is posted so a late SELL fill reconciles
+    // in-band (expectedSize = delta) instead of tripping the late-surplus circuit breaker.
+    this.confirmationMonitor?.rememberUnwindOrder?.(filled.client.venue, clientOrderId, executionGroupId, delta);
+    let outcome: VenueUnwindOutcome | null;
+    try {
+      outcome = await filled.client.unwindPosition({
+        leg: filled.leg,
+        fillCount: delta,
+        fillPrice: filled.fillPrice ?? null,
+        maxLossDollars,
+        timeoutMs: Math.max(1, this.config.liveAutoUnwindTimeoutMs),
+        hedgedCount: hedgedPair,
+        totalFilled: filled.totalFilled,
+        clientOrderId,
+      });
+    } catch (error) {
+      return { flattened: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+    if (!outcome) return { flattened: false, reason: "unwind adapter returned null" };
+    // Re-register the SELL under its venue orderId — Polymarket user-stream fills match only by venueOrderId
+    // (clientOrderId is null on the wire) — so a late SELL fill reconciles in-band rather than tripping the
+    // late-surplus breaker. Done regardless of verification outcome (a late fill must reconcile either way).
+    if (outcome.result?.orderId) {
+      this.confirmationMonitor?.rememberUnwindOrder?.(
+        filled.client.venue,
+        clientOrderId,
+        executionGroupId,
+        delta,
+        outcome.result.orderId,
+        outcome.result.fillCount ?? delta,
+      );
+    }
+    // INDEPENDENT credit (do not trust the adapter's self-report): the VERIFIED, cap-proven, clamped number of
+    // residual shares actually sold — 0 on any ambiguity. The executor nets this out of the quarantined
+    // residual. This never consults the hardlocks master switch, so the loss cap holds even when
+    // LIVE_AUTO_HARDLOCKS_ENABLED=false.
+    const unwoundShares = this.verifiedUnwoundShares(outcome, delta, filled.fillPrice ?? null, maxLossDollars);
+    if (outcome.flattened === true) {
+      // A full flatten (bypassing quarantine entirely) is only honored when the verified credit covers the
+      // WHOLE delta; otherwise downgrade to a partial credit and fall through to quarantine of the net residual.
+      if (unwoundShares + 0.000001 >= delta) return { ...outcome, unwoundShares };
+      return {
+        flattened: false,
+        reason: "residual unwind failed independent verification",
+        result: outcome.result,
+        lossDollars: outcome.lossDollars ?? null,
+        unwoundShares,
+      };
+    }
+    // Partial / no fill: keep falling through to quarantine, but carry the verified credit so the executor
+    // quarantines the NET residual (delta - unwoundShares).
+    return { ...outcome, unwoundShares };
+  }
+
+  // Executor-side re-proof of how many residual shares a SELL actually moved. Robust to sell-side amount-field
+  // inversion and to an over-reporting adapter: the credit is clamped to [0, delta] and is only non-zero when
+  // the submitted LIMIT price (a sell limit fills only at >= limit) keeps the worst-case loss on the credited
+  // shares within cap. Independent of the adapter's self-reported lossDollars and the hardlocks master switch.
+  // Crediting too little = over-quarantine (safe); this never credits more than was provably sold within cap.
+  private verifiedUnwoundShares(
+    outcome: VenueUnwindOutcome,
+    delta: number,
+    buyFillPrice: number | null,
+    maxLossDollars: number,
+  ): number {
+    const result = outcome.result;
+    if (!result) return 0;
+    const sold = result.fillCount ?? 0;
+    if (!(sold > 0)) return 0;
+    const clamped = Math.min(sold, delta);
+    const limitRaw = (result.metadata ?? {}).unwindLimitPrice;
+    const limitPrice = typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : null;
+    if (buyFillPrice == null || limitPrice == null) return 0;
+    const worstLoss = roundPrice((buyFillPrice - limitPrice) * clamped);
+    if (worstLoss > maxLossDollars + 1e-9) return 0;
+    return clamped;
+  }
+
   private selectSequentialFirstVenue(prepared: PreparedExecution): SequentialFirstVenueDecision {
     const kalshiVwap = prepared.quoteSnapshot.kalshi?.vwap ?? prepared.kalshi.maxBuyPrice;
     const polymarketVwap = prepared.quoteSnapshot.polymarket?.vwap ?? prepared.polymarket.maxBuyPrice;
@@ -2661,11 +2779,32 @@ export class LiveExecutor implements ArbExecutor {
     // C1 (default-off): before committing to quarantine/hardlock, try to flatten a one-sided fill with a
     // loss-bounded opposing order. Guarded by liveAutoUnwindEnabled so the default path below is unchanged.
     const oneSidedFill = kalshiHasFill !== polymarketHasFill;
+    // C1 residual-only mode (default-off): unwind ONLY the unhedged delta of a PARTIAL hedge, keeping the
+    // min(kalshi, polymarket) exact-pair hedged. It also covers a pure one-sided fill (hedged pair = 0). When
+    // residualOnly is off, the legacy whole-leg one-sided-fill unwind path below is unchanged (byte-identical).
+    const unhedgedDelta = Math.abs(kalshiFillCount - polymarketFillCount);
+    const hasUnhedgedResidual =
+      kalshiHasFill && polymarketHasFill && unhedgedDelta > this.confirmationOverfillBand() + 0.000001;
     let autoUnwind: VenueUnwindOutcome | null = null;
-    if (this.config.liveAutoUnwindEnabled && oneSidedFill && metadata.unwindLegs) {
-      autoUnwind = await this.attemptAutoUnwind(kalshi, polymarket, metadata.unwindLegs);
+    if (this.config.liveAutoUnwindEnabled && metadata.unwindLegs) {
+      if (this.config.liveAutoUnwindResidualOnly) {
+        if (oneSidedFill || hasUnhedgedResidual) {
+          autoUnwind = await this.attemptResidualUnwind(kalshi, polymarket, metadata.unwindLegs, executionGroupId);
+        }
+      } else if (oneSidedFill) {
+        autoUnwind = await this.attemptAutoUnwind(kalshi, polymarket, metadata.unwindLegs);
+      }
     }
     const autoUnwindFlattened = autoUnwind?.flattened === true;
+    // Verified shares the residual-unwind SELL removed from the over-filled (Polymarket) leg. Netted out of the
+    // quarantined residual below (sizing only — the persisted gross fill counts are unchanged).
+    const unwoundShares = autoUnwind?.unwoundShares ?? 0;
+    // Record the unwind SELL as a first-class venue order event so audit/reconciliation tooling sees the live
+    // SELL (not only the recovery_evidence blob). Top-level fill_count columns stay pre-unwind gross; net
+    // position / realized unwind loss are in recovery_evidence.autoUnwind.
+    if (autoUnwind?.result) {
+      await (this.orderEvents?.recordVenueResult(executionGroupId, autoUnwind.result) ?? Promise.resolve());
+    }
     // A stream-confirmation timeout/failed is only a SAFETY event if a fill could be left unconfirmed. When
     // BOTH legs ended in a definitive terminal no-fill status there is no exposure to protect, so a transient
     // Polymarket WS drop must NOT engage a critical circuit breaker — downgrade it to a clean zero-exposure
@@ -2698,7 +2837,13 @@ export class LiveExecutor implements ArbExecutor {
     const riskQuarantine =
       autoUnwindFlattened || provablyNoExposure
         ? null
-        : await this.riskQuarantineDecision(initialLiveLockReason, kalshi, polymarket, metadata.venueConfirmations);
+        : await this.riskQuarantineDecision(
+            initialLiveLockReason,
+            kalshi,
+            polymarket,
+            metadata.venueConfirmations,
+            unwoundShares,
+          );
     const liveLockReason = riskQuarantine ? null : initialLiveLockReason;
     const recoveryEvidencePresent =
       this.hasRecoveryEvidence(kalshi, venueConfirmations.kalshi) ||
@@ -2726,6 +2871,17 @@ export class LiveExecutor implements ArbExecutor {
             flattened: autoUnwind.flattened,
             lossDollars: autoUnwind.lossDollars ?? null,
             reason: autoUnwind.reason ?? null,
+            residualOnly: this.config.liveAutoUnwindResidualOnly,
+            // Net-position truth for a residual unwind: the FAK SELL reduced the over-filled leg by `soldCount`
+            // (and the executor credited `unwoundShares` against the residual). On a PARTIAL the remaining
+            // (delta - unwoundShares) is quarantined as the net residual. Top-level fill_count columns remain
+            // pre-unwind gross; net position / realized unwind loss must be read from here.
+            soldCount: autoUnwind.result?.fillCount ?? null,
+            unwoundShares: autoUnwind.unwoundShares ?? null,
+            soldPrice: autoUnwind.result?.fillPrice ?? null,
+            limitPrice: (autoUnwind.result?.metadata?.unwindLimitPrice as number | undefined) ?? null,
+            unwindOrderId: autoUnwind.result?.orderId ?? null,
+            unwindClientOrderId: autoUnwind.result?.clientOrderId ?? null,
           },
         }
       : null;
@@ -2857,6 +3013,7 @@ export class LiveExecutor implements ArbExecutor {
     kalshi: VenueOrderResult,
     polymarket: VenueOrderResult,
     venueConfirmations: VenueConfirmations | null | undefined,
+    unwoundShares = 0,
   ): Promise<RiskQuarantineDecision | null> {
     if (!lockReason || this.config.livePartialFillLockMode !== "quarantine") return null;
     if (!this.isRiskQuarantinableLock(lockReason)) return null;
@@ -2864,7 +3021,7 @@ export class LiveExecutor implements ArbExecutor {
     const openRisk = this.unverifiedOpenOrderRisk(kalshi) ?? this.unverifiedOpenOrderRisk(polymarket);
     if (openRisk) return null;
 
-    const exposureDollars = this.unresolvedExposureDollars(kalshi, polymarket);
+    const exposureDollars = this.unresolvedExposureDollars(kalshi, polymarket, unwoundShares);
     if (exposureDollars == null) return null;
 
     const existingExposure =
@@ -2899,9 +3056,19 @@ export class LiveExecutor implements ArbExecutor {
     );
   }
 
-  private unresolvedExposureDollars(kalshi: VenueOrderResult, polymarket: VenueOrderResult): number | null {
+  private unresolvedExposureDollars(
+    kalshi: VenueOrderResult,
+    polymarket: VenueOrderResult,
+    unwoundShares = 0,
+  ): number | null {
     const kalshiCount = kalshi.fillCount ?? 0;
-    const polymarketCount = polymarket.fillCount ?? 0;
+    let polymarketCount = polymarket.fillCount ?? 0;
+    // A residual-unwind SELL already sold `unwoundShares` of the over-filled Polymarket leg (only Polymarket
+    // has a sell adapter). Net them out of the EXPOSURE sizing — clamped so it can never dip below the hedged
+    // pair — without mutating the persisted gross fill counts. unwoundShares is already verified <= delta.
+    if (unwoundShares > 0 && polymarketCount > kalshiCount) {
+      polymarketCount = Math.max(kalshiCount, polymarketCount - unwoundShares);
+    }
     if (kalshiCount < 0 || polymarketCount < 0) return null;
     if (Math.abs(kalshiCount - polymarketCount) <= 0.000001) return 0;
     if (kalshiCount > polymarketCount) {

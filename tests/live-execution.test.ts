@@ -39,6 +39,7 @@ import {
   type VenueUnwindOutcome,
   type VenueUnwindRequest,
 } from "../src/execution/live-clients";
+import { ceilToTick } from "../src/execution/num-utils";
 import { LiveExposureCache } from "../src/execution/live-hot-path";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
@@ -256,6 +257,9 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveAutoUnwindEnabled: false,
     liveAutoUnwindMaxLossDollars: 0.05,
     liveAutoUnwindTimeoutMs: 1_500,
+    liveAutoUnwindResidualOnly: false,
+    liveAutoUnwindRequireTerminalCounterLeg: true,
+    liveAutoUnwindMaxLossCentsPerShare: 2,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
     dashboardApiToken: "token",
@@ -443,9 +447,25 @@ class FakeLiveLockStore implements LiveExecutionLockWriter {
 
 class FakeConfirmationMonitor implements VenueConfirmationMonitor {
   readonly waitCalls: Venue[] = [];
+  readonly unwindRegistrations: {
+    venue: Venue;
+    clientOrderId: string;
+    expectedSize: number;
+    venueOrderId: string | null;
+  }[] = [];
   preflightReason: string | null = null;
   resultStatus: VenueConfirmationResult["status"] = "confirmed";
   confirmations: Partial<Record<Venue, Partial<VenueConfirmationResult>>> = {};
+
+  rememberUnwindOrder(
+    venue: Venue,
+    clientOrderId: string,
+    _executionGroupId: string,
+    expectedSize: number,
+    venueOrderId: string | null = null,
+  ): void {
+    this.unwindRegistrations.push({ venue, clientOrderId, expectedSize, venueOrderId });
+  }
 
   userStreamReadiness(now = 1_800_000_000_000) {
     const stream = {
@@ -6119,6 +6139,485 @@ test("auto-unwind is never attempted when disabled (C1 default-off is inert)", a
   assert.equal(polymarket.unwindCalls, 0); // disabled -> never called
   assert.equal(result.recoveryStatus, "risk_quarantined");
   assert.equal(result.riskQuarantineExposureDollars, 4.2);
+});
+
+// ---- C1 residual-only auto-unwind: sell ONLY the unhedged delta ----
+
+test("ceilToTick rounds UP to the tick so the loss-cap sell floor never drops below the cap", () => {
+  assert.equal(ceilToTick(0.823, 0.01), 0.83);
+  assert.equal(ceilToTick(0.82, 0.01), 0.82); // already on tick: not bumped a full tick
+  assert.equal(ceilToTick(0.8201, 0.01), 0.83);
+  assert.equal(ceilToTick(0.4561, 0.001), 0.457);
+  assert.equal(ceilToTick(0.5, 0.001), 0.5);
+});
+
+class FakeUnwindClob implements PolymarketClobLike {
+  createdOrder: { tokenID: string; price: number; size: number; side: Side; metadata?: string } | null = null;
+  postedType: OrderType | undefined;
+  constructor(
+    private readonly book: { min_order_size: string; tick_size: "0.01"; neg_risk: boolean },
+    private readonly postResponse: Record<string, unknown>,
+    private readonly throwOnCreate = false,
+  ) {}
+  async getOrderBook() {
+    return this.book;
+  }
+  async createOrder(order: {
+    tokenID: string;
+    price: number;
+    size: number;
+    side: Side;
+    metadata?: string;
+  }): Promise<SignedOrder> {
+    if (this.throwOnCreate) throw new Error("createOrder boom");
+    this.createdOrder = order;
+    return { tokenId: order.tokenID } as unknown as SignedOrder;
+  }
+  async postOrder(_order: SignedOrder, orderType?: OrderType): Promise<unknown> {
+    this.postedType = orderType;
+    return this.postResponse;
+  }
+  async getBalanceAllowance(): Promise<BalanceAllowanceResponse> {
+    return { balance: "100", allowance: "100" };
+  }
+  async updateBalanceAllowance(): Promise<void> {}
+}
+
+const unwindLeg: ArbLeg = {
+  venue: "polymarket",
+  contractId: "poly",
+  direction: "yes",
+  strike: 1500,
+  ask: 0.84,
+  tokenId: "yes-token",
+};
+
+test("residual unwind adapter sells ONLY the delta via FAK at a loss-capped (rounded-up) limit", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    {
+      success: true,
+      orderID: "unwind-1",
+      status: "matched",
+      makingAmount: "10",
+      takingAmount: "8.2",
+    },
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2, // 2c/share * 10
+    timeoutMs: 1500,
+    hedgedCount: 20,
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(clob.createdOrder?.side, Side.SELL);
+  assert.equal(clob.createdOrder?.size, 10); // the delta only, NOT the 30 total
+  assert.equal(clob.createdOrder?.price, 0.82); // ceil(0.84 - 0.2/10) -> 0.82 (rounded UP, cap-safe)
+  assert.equal(clob.postedType, OrderType.FAK);
+  assert.equal(outcome?.flattened, true); // fully filled
+  assert.equal(outcome?.result?.fillCount, 10);
+  assert.equal(outcome?.result?.metadata?.unwindLimitPrice, 0.82);
+  assert.equal(outcome?.lossDollars, 0.2);
+});
+
+test("residual unwind adapter takes a PARTIAL FAK fill (sells what the book offers, cancels the rest)", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    { success: true, orderID: "unwind-2", status: "matched", makingAmount: "6", takingAmount: "4.92" }, // sold 6 of 10 @ 0.82
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2,
+    timeoutMs: 1500,
+    hedgedCount: 20,
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(outcome?.flattened, false); // partial -> not flattened; executor credits the sold shares
+  assert.equal(outcome?.result?.fillCount, 6); // sold shares carried for the executor to net the residual
+  assert.equal(outcome?.result?.metadata?.unwindSoldShares, 6);
+  assert.equal(outcome?.lossDollars, 0.12); // (0.84 - 0.82) * 6, within the per-share cap
+});
+
+test("residual unwind adapter clamps an over-reported sold count to the residual", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    { success: true, orderID: "unwind-3", status: "matched", makingAmount: "999", takingAmount: "8.2" }, // venue over-reports
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2,
+    timeoutMs: 1500,
+    hedgedCount: 20,
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(outcome?.result?.fillCount, 10); // clamped to the residual, never above
+});
+
+test("residual unwind adapter refuses to sell more than the unhedged residual (never touches the pair)", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    {
+      success: true,
+      status: "matched",
+      makingAmount: "10",
+      takingAmount: "8.2",
+    },
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2,
+    timeoutMs: 1500,
+    hedgedCount: 25, // 10 + 25 > 30 total filled
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(outcome?.flattened, false);
+  assert.equal(clob.createdOrder, null); // never placed an order
+});
+
+test("residual unwind adapter declines a residual below the venue min order size", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "5", tick_size: "0.01", neg_risk: false },
+    {
+      success: true,
+      status: "matched",
+      makingAmount: "1",
+      takingAmount: "0.8",
+    },
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 1,
+    fillPrice: 0.84,
+    maxLossDollars: 0.02,
+    timeoutMs: 1500,
+    hedgedCount: 0,
+    totalFilled: 1,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(outcome?.flattened, false);
+  assert.equal(clob.createdOrder, null);
+});
+
+test("residual unwind adapter does NOT flatten when the FAK sell finds no match (zero fill)", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    {
+      success: true,
+      orderID: "x",
+      status: "unmatched", // FOK killed, sold nothing
+    },
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2,
+    timeoutMs: 1500,
+    hedgedCount: 20,
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(outcome?.flattened, false);
+  assert.equal(outcome?.result?.fillCount, 0);
+});
+
+test("residual unwind adapter never throws (returns flattened:false on a client error)", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    { success: true, status: "matched" },
+    true, // throwOnCreate
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2,
+    timeoutMs: 1500,
+    hedgedCount: 20,
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(outcome?.flattened, false);
+  assert.match(String(outcome?.reason), /unwind error/);
+});
+
+test("residual unwind adapter refuses a legacy (non-residual-context) call so the whole-leg path keeps declining", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    {
+      success: true,
+      status: "matched",
+      makingAmount: "10",
+      takingAmount: "8.2",
+    },
+  );
+  const client = new PolymarketOrderClient(config(), async () => clob, allowedGeoblock);
+  // Legacy attemptAutoUnwind shape: no clientOrderId / hedgedCount / totalFilled.
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 5,
+    fillPrice: 0.84,
+    maxLossDollars: 0.05,
+    timeoutMs: 1500,
+  });
+  assert.equal(outcome?.flattened, false);
+  assert.match(String(outcome?.reason), /residual-only context required/);
+  assert.equal(clob.createdOrder, null); // never placed a sell on the legacy path
+});
+
+// Executor integration: a PARTIAL hedge (Polymarket 5, Kalshi 3) under residual-only mode.
+function residualUnwindExecutor(
+  residualOnly: boolean,
+  outcome: VenueUnwindOutcome | null,
+  now: number,
+  locks: FakeLiveLockStore,
+  kalshiNonTerminal = false,
+  monitor: FakeConfirmationMonitor = new FakeConfirmationMonitor(),
+) {
+  const { lower, higher } = liveCandidate(now);
+  const books = new BookStore();
+  books.setPolymarketContracts([lower]);
+  books.setKalshiContracts([higher]);
+  monitor.confirmations = {
+    kalshi: kalshiNonTerminal
+      ? { status: "timeout", reason: "kalshi stream did not confirm", fillCount: 3, fillPrice: 0.13 }
+      : { status: "confirmed", fillCount: 3, fillPrice: 0.13 },
+    polymarket: { status: "confirmed", fillCount: 5, fillPrice: 0.84 },
+  };
+  const exposureReader = { unresolvedRiskQuarantineExposureDollars: async () => 0 };
+  const polymarket = new UnwindableVenueClient(
+    "polymarket",
+    { status: "filled", fillCount: 5, fillPrice: 0.84 },
+    outcome,
+  );
+  const kalshi = new FakeVenueClient(
+    "kalshi",
+    kalshiNonTerminal
+      ? { status: "unknown", fillCount: 3, fillPrice: 0.13, error: "order response timeout after 2500ms" }
+      : { status: "filled", fillCount: 3, fillPrice: 0.13, error: null },
+  );
+  const executor = new LiveExecutor(
+    config({
+      liveOrderSize: 5,
+      liveParallelExecutionEnabled: true,
+      liveUserStreamsEnabled: true,
+      livePartialFillLockMode: "quarantine",
+      liveMaxUnresolvedExposureDollars: 10,
+      liveAutoUnwindEnabled: true,
+      liveAutoUnwindResidualOnly: residualOnly,
+    }),
+    books,
+    kalshi,
+    polymarket,
+    () => now,
+    locks,
+    undefined,
+    monitor,
+    exposureReader,
+  );
+  return { executor, polymarket, kalshi };
+}
+
+test("residual-only unwind sells ONLY the unhedged delta of a partial hedge and keeps the pair (C1)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  const monitor = new FakeConfirmationMonitor();
+  const { executor, polymarket } = residualUnwindExecutor(
+    true,
+    {
+      flattened: true,
+      lossDollars: 0.04,
+      result: {
+        venue: "polymarket",
+        clientOrderId: "grp:unwind",
+        orderId: "unwind-1",
+        status: "matched",
+        fillPrice: 0.82,
+        fillCount: 2,
+        requestedAt: "2026-04-29T20:00:00.000Z",
+        respondedAt: "2026-04-29T20:00:00.050Z",
+        error: null,
+        metadata: { unwindLimitPrice: 0.82 },
+      },
+    },
+    now,
+    locks,
+    false,
+    monitor,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 1);
+  assert.equal(polymarket.lastUnwindRequest?.fillCount, 2); // the DELTA (5 - 3), not the whole 5-share leg
+  assert.equal(polymarket.lastUnwindRequest?.hedgedCount, 3); // min(5, 3) kept paired
+  assert.equal(polymarket.lastUnwindRequest?.totalFilled, 5);
+  assert.equal(polymarket.lastUnwindRequest?.maxLossDollars, 0.04); // 2c/share * 2-share delta
+  assert.notEqual(result.recoveryStatus, "risk_quarantined"); // verified flatten -> no quarantine
+  assert.equal(result.liveLockReason, null);
+  assert.equal(locks.engageCalls, 0);
+  const evidence = result.recoveryEvidence as Record<string, unknown> | null;
+  assert.equal((evidence?.autoUnwind as Record<string, unknown>)?.soldCount, 2);
+  assert.equal((evidence?.autoUnwind as Record<string, unknown>)?.residualOnly, true);
+  // The SELL is re-registered under its venue orderId (the only key Polymarket stream fills carry) so a late
+  // fill reconciles in-band instead of tripping the late-surplus breaker.
+  const byOrderId = monitor.unwindRegistrations.find((r) => r.venueOrderId === "unwind-1");
+  assert.ok(byOrderId, "expected the unwind SELL re-registered with its venue orderId");
+  assert.equal(byOrderId?.expectedSize, 2);
+});
+
+test("residual-only unwind QUARANTINES when the adapter self-reports flattened but fails the executor's independent loss check", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  // Adapter claims flattened, but the submitted limit price (0.50) implies a worst-case loss of
+  // (0.84 - 0.50) * 2 = 0.68 >> the 0.04 cap, so the executor must REFUSE to treat it as flat.
+  const { executor, polymarket } = residualUnwindExecutor(
+    true,
+    {
+      flattened: true,
+      lossDollars: 0.01, // self-reported (lie) — must NOT be trusted
+      result: {
+        venue: "polymarket",
+        clientOrderId: "grp:unwind",
+        orderId: "unwind-1",
+        status: "matched",
+        fillPrice: 0.5,
+        fillCount: 2,
+        requestedAt: "2026-04-29T20:00:00.000Z",
+        respondedAt: "2026-04-29T20:00:00.050Z",
+        error: null,
+        metadata: { unwindLimitPrice: 0.5 },
+      },
+    },
+    now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 1);
+  assert.equal(result.recoveryStatus, "risk_quarantined"); // independent check overrode the adapter's claim
+});
+
+test("residual-only unwind does NOT attempt when a leg is non-terminal (late-fill guard)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  const { executor, polymarket } = residualUnwindExecutor(
+    true,
+    { flattened: true, lossDollars: 0.04, result: undefined },
+    now,
+    locks,
+    true, // kalshi non-terminal (unknown/timeout)
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 0); // terminal guard short-circuits before the adapter
+  assert.equal(result.recoveryStatus, "risk_quarantined");
+});
+
+test("residual-only OFF leaves a partial hedge unchanged: legacy whole-leg unwind never fires on a two-sided residual", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  const { executor, polymarket } = residualUnwindExecutor(false, { flattened: true, lossDollars: 0.04 }, now, locks);
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 0); // legacy path only fires on a PURE one-sided fill
+  assert.equal(result.recoveryStatus, "risk_quarantined");
+});
+
+test("residual-only unwind credits a PARTIAL FAK sell against the residual (quarantines only the NET)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  // Residual delta = 5 - 3 = 2; the FAK sold 1, so exactly 1 share remains unhedged.
+  const { executor, polymarket } = residualUnwindExecutor(
+    true,
+    {
+      flattened: false,
+      lossDollars: 0.02,
+      result: {
+        venue: "polymarket",
+        clientOrderId: "grp:unwind",
+        orderId: "unwind-1",
+        status: "matched",
+        fillPrice: 0.82,
+        fillCount: 1, // sold 1 of the 2-share residual
+        requestedAt: "2026-04-29T20:00:00.000Z",
+        respondedAt: "2026-04-29T20:00:00.050Z",
+        error: "unwind FAK sell matched (sold 1/2)",
+        metadata: { unwindLimitPrice: 0.82 },
+      },
+    },
+    now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(polymarket.unwindCalls, 1);
+  assert.equal(result.recoveryStatus, "risk_quarantined");
+  // Net residual = (2 - 1) = 1 share @ 0.84 = 0.84, NOT the gross 2 shares (1.68).
+  assert.equal(result.riskQuarantineExposureDollars, 0.84);
+  const evidence = result.recoveryEvidence as Record<string, unknown> | null;
+  assert.equal((evidence?.autoUnwind as Record<string, unknown>)?.unwoundShares, 1);
+});
+
+test("residual-only unwind credits ZERO when a partial sell's limit fails the cap check (quarantines GROSS — safe)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  // Sold 1, but the submitted limit (0.50) implies (0.84 - 0.50) * 1 = 0.34 >> the 0.04 cap, so the credit is
+  // 0 and the FULL residual is quarantined (over-quarantine, never under-quarantine of naked exposure).
+  const { executor } = residualUnwindExecutor(
+    true,
+    {
+      flattened: false,
+      result: {
+        venue: "polymarket",
+        clientOrderId: "grp:unwind",
+        orderId: "unwind-1",
+        status: "matched",
+        fillPrice: 0.5,
+        fillCount: 1,
+        requestedAt: "2026-04-29T20:00:00.000Z",
+        respondedAt: "2026-04-29T20:00:00.050Z",
+        error: "unwind FAK sell matched (sold 1/2)",
+        metadata: { unwindLimitPrice: 0.5 },
+      },
+    },
+    now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.equal(result.recoveryStatus, "risk_quarantined");
+  assert.equal(result.riskQuarantineExposureDollars, 1.68); // gross 2 shares — no credit on cap ambiguity
 });
 
 test("live executor readiness surfaces persisted quarantined exposure after restart", async () => {

@@ -18,7 +18,7 @@ import { createWalletClient, http } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
-import { roundPrice } from "./num-utils";
+import { ceilToTick, roundPrice } from "./num-utils";
 import { getKalshiHeaders } from "../kalshi/auth";
 import { KalshiFixOrderSession, type KalshiFixOrderExecution, type KalshiFixOrderInput } from "../kalshi/fix";
 import type {
@@ -107,6 +107,10 @@ export interface VenueUnwindOutcome {
   result?: VenueOrderResult;
   lossDollars?: number | null;
   reason?: string | null;
+  // FAK partial-sell credit: the executor-VERIFIED, cap-proven, clamped-to-[0,delta] number of residual shares
+  // actually sold. The executor nets this out of the quarantined residual. 0 on any ambiguity (over-quarantine,
+  // never under-quarantine). Set by the executor's attemptResidualUnwind, not by the venue adapter.
+  unwoundShares?: number | null;
 }
 
 export interface VenueUnwindRequest {
@@ -116,6 +120,14 @@ export interface VenueUnwindRequest {
   maxLossDollars: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  // Residual-only unwind context (set by the executor): `hedgedCount` is the already-paired min(...) count
+  // and `totalFilled` is this venue's TOTAL fill, so the adapter can HARD-REFUSE selling more than the
+  // proven-unhedged residual (never touch the hedged pair). `clientOrderId` is a deterministic per-execution-
+  // group id used to register the SELL for late-fill reconciliation; double-unwind is prevented by single-shot
+  // finalization (one finalize per fresh execution group), not by venue-side dedup.
+  hedgedCount?: number;
+  totalFilled?: number;
+  clientOrderId?: string;
 }
 
 export interface VenueOrderClient {
@@ -2404,6 +2416,133 @@ export class PolymarketOrderClient implements VenueOrderClient {
       };
       if (useCache) this.cachedReadiness = readiness;
       return readiness;
+    }
+  }
+
+  // Residual-only auto-unwind SELL adapter (C1, default-off). Sells EXACTLY `fillCount` (the proven-unhedged
+  // residual the executor computed) of the over-filled token via a FOK (all-or-nothing) limit SELL at a
+  // loss-capped floor. SAFETY by construction: (1) the limit price IS the loss guarantee — a sell limit fills
+  // only at >= the limit, and the limit is the worst-acceptable sell price rounded UP to a tick, so realized
+  // loss <= cap regardless of how the fill amounts parse; (2) FOK is all-or-nothing, so there is no partial-
+  // sell accounting gap and the fill/no-fill outcome is read from the order STATUS, not the (sell-inverted)
+  // amount fields; (3) it refuses to sell more than the unhedged residual. Never throws; returns
+  // flattened:false (fall through to quarantine) on any decline, error, or non-complete fill.
+  async unwindPosition(request: VenueUnwindRequest): Promise<VenueUnwindOutcome | null> {
+    const requestedAt = Date.now();
+    const clientOrderId = request.clientOrderId ?? `unwind-${requestedAt}`;
+    try {
+      const { leg, fillCount, fillPrice, maxLossDollars, hedgedCount, totalFilled } = request;
+      if (!leg.tokenId) return { flattened: false, reason: "unwind: missing token id" };
+      if (!(fillCount > 0)) return { flattened: false, reason: "unwind: non-positive residual size" };
+      if (fillPrice == null || !(fillPrice > 0)) return { flattened: false, reason: "unwind: missing buy fill price" };
+      // This SELL adapter is ONLY safe under the residual-only executor flow, which supplies the full context
+      // (deterministic clientOrderId + the hedged pair + total fill), independently re-verifies the cap, and
+      // registers the order for reconciliation. Refuse any other caller (e.g. the legacy whole-leg unwind) so
+      // that path keeps declining -> quarantine exactly as it did before this adapter existed.
+      if (request.clientOrderId == null || hedgedCount == null || totalFilled == null) {
+        return { flattened: false, reason: "unwind: residual-only context required (no legacy whole-leg sell)" };
+      }
+      // Never sell more than the proven-unhedged residual; the hedged pair must remain untouched.
+      if (fillCount + hedgedCount > totalFilled + 0.000001) {
+        return {
+          flattened: false,
+          reason: `unwind: residual ${fillCount} + hedged ${hedgedCount} exceeds filled ${totalFilled}`,
+        };
+      }
+      const { client } = await this.client();
+      const book = await this.getOrderBook(leg.tokenId, requestedAt);
+      const tickRaw = book.tick_size;
+      const tickNum = typeof tickRaw === "number" ? tickRaw : Number(tickRaw);
+      const tick = Number.isFinite(tickNum) && tickNum > 0 ? tickNum : 0.01;
+      const minOrderSize = finiteOrNull(book.min_order_size);
+      if (minOrderSize != null && fillCount + 1e-9 < minOrderSize) {
+        return { flattened: false, reason: `unwind: residual ${fillCount} below min order size ${minOrderSize}` };
+      }
+      // Loss-capped SELL floor: a sell fills only at >= limit, so the limit must be >= minSellPrice. Round UP
+      // (ceilToTick) — rounding down would lower the floor and breach the cap.
+      const minSellPrice = fillPrice - maxLossDollars / fillCount;
+      const limitPrice = ceilToTick(minSellPrice, tick);
+      if (!(limitPrice > 0) || limitPrice >= 1) {
+        return { flattened: false, reason: `unwind: loss-capped sell floor ${limitPrice} out of range` };
+      }
+      // Independent re-proof that the snapped limit keeps the worst case within cap (defends against a
+      // wrong-direction tick snap).
+      const worstCaseLoss = roundPrice((fillPrice - limitPrice) * fillCount);
+      if (worstCaseLoss > maxLossDollars + 1e-9) {
+        return {
+          flattened: false,
+          reason: `unwind: snapped floor ${limitPrice} worst-loss ${worstCaseLoss} exceeds cap ${maxLossDollars}`,
+        };
+      }
+      const signedOrder = await client.createOrder(
+        {
+          tokenID: leg.tokenId,
+          price: limitPrice,
+          size: fillCount,
+          side: Side.SELL,
+          metadata: metadataFromClientOrderId(clientOrderId),
+        },
+        { tickSize: book.tick_size as TickSize, negRisk: Boolean(book.neg_risk) },
+      );
+      // Bounded by max(global axios timeout, configured unwind timeout). On timeout this throws -> caught ->
+      // flattened:false -> quarantine (never assumed flat).
+      const payload = await withExtendedAxiosTimeout(Math.max(1, request.timeoutMs), () =>
+        withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, OrderType.FAK)),
+      );
+      const respondedAt = Date.now();
+      const response = payload as Record<string, unknown>;
+      const orderId = response.orderID == null ? null : String(response.orderID);
+      const status = String(response.status ?? "").toLowerCase();
+      const success = response.success !== false;
+      const filledStatus = ["matched", "filled"].includes(status);
+      // FAK takes what the book offers at/above the loss-capped limit and cancels the rest, so a PARTIAL sell
+      // is normal. SELL making/taking invert vs BUY: makingAmount = shares sold, takingAmount = USDC received.
+      // Credit only the parsed sold shares, CLAMPED to [0, delta]; a null/garbage count credits 0. Because the
+      // per-share limit caps the loss on however many fill, a misparse can only UNDER-credit (over-quarantine),
+      // never under-quarantine real exposure.
+      const makingAmount = finiteOrNull(response.makingAmount);
+      const takingAmount = finiteOrNull(response.takingAmount);
+      const soldShares = success && makingAmount != null ? Math.min(Math.max(0, makingAmount), fillCount) : 0;
+      const sellFillPrice = soldShares > 0 && takingAmount != null ? roundPrice(takingAmount / soldShares) : null;
+      const fullyFilled = success && filledStatus && Math.abs(soldShares - fillCount) <= 0.000001;
+      // Realized loss on the shares ACTUALLY sold; prefer the real sell price, else the limit floor (the worst
+      // the venue could have filled) — always cap-bounded.
+      const effectiveSellPrice = sellFillPrice ?? limitPrice;
+      const lossDollars = roundPrice(Math.max(0, (fillPrice - effectiveSellPrice) * soldShares));
+      const sellResult: VenueOrderResult = {
+        venue: this.venue,
+        clientOrderId,
+        orderId,
+        status: status || (success ? "unknown" : "rejected"),
+        fillPrice: sellFillPrice,
+        fillCount: soldShares,
+        requestedAt: isoFromMs(requestedAt),
+        respondedAt: isoFromMs(respondedAt),
+        error: fullyFilled ? null : `unwind FAK sell ${status || "no-match"} (sold ${soldShares}/${fillCount})`,
+        fee: null,
+        exchangeTimestampMs: null,
+        signMs: null,
+        metadata: {
+          unwindSide: "sell",
+          unwindResidualShares: fillCount,
+          unwindSoldShares: soldShares,
+          unwindBuyFillPrice: fillPrice,
+          unwindLimitPrice: limitPrice,
+          unwindWorstCaseLossDollars: worstCaseLoss,
+          unwindMaxLossDollars: maxLossDollars,
+          polymarketMakingAmount: makingAmount,
+          polymarketTakingAmount: takingAmount,
+          polymarketUnwindStatus: status || (success ? "unknown" : "rejected"),
+        },
+      };
+      // A partial (or zero) sell is NOT flattened: it falls through to quarantine, but carries the sold shares
+      // in result.fillCount so the executor nets the residual. Full sell -> flattened.
+      if (!fullyFilled) {
+        return { flattened: false, reason: sellResult.error, result: sellResult, lossDollars };
+      }
+      return { flattened: true, lossDollars, reason: null, result: sellResult };
+    } catch (error) {
+      return { flattened: false, reason: `unwind error: ${sanitizeError(error)}` };
     }
   }
 

@@ -165,6 +165,9 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveAutoUnwindEnabled: false,
     liveAutoUnwindMaxLossDollars: 0.05,
     liveAutoUnwindTimeoutMs: 1_500,
+    liveAutoUnwindResidualOnly: false,
+    liveAutoUnwindRequireTerminalCounterLeg: true,
+    liveAutoUnwindMaxLossCentsPerShare: 2,
     dashboardRealtimeSecret: "",
     ...input,
   };

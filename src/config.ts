@@ -158,6 +158,9 @@ export interface AppConfig {
   liveAutoUnwindEnabled: boolean;
   liveAutoUnwindMaxLossDollars: number;
   liveAutoUnwindTimeoutMs: number;
+  liveAutoUnwindResidualOnly: boolean;
+  liveAutoUnwindRequireTerminalCounterLeg: boolean;
+  liveAutoUnwindMaxLossCentsPerShare: number;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
@@ -560,6 +563,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveAutoUnwindEnabled: envBoolean(env, "LIVE_AUTO_UNWIND_ENABLED", false),
     liveAutoUnwindMaxLossDollars: Math.max(0, envNumber(env, "LIVE_AUTO_UNWIND_MAX_LOSS_DOLLARS", 0.05)),
     liveAutoUnwindTimeoutMs: Math.max(1, envNumber(env, "LIVE_AUTO_UNWIND_TIMEOUT_MS", 1_500)),
+    // Residual-only auto-unwind (default off): when on, a PARTIAL hedge sells ONLY the unhedged delta
+    // (|kalshiFill - polymarketFill|) and keeps the min(...) exact-pair hedged, instead of the legacy
+    // whole-leg unwind that only fires on a pure one-sided fill. Polymarket SELL adapter only; a Kalshi
+    // residual still falls through to quarantine.
+    liveAutoUnwindResidualOnly: envBoolean(env, "LIVE_AUTO_UNWIND_RESIDUAL_ONLY", false),
+    // Only unwind once BOTH legs are confirmation-terminal (default on), so a late counter-leg fill cannot
+    // change the unhedged delta mid-unwind and cause us to sell already-hedged shares.
+    liveAutoUnwindRequireTerminalCounterLeg: envBoolean(env, "LIVE_AUTO_UNWIND_REQUIRE_TERMINAL_COUNTERLEG", true),
+    // Moderate, operator-tunable loss budget for the residual unwind, in cents PER SHARE of the delta (the
+    // effective dollar cap = centsPerShare/100 * delta, so it scales with residual size). Default 2.0c/share.
+    liveAutoUnwindMaxLossCentsPerShare: Math.max(0, envNumber(env, "LIVE_AUTO_UNWIND_MAX_LOSS_CENTS_PER_SHARE", 2)),
     kalshiUserWsUrl: envString(
       env,
       "KALSHI_USER_WS_URL",

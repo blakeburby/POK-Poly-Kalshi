@@ -45,6 +45,18 @@ export interface VenueConfirmationMonitor {
     result: VenueOrderResult,
     options: { executionGroupId: string; expectedSize: number; leg: ArbLeg; submittedAtMs: number; timeoutMs: number },
   ): Promise<VenueConfirmationResult>;
+  // Register a residual-unwind SELL (C1) so a late SELL fill event reconciles in-band instead of tripping the
+  // late-surplus circuit breaker. Optional — absent on test/legacy monitors. Called twice: once pre-post
+  // (clientOrderId only) and again post-response with the venue orderId, which is the key Polymarket stream
+  // fills actually carry.
+  rememberUnwindOrder?(
+    venue: Venue,
+    clientOrderId: string,
+    executionGroupId: string,
+    expectedSize: number,
+    venueOrderId?: string | null,
+    reconciledFillCount?: number | null,
+  ): void;
 }
 
 interface PendingConfirmation {
@@ -402,6 +414,37 @@ export class LiveVenueConfirmationCoordinator implements VenueConfirmationMonito
         await this.lockOnUnsafeEvent(event, known.executionGroupId, known.expectedSize, known.reconciledFillCount ?? 0);
       }
     }
+  }
+
+  rememberUnwindOrder(
+    venue: Venue,
+    clientOrderId: string,
+    executionGroupId: string,
+    expectedSize: number,
+    venueOrderId: string | null = null,
+    reconciledFillCount?: number | null,
+  ): void {
+    // Register a residual-unwind SELL so a late fill event reconciles in-band against expectedSize (the
+    // unhedged delta) instead of tripping late-surplus detection. Polymarket user-stream events carry only a
+    // venueOrderId (clientOrderId is null on the wire), so the executor re-calls this AFTER the SELL responds
+    // with the venue orderId, registering the `order:` key the stream actually matches on. reconciledFillCount
+    // = the SELL's accounted fill (a full FOK sell == expected; a killed FOK emits no fill event).
+    const nowIso = new Date(this.now()).toISOString();
+    this.rememberKnownOrder(
+      {
+        venue,
+        clientOrderId,
+        orderId: venueOrderId,
+        status: "pending_unwind",
+        fillPrice: null,
+        fillCount: reconciledFillCount ?? expectedSize,
+        requestedAt: nowIso,
+        respondedAt: nowIso,
+        error: null,
+      },
+      executionGroupId,
+      expectedSize,
+    );
   }
 
   private rememberKnownOrder(result: VenueOrderResult, executionGroupId: string, expectedSize: number): void {
