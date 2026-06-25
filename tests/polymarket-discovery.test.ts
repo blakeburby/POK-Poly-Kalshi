@@ -141,6 +141,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveLeadLagMaxAdverseSelectionScore: 0.75,
     livePartialFillLockMode: "quarantine",
     liveMaxUnresolvedExposureDollars: 10,
+    liveMinPortfolioValueDollars: 0,
     liveReconcileBeforeTrade: false,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",

@@ -31,6 +31,7 @@ import { CrossVenueArbScanner } from "./scanner/scanner";
 import { computeVenuePnl } from "./trading/venue-pnl";
 import { PortfolioEquityStore } from "./db/portfolio-equity";
 import { EquitySampler } from "./trading/equity-sampler";
+import { PortfolioFloorMonitor } from "./trading/portfolio-floor";
 import { CoalescedScanScheduler, createScanHeartbeat } from "./scanner/scheduler";
 import { createIdempotentShutdown } from "./shutdown";
 import { TradingActivityStore, tradingActivityEventFromVenueEvent } from "./trading/activity";
@@ -72,6 +73,10 @@ async function main(): Promise<void> {
   // trading path never reads this table.
   const portfolioEquity = new PortfolioEquityStore(pool);
   const equitySampler = new EquitySampler(portfolioEquity);
+  // Capital-floor circuit breaker (the single operator-enabled hardlock): halts ALL trading when the combined
+  // Kalshi+Polymarket Portfolio Value Total falls below LIVE_MIN_PORTFOLIO_VALUE_DOLLARS. Independent of
+  // LIVE_AUTO_HARDLOCKS_ENABLED; no-op when the floor is 0. Polled on its own 10s timer (cheap, ≤20s cache).
+  const portfolioFloor = new PortfolioFloorMonitor(tradingActivity, config.liveMinPortfolioValueDollars);
   // Optional one-time seed (off by default): reconstruct an APPROXIMATE historical curve from
   // realized arb P&L, anchored to today's real equity. Realized-only (no historical open-position
   // MTM), ignores deposits/withdrawals — the live sampler is the source of truth going forward.
@@ -179,6 +184,7 @@ async function main(): Promise<void> {
     orderEvents,
     confirmationMonitor,
     liveExposure,
+    () => portfolioFloor.blockReason(),
   );
   // One shared notifier: the scanner fires it after each real-attempt persist; open dashboard realtime
   // streams subscribe and push the new ledger row within ~network RTT (instead of the TTL-bounded poll).
@@ -202,6 +208,7 @@ async function main(): Promise<void> {
       minExactFillRate: config.liveExecutionQualityMinExactFillRate,
     },
     liveExposure,
+    livePortfolioFloor: { blockReason: () => portfolioFloor.blockReason() },
     liveLocks,
     deferLivePersistence: config.liveHotPathEnabled,
     latency,
@@ -403,6 +410,9 @@ async function main(): Promise<void> {
       });
     }
   }, 10_000);
+  // Capital-floor watchdog: re-reads the combined portfolio value every 10s (cheap; the underlying account
+  // read is ≤20s-cached) and latches the breaker below the floor. No-op when the floor is disabled.
+  const portfolioFloorTimer = setInterval(() => void portfolioFloor.tick(Date.now()), 10_000);
   const boundaryDiscoveryTimers = scheduleBoundaryRefreshes();
 
   const server = createServer((request, response) => {
@@ -462,6 +472,7 @@ async function main(): Promise<void> {
             now,
             readiness,
             readinessError,
+            portfolioFloorStatus: portfolioFloor.status(),
           }),
           runtimeHealth: getRuntimeHealth(),
         });
@@ -503,6 +514,7 @@ async function main(): Promise<void> {
     if (scanHeartbeatTimer) clearInterval(scanHeartbeatTimer);
     clearInterval(analyticsTimer);
     clearInterval(runtimeHealthTimer);
+    clearInterval(portfolioFloorTimer);
     if (discoveryRetryTimer) clearTimeout(discoveryRetryTimer);
     for (const timer of boundaryDiscoveryTimers) clearTimeout(timer);
     kalshi.close();

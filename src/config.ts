@@ -154,6 +154,7 @@ export interface AppConfig {
   liveLeadLagMaxAdverseSelectionScore: number;
   livePartialFillLockMode: LivePartialFillLockMode;
   liveMaxUnresolvedExposureDollars: number;
+  liveMinPortfolioValueDollars: number;
   liveReconcileBeforeTrade: boolean;
   liveAutoUnwindEnabled: boolean;
   liveAutoUnwindMaxLossDollars: number;
@@ -555,6 +556,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveLeadLagMaxAdverseSelectionScore: envNumber(env, "LIVE_LEAD_LAG_MAX_ADVERSE_SELECTION_SCORE", 0.75),
     livePartialFillLockMode: envLivePartialFillLockMode(env),
     liveMaxUnresolvedExposureDollars: envNumber(env, "LIVE_MAX_UNRESOLVED_EXPOSURE_DOLLARS", 10),
+    // Capital-floor circuit breaker (the ONE operator-enabled hardlock): if the combined Kalshi+Polymarket
+    // Portfolio Value Total falls below this, HALT all trading (latching). 0 = disabled (default, byte-identical).
+    // Independent of LIVE_AUTO_HARDLOCKS_ENABLED. Fail-open: only latches on a confirmed authoritative reading.
+    liveMinPortfolioValueDollars: Math.max(0, envNumber(env, "LIVE_MIN_PORTFOLIO_VALUE_DOLLARS", 0)),
     liveReconcileBeforeTrade: envBoolean(env, "LIVE_RECONCILE_BEFORE_TRADE", true),
     // C1 bounded same-window auto-unwind backstop. Default OFF. When enabled (and a venue client provides
     // an unwindPosition adapter), a one-sided fill that would otherwise be quarantined/locked is first

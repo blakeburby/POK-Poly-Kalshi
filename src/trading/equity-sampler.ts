@@ -12,7 +12,7 @@ const PRUNE_EVERY_N = 60; // at ~60s cadence, prune about once per hour
  * sync): Polymarket's portfolioValue is already the full account total (cash + positions) so it is used
  * directly; Kalshi's portfolioValue is its reported position MTM, distinct from cash, so cash is added.
  */
-function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
+export function venueAccountValue(activity: TradingPlatformActivity | null | undefined): number | null {
   if (!activity) return null;
   const cash = activity.portfolio?.cashValue ?? null;
   const reported = activity.portfolio?.portfolioValue ?? null;

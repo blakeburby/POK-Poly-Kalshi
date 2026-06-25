@@ -1,6 +1,7 @@
 import type { AppConfig } from "./config";
 import type { ScannerStatus } from "./scanner/scanner";
 import type { LiveExecutionReadiness, VenueExecutionReadiness } from "./types";
+import type { PortfolioFloorStatus } from "./trading/portfolio-floor";
 
 export interface PublicWorkerHealthOptions {
   config: AppConfig;
@@ -8,6 +9,7 @@ export interface PublicWorkerHealthOptions {
   now: number;
   readiness?: LiveExecutionReadiness | null;
   readinessError?: unknown;
+  portfolioFloorStatus?: PortfolioFloorStatus | null;
 }
 
 function lastScanAgeMs(status: ScannerStatus, now: number): number | null {
@@ -78,7 +80,7 @@ function publicExecutionReadiness(
 }
 
 export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Record<string, unknown> {
-  const { config, scannerStatus, now, readiness, readinessError } = options;
+  const { config, scannerStatus, now, readiness, readinessError, portfolioFloorStatus } = options;
   const health: Record<string, unknown> = {
     ok: true,
     liveTrading: true,
@@ -111,6 +113,24 @@ export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Rec
     liveAutoUnwindMaxLossDollars: config.liveAutoUnwindMaxLossDollars,
     liveAutoUnwindRequireTerminalCounterLeg: config.liveAutoUnwindRequireTerminalCounterLeg,
     liveAutoUnwindTimeoutMs: config.liveAutoUnwindTimeoutMs,
+    // Capital-floor circuit breaker (the single operator-enabled hardlock).
+    livePortfolioFloorEnabled: config.liveMinPortfolioValueDollars > 0,
+    liveMinPortfolioValueDollars: config.liveMinPortfolioValueDollars,
+    portfolioFloor: portfolioFloorStatus
+      ? {
+          total: portfolioFloorStatus.total,
+          kalshiValue: portfolioFloorStatus.kalshiValue,
+          polymarketValue: portfolioFloorStatus.polymarketValue,
+          breached: portfolioFloorStatus.breached,
+          reason: portfolioFloorStatus.reason,
+          authoritative: portfolioFloorStatus.authoritative,
+          kalshiLive: portfolioFloorStatus.kalshiLive,
+          polymarketLive: portfolioFloorStatus.polymarketLive,
+          consecutiveBreaches: portfolioFloorStatus.consecutiveBreaches,
+          confirmations: portfolioFloorStatus.confirmations,
+          lastReadingAtMs: portfolioFloorStatus.lastReadingAtMs,
+        }
+      : null,
     polymarketGeoblockGateEnabled: config.polymarketGeoblockGateEnabled,
     liveExactExposureRequired: config.liveExactExposureRequired,
     liveExecutionQualityGateEnabled: config.liveExecutionQualityGateEnabled,

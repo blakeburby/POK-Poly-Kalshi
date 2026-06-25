@@ -29,6 +29,10 @@ export interface ScannerOptions {
   liveExactExposureRequired?: boolean;
   liveExecutionQualityGateEnabled?: boolean;
   liveExecutionQualityOptions?: LiveExecutionQualityOptions;
+  /** Capital-floor circuit breaker: returns a halt reason when the combined portfolio value is below the
+   *  operator floor. Checked BEFORE the liveAutoHardlocksEnabled short-circuit, so it halts independent of the
+   *  master switch (the same slot as the execution-quality gate). */
+  livePortfolioFloor?: { blockReason(): string | null };
   liveExposure?: {
     liveSubmittedAttemptBlockReason?(
       candidate: ArbCandidate,
@@ -412,6 +416,10 @@ export class CrossVenueArbScanner {
       );
       if (qualityReason) return qualityReason;
     }
+    // Capital-floor circuit breaker — halts ALL new candidates independent of liveAutoHardlocksEnabled
+    // (checked BEFORE the master-switch short-circuit below).
+    const portfolioFloorReason = this.options.livePortfolioFloor?.blockReason();
+    if (portfolioFloorReason) return portfolioFloorReason;
     if (this.options.liveAutoHardlocksEnabled === false) return null;
     return (
       (await this.options.liveExposure?.liveExposureBlockReason(

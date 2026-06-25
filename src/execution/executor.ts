@@ -331,6 +331,9 @@ export class LiveExecutor implements ArbExecutor {
     private readonly orderEvents?: VenueOrderEventWriter,
     private readonly confirmationMonitor?: VenueConfirmationMonitor,
     private readonly quarantineExposureReader?: RiskQuarantineExposureReader,
+    // Capital-floor circuit breaker handle: returns a halt reason when the combined portfolio value is below
+    // the operator floor, else null. Independent of liveAutoHardlocksEnabled.
+    private readonly portfolioFloorReason?: () => string | null,
   ) {}
 
   async warm(options: { tokenIds?: string[]; now?: number } = {}): Promise<void> {
@@ -410,6 +413,7 @@ export class LiveExecutor implements ArbExecutor {
       effectivePartialFillLocked,
       exactExposureReason,
       executionQuality?.reason ?? null,
+      this.portfolioFloorReason?.() ?? null,
     );
     return {
       mode: "live",
@@ -499,6 +503,11 @@ export class LiveExecutor implements ArbExecutor {
     const hotGateStartedAt = executeStartedAt;
     const guardFailure = protectedGuardFailure(candidate, this.config.minProfitDollars);
     if (guardFailure) return guardFailure;
+    // Capital-floor circuit breaker (independent of liveAutoHardlocksEnabled): refuse to open new exposure
+    // when combined portfolio value is below the operator floor. Closes the window for a candidate that was
+    // enqueued before the breach latched (the scanner gate only runs at enqueue time).
+    const portfolioFloorReason = this.portfolioFloorReason?.();
+    if (portfolioFloorReason) return liveLocked(portfolioFloorReason);
     const activeLock = this.config.liveAutoHardlocksEnabled ? await this.liveLocks?.getActiveLock() : null;
     if (activeLock) return failed(`live circuit breaker locked: ${activeLock.reason}`);
     if (this.config.liveAutoHardlocksEnabled && this.partialFillLocked) {
@@ -1492,11 +1501,15 @@ export class LiveExecutor implements ArbExecutor {
     partialFillLocked = this.partialFillLocked,
     exactExposureReason: string | null = null,
     executionQualityReason: string | null = null,
+    portfolioFloorReason: string | null = null,
   ): { state: LiveRiskState; reason: string | null } {
     if (this.config.liveExactExposureRequired && exactExposureReason)
       return { state: "blocked", reason: exactExposureReason };
     if (this.config.liveExecutionQualityGateEnabled && executionQualityReason)
       return { state: "blocked", reason: executionQualityReason };
+    // Capital-floor circuit breaker: a hard stop surfaced BEFORE the master-switch short-circuit, so it shows
+    // even while all other hardlocks are disabled.
+    if (portfolioFloorReason) return { state: "hard_locked", reason: portfolioFloorReason };
     if (!this.config.liveAutoHardlocksEnabled) {
       return {
         state: "auto_hardlocks_disabled",

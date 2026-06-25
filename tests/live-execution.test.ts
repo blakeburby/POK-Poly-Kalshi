@@ -253,6 +253,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveLeadLagMaxAdverseSelectionScore: 0.75,
     livePartialFillLockMode: "lock",
     liveMaxUnresolvedExposureDollars: 10,
+    liveMinPortfolioValueDollars: 0,
     liveReconcileBeforeTrade: false,
     liveAutoUnwindEnabled: false,
     liveAutoUnwindMaxLossDollars: 0.05,
