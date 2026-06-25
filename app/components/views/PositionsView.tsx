@@ -14,13 +14,13 @@ const POSITION_STALE_MS = 120_000;
 
 type Side = "YES" | "NO";
 
-interface EnrichedPos extends TradingPosition {
+export interface EnrichedPos extends TradingPosition {
   venue: TradingPlatform;
   strike: number | null;
   side: Side | null;
 }
 
-interface StrikePairing {
+export interface StrikePairing {
   strike: number;
   kShares: number;
   pShares: number;
@@ -47,14 +47,14 @@ function sideOf(p: TradingPosition): Side | null {
   return null;
 }
 
-function enrich(positions: TradingPosition[] | undefined, venue: TradingPlatform): EnrichedPos[] {
+export function enrich(positions: TradingPosition[] | undefined, venue: TradingPlatform): EnrichedPos[] {
   return (positions ?? []).map((p) => ({ ...p, venue, strike: parseStrike(p.market), side: sideOf(p) }));
 }
 
 /** Observed cross-venue hedge pairing, by strike. The matched leg (min of the two venues' share
  *  counts at a strike) is treated as hedged; the excess on the heavier venue is the naked residual.
  *  This is a dashboard inference for visibility — not the engine's authoritative hedge state. */
-function pairByStrike(all: EnrichedPos[]): StrikePairing[] {
+export function pairByStrike(all: EnrichedPos[]): StrikePairing[] {
   const map = new Map<number, StrikePairing>();
   for (const pos of all) {
     if (pos.strike == null) continue;
@@ -151,7 +151,7 @@ export function PositionsView({ snap }: { snap: DashboardSnapshot }) {
   );
 }
 
-function HedgeMap({ pairs }: { pairs: StrikePairing[] }) {
+export function HedgeMap({ pairs }: { pairs: StrikePairing[] }) {
   if (!pairs.length) return <Empty>No strikes to pair</Empty>;
   const maxShares = Math.max(1, ...pairs.map((r) => Math.max(r.kShares, r.pShares)));
   return (

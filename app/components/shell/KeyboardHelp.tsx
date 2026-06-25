@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Keyboard } from "lucide-react";
 import { Dialog, CenterContent } from "@/components/ui/dialog";
-import { NAV } from "./nav-items";
+import { NAV, SECTIONS } from "./nav-items";
 import { cn } from "@/lib/utils";
 
 function Kbd({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -57,7 +57,11 @@ export function KeyboardHelp() {
 
         <div className="grid grid-cols-1 gap-x-8 gap-y-1 px-4 py-3 sm:grid-cols-2">
           <div>
-            <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-fg-faint">Actions</div>
+            <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.14em] text-fg-faint">Sections</div>
+            {SECTIONS.map((s) => (
+              <Row key={s.id} label={s.label} keys={<Kbd>{s.hot}</Kbd>} />
+            ))}
+            <div className="mb-1 mt-3 font-mono text-[9px] uppercase tracking-[0.14em] text-fg-faint">Actions</div>
             <Row
               label="Command palette"
               keys={

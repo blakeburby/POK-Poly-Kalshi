@@ -11,7 +11,7 @@ import { StatusBar } from "@/components/shell/StatusBar";
 import { MobileNav } from "@/components/shell/MobileNav";
 import { CommandPalette } from "@/components/shell/CommandPalette";
 import { KeyboardHelp } from "@/components/shell/KeyboardHelp";
-import { ViewRouter } from "@/components/views/ViewRouter";
+import { SectionShell } from "@/components/views/SectionShell";
 import { StatusDot } from "@/components/ui/stat";
 
 export default function DashboardApp({ dashboardName }: { dashboardName?: string }) {
@@ -27,7 +27,7 @@ export default function DashboardApp({ dashboardName }: { dashboardName?: string
         <div className="flex min-h-0 flex-1">
           <NavRail />
           <main className="min-w-0 flex-1 overflow-hidden bg-base">
-            {snap ? <ViewRouter /> : <FeedDown name={dashboardName} />}
+            {snap ? <SectionShell /> : <FeedDown name={dashboardName} />}
           </main>
           <HealthRail />
         </div>

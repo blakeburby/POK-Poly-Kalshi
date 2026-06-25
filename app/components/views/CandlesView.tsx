@@ -28,7 +28,21 @@ function fmtPctSigned(v: number | null): string {
   return `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(p).toFixed(2)}%`;
 }
 
-export function CandlesView() {
+/**
+ * Self-contained spot candlestick panel (own asset/granularity selectors + polling fetch).
+ * Reused both as the full CandlesView and as a Cockpit cell. `chartHeight` sizes the chart;
+ * `showTiles` toggles the Last/Change/High/Low strip (off in the compact Cockpit embed).
+ */
+export function CandleChartPanel({
+  chartHeight = 440,
+  showTiles = true,
+  fill = false,
+}: {
+  chartHeight?: number;
+  showTiles?: boolean;
+  /** Fill the parent height (for a resizable pane) instead of using a fixed chart height. */
+  fill?: boolean;
+}) {
   const [asset, setAsset] = React.useState<Asset>("BTC");
   const [gran, setGran] = React.useState(60);
   const [candles, setCandles] = React.useState<Candle[]>([]);
@@ -70,12 +84,13 @@ export function CandlesView() {
   const granLabel = GRANS.find((g) => g.s === gran)?.label ?? "";
 
   return (
-    <ViewScroll>
+    <>
       <GridPanel
         title="Price · Spot Candles"
         dot={state === "ok" ? "live" : state === "loading" ? "stale" : "halt"}
         pulse={state === "ok"}
         span={12}
+        className={fill ? "h-full" : undefined}
         right={
           <div className="flex items-center gap-3">
             <span className="hidden font-mono text-[10px] text-fg-faint sm:inline">
@@ -132,7 +147,7 @@ export function CandlesView() {
           </div>
         </div>
 
-        <div className="h-[440px]">
+        <div className={fill ? "min-h-0 flex-1" : undefined} style={fill ? undefined : { height: chartHeight }}>
           {state === "ok" && candles.length > 1 ? (
             <EChart option={candlestickOption(candles, (v) => fmtPrice(v))} />
           ) : state === "loading" ? (
@@ -147,17 +162,27 @@ export function CandlesView() {
         </div>
       </GridPanel>
 
-      <Grid>
-        <StatTile className="col-span-6 xl:col-span-3" label="Last" value={fmtPrice(last?.c)} tone="cyan" />
-        <StatTile
-          className="col-span-6 xl:col-span-3"
-          label={`Change · ${granLabel} window`}
-          value={fmtPctSigned(changePct)}
-          tone={(changePct ?? 0) >= 0 ? "up" : "down"}
-        />
-        <StatTile className="col-span-6 xl:col-span-3" label="High" value={fmtPrice(hi)} tone="up" />
-        <StatTile className="col-span-6 xl:col-span-3" label="Low" value={fmtPrice(lo)} tone="down" />
-      </Grid>
+      {showTiles ? (
+        <Grid>
+          <StatTile className="col-span-6 xl:col-span-3" label="Last" value={fmtPrice(last?.c)} tone="cyan" />
+          <StatTile
+            className="col-span-6 xl:col-span-3"
+            label={`Change · ${granLabel} window`}
+            value={fmtPctSigned(changePct)}
+            tone={(changePct ?? 0) >= 0 ? "up" : "down"}
+          />
+          <StatTile className="col-span-6 xl:col-span-3" label="High" value={fmtPrice(hi)} tone="up" />
+          <StatTile className="col-span-6 xl:col-span-3" label="Low" value={fmtPrice(lo)} tone="down" />
+        </Grid>
+      ) : null}
+    </>
+  );
+}
+
+export function CandlesView() {
+  return (
+    <ViewScroll>
+      <CandleChartPanel />
     </ViewScroll>
   );
 }

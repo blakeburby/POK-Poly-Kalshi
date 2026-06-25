@@ -9,9 +9,9 @@ import { fmtClock, fmtCents, fmtPct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDashboardStore } from "@/store/dashboard-store";
 
-type Kind = "fill" | "partial" | "skip" | "fail" | "quarantine" | "warn" | "error";
+export type Kind = "fill" | "partial" | "skip" | "fail" | "quarantine" | "warn" | "error";
 
-interface TapeEvent {
+export interface TapeEvent {
   key: string;
   t: number;
   kind: Kind;
@@ -22,7 +22,7 @@ interface TapeEvent {
   detail: string;
 }
 
-const KIND_META: Record<Kind, { label: string; variant: NonNullable<BadgeProps["variant"]>; accent: string }> = {
+export const KIND_META: Record<Kind, { label: string; variant: NonNullable<BadgeProps["variant"]>; accent: string }> = {
   fill: { label: "FILL", variant: "up", accent: "var(--color-up)" },
   partial: { label: "PARTIAL", variant: "cyan", accent: "var(--color-cyan)" },
   skip: { label: "SKIP", variant: "neutral", accent: "var(--color-fg-faint)" },
@@ -73,7 +73,7 @@ function signalDetail(s: DashboardSignal, kind: Kind): string {
   return parts.join(" · ") || "paired";
 }
 
-function buildEvents(snap: DashboardSnapshot): TapeEvent[] {
+export function buildEvents(snap: DashboardSnapshot): TapeEvent[] {
   const out: TapeEvent[] = [];
   for (const s of snap.recentSignals ?? []) {
     const kind = signalKind(s);

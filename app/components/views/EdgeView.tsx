@@ -199,7 +199,7 @@ function Mini({ label, value, tone }: { label: string; value: string; tone?: "up
   );
 }
 
-function CandidateTable({
+export function CandidateTable({
   candidates,
   threshold,
   selected,

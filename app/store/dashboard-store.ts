@@ -7,6 +7,7 @@ import { generateMockSnapshot } from "@/lib/mock";
 
 export type FeedSource = "connecting" | "live" | "degraded" | "mock";
 export type ViewId =
+  | "cockpit"
   | "overview"
   | "performance"
   | "execution"
@@ -26,6 +27,7 @@ export type ViewId =
 
 /** Runtime list of valid view ids — mirrors the ViewId union (used to validate persisted prefs). */
 export const VIEW_IDS: ViewId[] = [
+  "cockpit",
   "overview",
   "performance",
   "execution",
@@ -65,7 +67,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   snapshot: null,
   source: "connecting",
   lastEventAt: null,
-  view: "overview",
+  view: "cockpit",
   reducedMotion: false,
   commandOpen: false,
   selectedStrike: null,

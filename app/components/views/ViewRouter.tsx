@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useDashboardStore } from "@/store/dashboard-store";
+import { CockpitView } from "./CockpitView";
 import { OverviewView } from "./OverviewView";
 import { PerformanceView } from "./PerformanceView";
 import { ExecutionView } from "./ExecutionView";
@@ -25,6 +26,8 @@ export function ViewRouter() {
   if (!snap) return null;
 
   switch (view) {
+    case "cockpit":
+      return <CockpitView snap={snap} />;
     case "overview":
       return <OverviewView snap={snap} />;
     case "performance":

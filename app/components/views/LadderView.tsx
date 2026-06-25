@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
 
-type Side = "yes" | "no";
+export type Side = "yes" | "no";
 
 interface LadderRowData {
   price: number;
@@ -227,7 +227,7 @@ function ControlBar({
   );
 }
 
-function Ladder({
+export function Ladder({
   contract,
   side,
   flashEnabled,
