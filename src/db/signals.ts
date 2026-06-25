@@ -358,6 +358,18 @@ function signalFromRow(row: DashboardSignalRow): DashboardSignal {
   };
 }
 
+export interface NakedResidualRow {
+  id: number;
+  expiryMs: number | null;
+  nakedTokenId: string;
+  nakedResidualShares: number;
+  // The hedged Polymarket shares (min(kalshiFill, polymarketFill)) the flattener must KEEP — it reduces the
+  // position down to this floor and never below, so it can never re-sell the shares matched to the Kalshi leg.
+  // null = NOT recorded (a legacy row predating the floor); the flattener SKIPS those rather than risk selling
+  // the matched pair. A recorded 0 is a genuine fully-naked trade (no hedge to keep).
+  retainedShares: number | null;
+}
+
 export class SignalStore {
   // H3: when > 0, the unresolved-exposure cap query excludes quarantines whose market settled more than this
   // many ms ago (realized P&L, not live risk), so settled-but-unreconciled tails cannot silently accumulate
@@ -558,6 +570,57 @@ export class SignalStore {
       return `live unresolved quarantined exposure ${status.total.toFixed(2)} exceeds cap ${maxUnresolvedExposureDollars.toFixed(2)} across ${status.count} signals`;
     }
     return null;
+  }
+
+  /** Unresolved quarantined signals that recorded a still-naked Polymarket residual (exact tokenId + share
+   *  count) for the async flattener to retry at market post-settlement. */
+  async listUnresolvedNakedResiduals(limit = 50): Promise<NakedResidualRow[]> {
+    const result = await this.db.query<{
+      id: string | number;
+      expiry_ms: string | number | null;
+      naked_token_id: string | null;
+      naked_residual_shares: string | number | null;
+      naked_retained_shares: string | number | null;
+    }>(
+      `
+      SELECT id, expiry_ms,
+             recovery_evidence->'autoUnwind'->>'nakedTokenId'        AS naked_token_id,
+             recovery_evidence->'autoUnwind'->>'nakedResidualShares' AS naked_residual_shares,
+             recovery_evidence->'autoUnwind'->>'nakedRetainedShares' AS naked_retained_shares
+      FROM cross_venue_arb_signals
+      WHERE reconciliation_resolved_at IS NULL
+        AND risk_quarantined_at IS NOT NULL
+        AND recovery_evidence->'autoUnwind'->>'nakedTokenId' IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT $1
+    `,
+      [Math.max(1, Math.floor(limit))],
+    );
+    return result.rows
+      .map((row) => ({
+        id: Number(row.id),
+        expiryMs: numberFrom(row.expiry_ms),
+        nakedTokenId: row.naked_token_id,
+        nakedResidualShares: numberFrom(row.naked_residual_shares),
+        // null when absent (legacy row) -> the flattener skips it; defaulting the floor to 0 would be the UNSAFE
+        // direction (it would sell the position down to zero and un-hedge the matched pair).
+        retainedShares: numberFrom(row.naked_retained_shares),
+      }))
+      .filter((row): row is NakedResidualRow => row.nakedTokenId != null && (row.nakedResidualShares ?? 0) > 0);
+  }
+
+  /** Mark a quarantined signal resolved after the flattener flattened its naked residual at market. */
+  async resolveNakedResidual(signalId: number, reason: string, evidence: Record<string, unknown>): Promise<void> {
+    await this.db.query(
+      `
+      UPDATE cross_venue_arb_signals
+      SET reconciliation_resolved_at = now(),
+          reconciliation_resolution_reason = $2,
+          recovery_evidence = COALESCE(recovery_evidence, '{}'::JSONB) || jsonb_build_object('nakedFlatten', $3::JSONB)
+      WHERE id = $1 AND reconciliation_resolved_at IS NULL
+    `,
+      [signalId, reason, JSON.stringify(evidence)],
+    );
   }
 
   async liveExposureBlockReason(

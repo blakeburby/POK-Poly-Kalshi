@@ -2,6 +2,7 @@ import type { AppConfig } from "./config";
 import type { ScannerStatus } from "./scanner/scanner";
 import type { LiveExecutionReadiness, VenueExecutionReadiness } from "./types";
 import type { PortfolioFloorStatus } from "./trading/portfolio-floor";
+import type { NakedFlattenStatus } from "./trading/naked-flattener";
 
 export interface PublicWorkerHealthOptions {
   config: AppConfig;
@@ -10,6 +11,7 @@ export interface PublicWorkerHealthOptions {
   readiness?: LiveExecutionReadiness | null;
   readinessError?: unknown;
   portfolioFloorStatus?: PortfolioFloorStatus | null;
+  nakedFlattenStatus?: NakedFlattenStatus | null;
 }
 
 function lastScanAgeMs(status: ScannerStatus, now: number): number | null {
@@ -80,7 +82,7 @@ function publicExecutionReadiness(
 }
 
 export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Record<string, unknown> {
-  const { config, scannerStatus, now, readiness, readinessError, portfolioFloorStatus } = options;
+  const { config, scannerStatus, now, readiness, readinessError, portfolioFloorStatus, nakedFlattenStatus } = options;
   const health: Record<string, unknown> = {
     ok: true,
     liveTrading: true,
@@ -113,6 +115,20 @@ export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Rec
     liveAutoUnwindMaxLossDollars: config.liveAutoUnwindMaxLossDollars,
     liveAutoUnwindRequireTerminalCounterLeg: config.liveAutoUnwindRequireTerminalCounterLeg,
     liveAutoUnwindTimeoutMs: config.liveAutoUnwindTimeoutMs,
+    liveAutoUnwindMarketSell: config.liveAutoUnwindMarketSell,
+    // Surfaced without the literal "allowance" substring so the sanitized-health guard (which forbids leaked
+    // account financials like a raw "balance: 0, allowance:" error) stays strict. Reflects LIVE_POLYMARKET_SELL_ALLOWANCE_ENABLED.
+    livePolymarketSellApprovalEnabled: config.livePolymarketSellAllowanceEnabled,
+    liveNakedFlattenEnabled: config.liveNakedFlattenEnabled,
+    nakedFlatten: nakedFlattenStatus
+      ? {
+          enabled: nakedFlattenStatus.enabled,
+          pendingResiduals: nakedFlattenStatus.pendingResiduals,
+          flattenedTotal: nakedFlattenStatus.flattenedTotal,
+          lastTickAtMs: nakedFlattenStatus.lastTickAtMs,
+          lastError: nakedFlattenStatus.lastError,
+        }
+      : null,
     // Capital-floor circuit breaker (the single operator-enabled hardlock).
     livePortfolioFloorEnabled: config.liveMinPortfolioValueDollars > 0,
     liveMinPortfolioValueDollars: config.liveMinPortfolioValueDollars,

@@ -111,6 +111,16 @@ export interface VenueUnwindOutcome {
   // actually sold. The executor nets this out of the quarantined residual. 0 on any ambiguity (over-quarantine,
   // never under-quarantine). Set by the executor's attemptResidualUnwind, not by the venue adapter.
   unwoundShares?: number | null;
+  // The still-naked Polymarket residual after this unwind (e.g. when the sync sell could not flatten because the
+  // shares had not settled). Recorded into recovery_evidence so the async post-settlement flattener can retry
+  // the EXACT token (never raw-position guessing). Set only for a TERMINAL Polymarket residual.
+  nakedTokenId?: string | null;
+  nakedResidualShares?: number | null;
+  // The hedged Polymarket shares (min(kalshiFill, polymarketFill)) that remain matched against the Kalshi leg
+  // and must be KEPT. The Polymarket buy holds both the hedged and the naked shares under the SAME tokenId, so
+  // the flattener uses this as a hard floor — it reduces the position down to this count and never below, which
+  // makes it structurally impossible to re-sell into (and thereby un-hedge) the matched pair.
+  nakedRetainedShares?: number | null;
 }
 
 export interface VenueUnwindRequest {

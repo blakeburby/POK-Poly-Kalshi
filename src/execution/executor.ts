@@ -1842,6 +1842,17 @@ export class LiveExecutor implements ArbExecutor {
           totalFilled: polymarketFill,
         }
       : { client: this.kalshiClient, leg: legs.kalshi, fillPrice: kalshi.fillPrice, totalFilled: kalshiFill };
+    // Record the still-naked Polymarket residual (exact token) for the async post-settlement flattener — only
+    // for a Polymarket residual (Kalshi has no sell path) and a terminal state (guarded above), so a late hedge
+    // can never change it. The flattener cross-checks the held shares before selling, never raw-position guessing.
+    const nakedTokenId = polymarketIsLarger ? (legs.polymarket.tokenId ?? null) : null;
+    // The hedged Polymarket shares to KEEP — both hedged and naked shares share this one tokenId, so the
+    // flattener must reduce the position down to this floor and never below (else it re-sells the matched pair).
+    const nakedRetainedShares = roundPrice(hedgedPair);
+    const recordNaked = (residualShares: number) =>
+      nakedTokenId != null && residualShares > 0.000001
+        ? { nakedTokenId, nakedResidualShares: roundPrice(residualShares), nakedRetainedShares }
+        : {};
     if (!filled.client.unwindPosition) {
       return { flattened: false, reason: `no unwind adapter for ${filled.client.venue}` };
     }
@@ -1863,9 +1874,18 @@ export class LiveExecutor implements ArbExecutor {
         clientOrderId,
       });
     } catch (error) {
-      return { flattened: false, reason: error instanceof Error ? error.message : String(error) };
+      return {
+        flattened: false,
+        reason: error instanceof Error ? error.message : String(error),
+        ...recordNaked(delta),
+      };
     }
-    if (!outcome) return { flattened: false, reason: "unwind adapter returned null" };
+    if (!outcome)
+      return {
+        flattened: false,
+        reason: "unwind adapter returned null",
+        ...recordNaked(delta),
+      };
     // Re-register the SELL under its venue orderId — Polymarket user-stream fills match only by venueOrderId
     // (clientOrderId is null on the wire) — so a late SELL fill reconciles in-band rather than tripping the
     // late-surplus breaker. Done regardless of verification outcome (a late fill must reconcile either way).
@@ -1884,6 +1904,9 @@ export class LiveExecutor implements ArbExecutor {
     // residual. This never consults the hardlocks master switch, so the loss cap holds even when
     // LIVE_AUTO_HARDLOCKS_ENABLED=false.
     const unwoundShares = this.verifiedUnwoundShares(outcome, delta, filled.fillPrice ?? null, maxLossDollars);
+    // The residual still naked after this attempt (recorded for the async flattener to retry post-settlement).
+    const remainingNaked = Math.max(0, delta - unwoundShares);
+    const nakedFields = recordNaked(remainingNaked);
     if (outcome.flattened === true) {
       // A full flatten (bypassing quarantine entirely) is only honored when the verified credit covers the
       // WHOLE delta; otherwise downgrade to a partial credit and fall through to quarantine of the net residual.
@@ -1894,11 +1917,12 @@ export class LiveExecutor implements ArbExecutor {
         result: outcome.result,
         lossDollars: outcome.lossDollars ?? null,
         unwoundShares,
+        ...nakedFields,
       };
     }
     // Partial / no fill: keep falling through to quarantine, but carry the verified credit so the executor
     // quarantines the NET residual (delta - unwoundShares).
-    return { ...outcome, unwoundShares };
+    return { ...outcome, unwoundShares, ...nakedFields };
   }
 
   // Executor-side re-proof of how many residual shares a SELL actually moved. Robust to sell-side amount-field
@@ -2898,6 +2922,11 @@ export class LiveExecutor implements ArbExecutor {
             limitPrice: (autoUnwind.result?.metadata?.unwindLimitPrice as number | undefined) ?? null,
             unwindOrderId: autoUnwind.result?.orderId ?? null,
             unwindClientOrderId: autoUnwind.result?.clientOrderId ?? null,
+            // Still-naked Polymarket residual the async flattener should retry at market post-settlement, plus
+            // the hedged-share floor the flattener must keep (so it can never re-sell the matched pair).
+            nakedTokenId: autoUnwind.nakedTokenId ?? null,
+            nakedResidualShares: autoUnwind.nakedResidualShares ?? null,
+            nakedRetainedShares: autoUnwind.nakedRetainedShares ?? null,
           },
         }
       : null;
