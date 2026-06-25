@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { accountEquity, equityPnlOverMs, openPositionCount, tradeableNow } from "@/lib/selectors";
+import { accountEquity, equityPnlOverMs, openPositionCount, tradeableNow, venueEquitySharpe, equitySharpeDisplay } from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone } from "@/lib/format";
 import { Sparkline } from "@/components/ui/stat";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,9 @@ export function KpiStrip() {
   const a = snap.analytics;
   const eq = accountEquity(snap);
   const exec = snap.execution;
+  // Venue-truth Sharpe: mean/σ of per-sample returns of combined venue account equity (sample σ, no √N,
+  // not annualized). The worker's analytics.sharpeRatio (inflated (mean/σ)·√N t-stat) is not shown.
+  const sharpeDisp = equitySharpeDisplay(venueEquitySharpe(snap));
   const now = snap.generatedAt;
   const HOUR = 60 * 60_000;
   const DAY = 24 * HOUR;
@@ -87,9 +90,9 @@ export function KpiStrip() {
     { label: "Net PnL · 7D", value: pnlValue(week), tone: pnlTone(week) },
     { label: "Win Rate", value: fmtPct(a?.daily.winRate), tone: "neutral" },
     {
-      label: "Per-Trade Sharpe",
-      value: a?.daily.sharpeRatio != null ? a.daily.sharpeRatio.toFixed(2) : "–",
-      tone: "neutral",
+      label: "Sharpe · Venue Equity",
+      value: sharpeDisp.value,
+      tone: sharpeDisp.degraded ? "stale" : "neutral",
     },
   ];
 

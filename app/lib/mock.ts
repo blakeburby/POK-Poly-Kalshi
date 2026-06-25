@@ -22,8 +22,27 @@ import type {
   TradingActivitySnapshot,
   TradingPlatformActivity,
   TradingPlatform,
+  EquityCurveSnapshot,
   Venue,
 } from "./types";
+
+/** Realistic combined Kalshi+Polymarket account-equity series (venue-truth basis for the Sharpe). */
+function buildEquityCurve(now: number, rng: () => number): EquityCurveSnapshot {
+  const N = 90;
+  const stepMs = 16 * 60_000; // ~16-min samples over ~24h
+  let v = 126000 + rng() * 4000;
+  const points: { t: number; v: number }[] = [];
+  for (let i = N - 1; i >= 0; i -= 1) {
+    v += 16 + (rng() - 0.46) * 240; // small upward drift + mean-reverting noise
+    points.push({ t: now - i * stepMs - Math.round(rng() * 60_000), v: Math.round(v * 100) / 100 });
+  }
+  return {
+    generatedAt: now,
+    currentCombinedValue: points[points.length - 1].v,
+    earliestSampledAtMs: points[0].t,
+    points,
+  };
+}
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -798,6 +817,7 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
     syntheticStructures,
     recentSignals,
     analytics,
+    equityCurve: buildEquityCurve(now, rng),
     tradingActivity: {
       kalshi: tradingVenue("kalshi", now, rng),
       polymarket: tradingVenue("polymarket", now, rng),

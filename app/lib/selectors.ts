@@ -22,6 +22,159 @@ export const isExactPair = (s: DashboardSignal): boolean =>
   (s.kalshiFillCount ?? 0) > 0 &&
   (s.polymarketFillCount ?? 0) > 0;
 
+/**
+ * Per-trade Sharpe over the dashboard's recent closed trades, computed correctly for a
+ * BTC Kalshi⇄Polymarket arb (the worker's `analytics.sharpeRatio` is NOT used: it is
+ * `(mean/σ)·√N` over raw P&L dollars — a t-statistic that inflates with sample size).
+ *
+ * Correct version per the spec:
+ *  - per-trade RETURN = realized P&L / capital-at-risk (capital-at-risk = premium paid for the
+ *    pair = kalshi fill + poly fill, per share; size cancels), NOT raw P&L.
+ *  - SAMPLE standard deviation (n−1). No risk-free rate (per-trade, none justified).
+ *  - NO √N / annualization — a per-trade Sharpe is just mean/σ of the trade-return distribution.
+ *  - "insufficient" when fewer than 30 valid closed trades; "degenerate" (→ N/A) when σ≈0.
+ *  - Failed / skipped / partial / quarantined / one-sided / missing-P&L trades are EXCLUDED and
+ *    their counts surfaced (never silently dropped).
+ */
+export const SHARPE_MIN_SAMPLE = 30;
+/** Returns are ~0–0.1; a σ below this is effectively a constant (risk-free) series → N/A. */
+const SHARPE_NEAR_ZERO_STD = 1e-6;
+
+export interface PerTradeSharpe {
+  status: "ok" | "insufficient" | "degenerate" | "empty";
+  /** mean/σ of per-trade returns — only meaningful when status === "ok". */
+  value: number | null;
+  /** count of valid closed trades used. */
+  n: number;
+  mean: number | null;
+  std: number | null;
+  minSample: number;
+  excluded: {
+    skipped: number;
+    failed: number;
+    partial: number;
+    quarantined: number;
+    oneSided: number;
+    missingPnl: number;
+  };
+}
+
+export function perTradeSharpe(snap: DashboardSnapshot, sinceMs?: number): PerTradeSharpe {
+  const EPS = 1e-9;
+  const excluded = { skipped: 0, failed: 0, partial: 0, quarantined: 0, oneSided: 0, missingPnl: 0 };
+  const returns: number[] = [];
+  for (const s of snap.recentSignals ?? []) {
+    if (sinceMs != null) {
+      const t = Date.parse(s.createdAt);
+      if (Number.isFinite(t) && t < sinceMs) continue;
+    }
+    if (s.action === "skipped") {
+      excluded.skipped += 1;
+      continue;
+    }
+    if (s.action === "failed") {
+      excluded.failed += 1;
+      continue;
+    }
+    // action === "filled" below
+    if (s.riskQuarantinedAt) {
+      excluded.quarantined += 1;
+      continue;
+    }
+    if (s.partialFill === true) {
+      excluded.partial += 1;
+      continue;
+    }
+    const k = s.kalshiFillPrice;
+    const p = s.polymarketFillPrice;
+    if (k == null || p == null || k + p <= EPS) {
+      excluded.oneSided += 1;
+      continue;
+    }
+    if (s.realizedGuaranteedProfit == null) {
+      excluded.missingPnl += 1;
+      continue;
+    }
+    returns.push(s.realizedGuaranteedProfit / (k + p)); // realized P&L / capital-at-risk
+  }
+
+  const n = returns.length;
+  const base = { n, minSample: SHARPE_MIN_SAMPLE, excluded } as const;
+  if (n === 0) return { status: "empty", value: null, mean: null, std: null, ...base };
+  const mean = returns.reduce((a, b) => a + b, 0) / n;
+  if (n < SHARPE_MIN_SAMPLE) return { status: "insufficient", value: null, mean, std: null, ...base };
+  const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1); // sample (n−1)
+  const std = Math.sqrt(variance);
+  if (std <= SHARPE_NEAR_ZERO_STD) return { status: "degenerate", value: null, mean, std, ...base };
+  return { status: "ok", value: mean / std, mean, std, ...base };
+}
+
+/** Compact display for a PerTradeSharpe result. */
+export function sharpeDisplay(r: PerTradeSharpe): { value: string; sub: string; degraded: boolean } {
+  const e = r.excluded;
+  const totalExcluded = e.skipped + e.failed + e.partial + e.quarantined + e.oneSided + e.missingPnl;
+  switch (r.status) {
+    case "ok":
+      return { value: r.value!.toFixed(2), sub: `n=${r.n} closed · ${totalExcluded} excluded`, degraded: false };
+    case "insufficient":
+      return { value: `${r.n}/${r.minSample}`, sub: "insufficient sample (<30 closed)", degraded: true };
+    case "degenerate":
+      return { value: "N/A", sub: `σ≈0 · n=${r.n} (near-zero variance)`, degraded: true };
+    default:
+      return { value: "–", sub: `0 valid closed · ${totalExcluded} excluded`, degraded: true };
+  }
+}
+
+/**
+ * VENUE-TRUTH Sharpe — driven off the combined Kalshi+Polymarket account-equity curve (real money:
+ * cash + marked positions, sampled by the worker), NOT execution-layer per-trade estimates. Sharpe =
+ * mean/σ of per-sample simple returns of total account value. Sample σ (n−1), no risk-free rate, NOT
+ * annualized (the sampler cadence is irregular). ≥30 return observations required; N/A if equity is flat.
+ */
+const SHARPE_EQUITY_NEAR_ZERO_STD = 1e-9;
+
+export interface VenueEquitySharpe {
+  status: "ok" | "insufficient" | "degenerate" | "empty";
+  value: number | null;
+  /** number of return observations (= equity samples − 1). */
+  n: number;
+  mean: number | null;
+  std: number | null;
+  minSample: number;
+}
+
+export function venueEquitySharpe(snap: DashboardSnapshot): VenueEquitySharpe {
+  const pts = snap.equityCurve?.points ?? [];
+  const returns: number[] = [];
+  for (let i = 1; i < pts.length; i += 1) {
+    const prev = pts[i - 1]?.v;
+    const cur = pts[i]?.v;
+    if (Number.isFinite(prev) && Number.isFinite(cur) && prev > 1e-9) returns.push((cur - prev) / prev);
+  }
+  const n = returns.length;
+  const minSample = SHARPE_MIN_SAMPLE;
+  if (n === 0) return { status: "empty", value: null, n, mean: null, std: null, minSample };
+  const mean = returns.reduce((a, b) => a + b, 0) / n;
+  if (n < minSample) return { status: "insufficient", value: null, n, mean, std: null, minSample };
+  const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);
+  const std = Math.sqrt(variance);
+  if (std <= SHARPE_EQUITY_NEAR_ZERO_STD) return { status: "degenerate", value: null, n, mean, std, minSample };
+  return { status: "ok", value: mean / std, n, mean, std, minSample };
+}
+
+export function equitySharpeDisplay(r: VenueEquitySharpe): { value: string; sub: string; degraded: boolean } {
+  switch (r.status) {
+    case "ok":
+      return { value: r.value!.toFixed(2), sub: `${r.n} venue-equity samples`, degraded: false };
+    case "insufficient":
+      return { value: `${r.n}/${r.minSample}`, sub: "accruing venue-equity samples", degraded: true };
+    case "degenerate":
+      return { value: "N/A", sub: `σ≈0 · ${r.n} samples (flat equity)`, degraded: true };
+    default:
+      return { value: "–", sub: "no venue-equity history yet", degraded: true };
+  }
+}
+
 export function orderSize(snap: DashboardSnapshot): number {
   return snap.execution?.orderSize ?? snap.health.liveOrderSize ?? 1;
 }
@@ -318,8 +471,13 @@ export interface LedgerRow {
   premium: number;
   threshold: number;
   guaranteedProfit: number;
+  /** ESTIMATED combined cross-venue P&L ($) = guaranteed edge × paired fill size (pre/at-execution). */
+  estimatedDollars: number | null;
   realizedPerShare: number | null;
+  /** ACTUAL combined cross-venue realized P&L ($, net of venue fees) = realized edge × paired fill size. */
   realizedDollars: number | null;
+  /** Unresolved venue exposure ($) for a one-sided / quarantined position not yet recovered. */
+  unresolvedExposure: number | null;
   /** Actual paired fill size of THIS trade (min of the two legs' fill counts) — the basis for dollar P&L.
    *  With W2 dynamic sizing this varies per trade (5-30), so it must NOT be the static config order size. */
   fillSize: number;
@@ -365,8 +523,10 @@ export function ledgerRow(s: DashboardSignal, size: number): LedgerRow {
     premium: s.premium,
     threshold: s.threshold,
     guaranteedProfit: s.guaranteedProfit,
+    estimatedDollars: toDollars(s.guaranteedProfit, fillSize),
     realizedPerShare: realized,
     realizedDollars: toDollars(realized, fillSize),
+    unresolvedExposure: s.riskQuarantineExposureDollars ?? null,
     fillSize,
     expectedEdge: s.expectedExecutableEdge ?? s.fillQualitySnapshot?.expectedExecutableEdge ?? null,
     slippage,

@@ -14,7 +14,7 @@ import {
 } from "@/components/charts/options";
 import { Empty } from "@/components/ui/stat";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { edgeCapture, orderSize } from "@/lib/selectors";
+import { edgeCapture, orderSize, venueEquitySharpe, equitySharpeDisplay } from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, fmtPctRaw } from "@/lib/format";
 import { CHART } from "@/components/charts/echart";
 
@@ -56,6 +56,11 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
 
   const net = usd(a.netPnl);
 
+  // Venue-truth Sharpe: mean/σ of per-sample returns of the combined Kalshi+Polymarket account-equity
+  // curve (real money). Sample σ, no √N, not annualized. Replaces the worker's inflated (mean/σ)·√N.
+  const sharpe = venueEquitySharpe(snap);
+  const sharpeDisp = equitySharpeDisplay(sharpe);
+
   // Per-trade realized P&L for filled trades, oldest→newest (recentSignals is newest-first).
   const perTradePnls = (snap.recentSignals ?? [])
     .filter((s) => s.action === "filled")
@@ -91,10 +96,10 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
           tone="neutral"
         />
         <StatTile
-          label="Sharpe*"
-          value={a.sharpeRatio != null ? a.sharpeRatio.toFixed(2) : "–"}
-          tone="neutral"
-          sub="per-trade"
+          label="Sharpe · Venue Equity"
+          value={sharpeDisp.value}
+          tone={sharpeDisp.degraded ? "amber" : "neutral"}
+          sub={sharpeDisp.sub}
         />
         <StatTile
           label="Avg / Trade"
@@ -114,6 +119,13 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
           sub={`fill ${fmtPct(a.fillRate)}`}
         />
       </div>
+
+      <p className="-mt-1 font-mono text-[10px] leading-relaxed text-fg-faint">
+        Sharpe = mean ÷ sample σ of per-sample returns of the{" "}
+        <span className="text-fg-muted">combined Kalshi+Polymarket account equity</span> (venue-truth: cash + marked
+        positions) over <span className="text-fg-muted">{sharpe.n}</span> equity samples. No √N, not annualized; needs
+        ≥30 samples, N/A if equity is flat.
+      </p>
 
       <Grid>
         <GridPanel

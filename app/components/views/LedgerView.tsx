@@ -32,7 +32,7 @@ function hedgeBadge(r: LedgerRow): { variant: "up" | "amber" | "down" | "neutral
 }
 
 type FilterKey = "all" | "hedged" | "partial" | "failed";
-const NUMERIC = new Set(["premium", "edge", "kalshi", "poly", "pnl", "slippage", "duration"]);
+const NUMERIC = new Set(["premium", "edge", "kalshi", "poly", "estPnl", "pnl", "slippage", "duration"]);
 
 export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
   const data = React.useMemo(() => ledgerRows(snap), [snap]);
@@ -123,12 +123,26 @@ export function LedgerView({ snap }: { snap: DashboardSnapshot }) {
           return <Badge variant={b.variant}>{b.label}</Badge>;
         },
       }),
+      col.accessor((r) => r.estimatedDollars ?? -Infinity, {
+        id: "estPnl",
+        header: "Est $",
+        cell: ({ row }) => {
+          const v = row.original.estimatedDollars;
+          if (v == null) return <span className="text-fg-faint">–</span>;
+          return <span className="text-fg-muted">{fmtUsd(v, { sign: true })}</span>;
+        },
+      }),
       col.accessor((r) => r.realizedDollars ?? -Infinity, {
         id: "pnl",
-        header: "Realized",
+        header: "Act $",
         cell: ({ row }) => {
           const v = row.original.realizedDollars;
-          if (v == null) return <span className="text-fg-faint">–</span>;
+          if (v == null)
+            return (
+              <span className="text-fg-faint" title="No venue-reported realized P&L yet (unfilled / unresolved)">
+                pending
+              </span>
+            );
           return <span className={v >= 0 ? "text-up" : "text-down"}>{fmtUsd(v, { sign: true })}</span>;
         },
       }),
@@ -316,63 +330,232 @@ function LegCell({ price, status, tone }: { price: number | null; status: string
 function ExpandedTrade({ row }: { row: LedgerRow }) {
   const s = row.signal;
   const fq = s.fillQualitySnapshot;
-  const ll = s.leadLagSnapshot;
   const tm = s.executionTimings;
+  const realizedPremium = s.depthVwap ?? null;
   return (
-    <div className="grid grid-cols-1 gap-3 border-y border-line/60 p-3 lg:grid-cols-4">
-      <DetailBlock title="Structure / Signal" tone="info">
-        <KV k="Strikes" v={`${row.lowerStrike.toLocaleString()} / ${row.higherStrike.toLocaleString()}`} />
-        <KV k="Ask Premium" v={fmtCents(row.premium)} />
-        <KV k="Guaranteed Edge" v={fmtCents(row.guaranteedProfit)} tone="up" />
-        <KV k="Threshold" v={fmtCents(row.threshold)} />
-        <KV k="Overlap Profit" v={fmtCents(s.overlapProfit)} />
-        <KV k="Expected Edge" v={row.expectedEdge != null ? fmtCents(row.expectedEdge) : "–"} />
-        <KV
-          k="Realized"
-          v={row.realizedDollars != null ? fmtUsd(row.realizedDollars, { sign: true }) : "–"}
-          tone={(row.realizedDollars ?? 0) >= 0 ? "up" : "down"}
-        />
-        <KV k="Strategy" v={s.executionStrategy ?? "–"} />
-      </DetailBlock>
+    <div className="flex flex-col gap-3 border-y border-line/60 p-3">
+      {/* Top: estimated (pre-trade) + the two venue-reported legs side-by-side */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <DetailBlock title="Estimated · pre-trade" tone="info">
+          <KV k="Strikes" v={`${row.lowerStrike.toLocaleString()} / ${row.higherStrike.toLocaleString()}`} />
+          <KV k="Ask Premium" v={fmtCents(row.premium)} />
+          <KV k="Guaranteed Edge" v={fmtCents(row.guaranteedProfit)} tone="up" />
+          <KV k="Threshold" v={fmtCents(row.threshold)} />
+          <KV k="Expected Exec. Edge" v={row.expectedEdge != null ? fmtCents(row.expectedEdge) : "–"} />
+          <KV k="Expected Slippage" v={fq ? fmtCents(fq.expectedSlippage) : "–"} />
+          <KV k="Paired-Fill Prob" v={fq ? fmtPct(fq.pairedFillProbability) : "–"} />
+          <KV
+            k="Est. Combined P&L"
+            v={row.estimatedDollars != null ? fmtUsd(row.estimatedDollars, { sign: true }) : "–"}
+          />
+        </DetailBlock>
 
-      <DetailBlock title="Kalshi Leg" tone="kalshi">
-        <KV k="Contract" v={s.kalshiContractId} />
-        <KV k="Status" v={s.kalshiStatus ?? "–"} />
-        <KV k="Fill Price" v={s.kalshiFillPrice != null ? fmtCents(s.kalshiFillPrice) : "–"} />
-        <KV k="Fill Count" v={`${s.kalshiFillCount ?? 0}`} />
-        <KV k="RTT" v={fmtMs(tm?.kalshiRttMs)} />
-        <KV k="Exact-Fill Prob" v={fq ? fmtPct(fq.kalshiExactFillProbability) : "–"} />
-      </DetailBlock>
-
-      <DetailBlock title="Polymarket Leg" tone="poly">
-        <KV k="Contract" v={s.polymarketContractId} />
-        <KV k="Status" v={s.polymarketStatus ?? "–"} />
-        <KV k="Fill Price" v={s.polymarketFillPrice != null ? fmtCents(s.polymarketFillPrice) : "–"} />
-        <KV k="Fill Count" v={`${s.polymarketFillCount ?? 0}`} />
-        <KV k="RTT" v={fmtMs(tm?.polymarketRttMs)} />
-        <KV k="Confirm" v={fmtMs(tm?.polymarketConfirmationMs)} />
-        <KV k="Exact-Fill Prob" v={fq ? fmtPct(fq.polymarketExactFillProbability) : "–"} />
-      </DetailBlock>
-
-      <DetailBlock title="Quality / Timing" tone="info">
-        <KV k="Paired-Fill Prob" v={fq ? fmtPct(fq.pairedFillProbability) : "–"} />
-        <KV k="Expected Slippage" v={fq ? fmtCents(fq.expectedSlippage) : "–"} />
-        <KV
-          k="Realized Slippage"
-          v={row.slippage != null ? fmtCents(row.slippage, true) : "–"}
-          tone={(row.slippage ?? 0) > 0.01 ? "down" : undefined}
+        <VenueLeg
+          title="Kalshi · venue-reported"
+          tone="kalshi"
+          filled={(s.kalshiFillCount ?? 0) > 0}
+          contract={s.kalshiContractId}
+          status={s.kalshiStatus}
+          fillPrice={s.kalshiFillPrice}
+          fillCount={s.kalshiFillCount}
+          fillId={s.kalshiFillId}
+          clientId={s.kalshiClientOrderId}
+          error={s.kalshiError}
+          rttMs={tm?.kalshiRttMs}
+          confirmed={s.venueConfirmations?.kalshi != null}
         />
-        <KV k="Mismatch Cost" v={fq ? fmtCents(fq.expectedMismatchCost) : "–"} />
-        <KV k="Lead Venue" v={ll?.leaderVenue ?? "–"} />
-        <KV k="Lag Est." v={fmtMs(ll?.lagMsEstimate)} />
-        <KV
-          k="Adverse Sel."
-          v={ll ? fmtPct(ll.adverseSelectionScore) : "–"}
-          tone={(ll?.adverseSelectionScore ?? 0) > 0.7 ? "down" : undefined}
+
+        <VenueLeg
+          title="Polymarket · venue-reported"
+          tone="poly"
+          filled={(s.polymarketFillCount ?? 0) > 0}
+          contract={s.polymarketContractId}
+          status={s.polymarketStatus}
+          fillPrice={s.polymarketFillPrice}
+          fillCount={s.polymarketFillCount}
+          fillId={s.polymarketFillId}
+          clientId={s.polymarketClientOrderId}
+          error={s.polymarketError}
+          rttMs={tm?.polymarketRttMs}
+          confirmed={s.venueConfirmations?.polymarket != null}
         />
-        <KV k="Total" v={fmtMs(tm?.totalMs)} />
-        {row.quarantined ? <KV k="Quarantine" v={s.riskQuarantineReason ?? "unhedged"} tone="down" /> : null}
-      </DetailBlock>
+      </div>
+
+      {/* Bottom: combined P&L (estimated → actual) + lifecycle timeline */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <DetailBlock title="Combined P&L · estimated → actual" tone="info">
+          <KV
+            k="Estimated combined"
+            v={row.estimatedDollars != null ? fmtUsd(row.estimatedDollars, { sign: true }) : "–"}
+          />
+          <KV
+            k="Actual realized (net fees)"
+            v={row.realizedDollars != null ? fmtUsd(row.realizedDollars, { sign: true }) : "pending"}
+            tone={row.realizedDollars == null ? undefined : row.realizedDollars >= 0 ? "up" : "down"}
+          />
+          <KV k="Realized premium" v={realizedPremium != null ? fmtCents(realizedPremium) : "–"} />
+          <KV
+            k="Realized slippage"
+            v={row.slippage != null ? fmtCents(row.slippage, true) : "–"}
+            tone={(row.slippage ?? 0) > 0.01 ? "down" : undefined}
+          />
+          <KV k="Paired fill size" v={`${row.fillSize}`} />
+          <KV k="Strategy" v={s.executionStrategy ?? "–"} />
+        </DetailBlock>
+
+        <div className="lg:col-span-2">
+          <Lifecycle row={row} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VenueLeg({
+  title,
+  tone,
+  filled,
+  contract,
+  status,
+  fillPrice,
+  fillCount,
+  fillId,
+  clientId,
+  error,
+  rttMs,
+  confirmed,
+}: {
+  title: string;
+  tone: "kalshi" | "poly";
+  filled: boolean;
+  contract: string;
+  status?: string | null;
+  fillPrice?: number | null;
+  fillCount?: number | null;
+  fillId?: string | null;
+  clientId?: string | null;
+  error?: string | null;
+  rttMs?: number | null;
+  confirmed: boolean;
+}) {
+  return (
+    <DetailBlock title={title} tone={tone}>
+      <KV k="Filled" v={filled ? "yes" : "no"} tone={filled ? "up" : "down"} />
+      <KV k="Order status" v={status ?? "–"} />
+      <KV k="Fill price" v={fillPrice != null ? fmtCents(fillPrice) : "–"} />
+      <KV k="Fill size" v={`${fillCount ?? 0}`} />
+      <KV k="Venue fill ID" v={fillId ?? "–"} />
+      <KV k="Client order ID" v={clientId ?? "–"} />
+      <KV k="Venue confirmation" v={confirmed ? "received" : "–"} tone={confirmed ? "up" : undefined} />
+      <KV k="RTT" v={fmtMs(rttMs)} />
+      {error ? <KV k="Venue error" v={error} tone="down" /> : null}
+    </DetailBlock>
+  );
+}
+
+interface LifecycleEvent {
+  at: number | null;
+  label: string;
+  detail?: string;
+  tone: "up" | "down" | "amber" | "info";
+}
+
+function Lifecycle({ row }: { row: LedgerRow }) {
+  const s = row.signal;
+  const kFilled = (s.kalshiFillCount ?? 0) > 0;
+  const pFilled = (s.polymarketFillCount ?? 0) > 0;
+  const venues =
+    kFilled && pFilled
+      ? "both legs filled"
+      : kFilled
+        ? "Kalshi filled · Polymarket not filled"
+        : pFilled
+          ? "Polymarket filled · Kalshi not filled"
+          : "no legs filled";
+
+  const events: LifecycleEvent[] = [
+    {
+      at: row.createdAt,
+      label: "Signal created",
+      detail: `edge ${fmtCents(row.guaranteedProfit)} vs threshold ${fmtCents(row.threshold)}`,
+      tone: "info",
+    },
+    {
+      at: row.updatedAt,
+      label: row.exact
+        ? "Filled — exact hedged pair"
+        : row.partial
+          ? "Partial fill — unhedged residual"
+          : row.action === "failed"
+            ? "Execution failed"
+            : row.action === "skipped"
+              ? "Skipped — not submitted"
+              : "Filled",
+      detail: row.failureReason ? `${venues} · ${row.failureReason}` : venues,
+      tone: row.exact ? "up" : row.action === "failed" ? "down" : "amber",
+    },
+  ];
+  if (s.riskQuarantinedAt) {
+    events.push({
+      at: Date.parse(s.riskQuarantinedAt),
+      label: "Quarantined — unresolved exposure",
+      detail: `${s.riskQuarantineReason ?? "unhedged"}${
+        row.unresolvedExposure != null ? ` · ${fmtUsd(row.unresolvedExposure)} exposure` : ""
+      }`,
+      tone: "down",
+    });
+  }
+  if (s.recoveryStatus && s.recoveryStatus !== "none") {
+    events.push({
+      at: null,
+      label: `Recovery action — ${s.recoveryStatus.replace(/_/g, " ")}`,
+      detail: s.recoveryAttempts != null ? `attempt ${s.recoveryAttempts}` : undefined,
+      tone: "amber",
+    });
+  }
+  if (s.reconciliationResolvedAt || s.reconciliationResolution) {
+    events.push({
+      at: s.reconciliationResolvedAt ? Date.parse(s.reconciliationResolvedAt) : null,
+      label: `Reconciled — ${s.reconciliationResolution?.resolutionType ?? "resolved"}`,
+      detail: s.reconciliationResolutionReason ?? s.reconciliationResolution?.notes ?? undefined,
+      tone: "info",
+    });
+  }
+
+  const exposureOpen = row.unresolvedExposure != null && row.unresolvedExposure > 0;
+  return (
+    <div className="rounded-md border border-line bg-surface/60 p-2.5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.1em] text-amber">
+          Lifecycle / Recovery
+        </span>
+        {exposureOpen ? (
+          <Badge variant="down">unresolved {fmtUsd(row.unresolvedExposure)}</Badge>
+        ) : row.exact ? (
+          <Badge variant="up">resolved</Badge>
+        ) : null}
+      </div>
+      <ol className="flex flex-col gap-2">
+        {events.map((e, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <span
+              className={cn(
+                "mt-1 size-1.5 shrink-0 rounded-full",
+                e.tone === "up" ? "bg-up" : e.tone === "down" ? "bg-down" : e.tone === "amber" ? "bg-amber" : "bg-cyan",
+              )}
+            />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-fg-secondary">{e.label}</span>
+                <span className="shrink-0 font-mono text-[9px] text-fg-faint">
+                  {e.at != null && Number.isFinite(e.at) ? fmtClock(e.at) : "—"}
+                </span>
+              </div>
+              {e.detail ? <span className="truncate font-mono text-[10px] text-fg-muted">{e.detail}</span> : null}
+            </div>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
