@@ -2458,17 +2458,21 @@ export class PolymarketOrderClient implements VenueOrderClient {
       if (minOrderSize != null && fillCount + 1e-9 < minOrderSize) {
         return { flattened: false, reason: `unwind: residual ${fillCount} below min order size ${minOrderSize}` };
       }
-      // Loss-capped SELL floor: a sell fills only at >= limit, so the limit must be >= minSellPrice. Round UP
-      // (ceilToTick) — rounding down would lower the floor and breach the cap.
-      const minSellPrice = fillPrice - maxLossDollars / fillCount;
-      const limitPrice = ceilToTick(minSellPrice, tick);
-      if (!(limitPrice > 0) || limitPrice >= 1) {
-        return { flattened: false, reason: `unwind: loss-capped sell floor ${limitPrice} out of range` };
+      // Ensure the Polymarket conditional-token (ERC-1155 outcome-share) sell allowance — without it the CLOB
+      // rejects the sell with "not enough balance / allowance". Idempotent; gated by config.
+      if (this.config.livePolymarketSellAllowanceEnabled) {
+        await this.ensureConditionalSellAllowance(client, leg.tokenId);
       }
-      // Independent re-proof that the snapped limit keeps the worst case within cap (defends against a
-      // wrong-direction tick snap).
+      // Pricing. MARKET mode: limit = lowest tick, which crosses any resting bid -> max fill, NO loss cap
+      // (operator prefers flattening naked exposure over capital preservation). Else: loss-capped floor (a sell
+      // fills only at >= limit, so the limit is the worst-acceptable price rounded UP to a tick).
+      const marketSell = this.config.liveAutoUnwindMarketSell;
+      const limitPrice = marketSell ? tick : ceilToTick(fillPrice - maxLossDollars / fillCount, tick);
+      if (!(limitPrice > 0) || limitPrice >= 1) {
+        return { flattened: false, reason: `unwind: sell price ${limitPrice} out of range` };
+      }
       const worstCaseLoss = roundPrice((fillPrice - limitPrice) * fillCount);
-      if (worstCaseLoss > maxLossDollars + 1e-9) {
+      if (!marketSell && worstCaseLoss > maxLossDollars + 1e-9) {
         return {
           flattened: false,
           reason: `unwind: snapped floor ${limitPrice} worst-loss ${worstCaseLoss} exceeds cap ${maxLossDollars}`,
@@ -2524,6 +2528,8 @@ export class PolymarketOrderClient implements VenueOrderClient {
         signMs: null,
         metadata: {
           unwindSide: "sell",
+          unwindTokenId: leg.tokenId,
+          unwindMarketSell: marketSell,
           unwindResidualShares: fillCount,
           unwindSoldShares: soldShares,
           unwindBuyFillPrice: fillPrice,
@@ -2543,6 +2549,102 @@ export class PolymarketOrderClient implements VenueOrderClient {
       return { flattened: true, lossDollars, reason: null, result: sellResult };
     } catch (error) {
       return { flattened: false, reason: `unwind error: ${sanitizeError(error)}` };
+    }
+  }
+
+  // Ensure the CLOB exchange is approved to transfer this conditional token (ERC-1155) so a SELL is permitted.
+  // Idempotent: checks the current allowance and only sends the on-chain approval when missing. Never throws —
+  // a persistent failure surfaces as the sell's own "not enough balance / allowance" rejection.
+  private async ensureConditionalSellAllowance(client: PolymarketClobLike, tokenId: string): Promise<void> {
+    try {
+      const current = await withMutedPolymarketClientLogs(async () =>
+        client.getBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId }),
+      );
+      if ((finiteOrNull(current.allowance) ?? 0) > 0) return; // already approved
+      await withMutedPolymarketClientLogs(async () =>
+        client.updateBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId }),
+      );
+    } catch {
+      // Swallow: if the approval genuinely cannot be set, the subsequent SELL fails with the allowance error,
+      // which is recorded on the unwind outcome.
+    }
+  }
+
+  // Market-sell N held shares of a tokenId at the most-aggressive crossing price (limit = lowest tick -> takes
+  // any resting bid; FAK -> no resting remainder). Used by the async naked-position flattener AFTER settlement,
+  // so the shares are present. Never throws.
+  async marketSellShares(
+    tokenId: string,
+    shares: number,
+    options: { clientOrderId?: string; timeoutMs?: number } = {},
+  ): Promise<{
+    soldShares: number;
+    sellPrice: number | null;
+    orderId: string | null;
+    status: string;
+    error: string | null;
+  }> {
+    const requestedAt = Date.now();
+    try {
+      if (!tokenId || !(shares > 0))
+        return {
+          soldShares: 0,
+          sellPrice: null,
+          orderId: null,
+          status: "skipped",
+          error: "missing token or non-positive shares",
+        };
+      const { client } = await this.client();
+      if (this.config.livePolymarketSellAllowanceEnabled) await this.ensureConditionalSellAllowance(client, tokenId);
+      const book = await this.getOrderBook(tokenId, requestedAt);
+      const tickRaw = book.tick_size;
+      const tickNum = typeof tickRaw === "number" ? tickRaw : Number(tickRaw);
+      const tick = Number.isFinite(tickNum) && tickNum > 0 ? tickNum : 0.01;
+      const minOrderSize = finiteOrNull(book.min_order_size);
+      if (minOrderSize != null && shares + 1e-9 < minOrderSize) {
+        return {
+          soldShares: 0,
+          sellPrice: null,
+          orderId: null,
+          status: "below_min",
+          error: `shares ${shares} below min order size ${minOrderSize}`,
+        };
+      }
+      const clientOrderId = options.clientOrderId ?? `flatten-${requestedAt}`;
+      const signedOrder = await client.createOrder(
+        {
+          tokenID: tokenId,
+          price: tick,
+          size: shares,
+          side: Side.SELL,
+          metadata: metadataFromClientOrderId(clientOrderId),
+        },
+        { tickSize: book.tick_size as TickSize, negRisk: Boolean(book.neg_risk) },
+      );
+      const payload = await withExtendedAxiosTimeout(Math.max(1, options.timeoutMs ?? 2500), () =>
+        withMutedPolymarketClientLogs(() => client.postOrder(signedOrder, OrderType.FAK)),
+      );
+      const response = payload as Record<string, unknown>;
+      const orderId = response.orderID == null ? null : String(response.orderID);
+      const status = String(response.status ?? "").toLowerCase();
+      const success = response.success !== false;
+      const makingAmount = finiteOrNull(response.makingAmount); // shares sold (SELL inverts making/taking)
+      const takingAmount = finiteOrNull(response.takingAmount); // USDC received
+      const soldShares = success && makingAmount != null ? Math.min(Math.max(0, makingAmount), shares) : 0;
+      const sellPrice = soldShares > 0 && takingAmount != null ? roundPrice(takingAmount / soldShares) : null;
+      const error =
+        success && soldShares > 0
+          ? null
+          : `market sell ${status || "no-fill"}: ${sanitizeError(response.errorMsg ?? response.error ?? status ?? "unknown")}`;
+      return { soldShares, sellPrice, orderId, status: status || (success ? "unknown" : "rejected"), error };
+    } catch (error) {
+      return {
+        soldShares: 0,
+        sellPrice: null,
+        orderId: null,
+        status: "error",
+        error: `market sell error: ${sanitizeError(error)}`,
+      };
     }
   }
 

@@ -261,6 +261,10 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveAutoUnwindResidualOnly: false,
     liveAutoUnwindRequireTerminalCounterLeg: true,
     liveAutoUnwindMaxLossCentsPerShare: 2,
+    liveAutoUnwindMarketSell: false,
+    livePolymarketSellAllowanceEnabled: false,
+    liveNakedFlattenEnabled: false,
+    liveNakedFlattenIntervalMs: 45_000,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
     dashboardApiToken: "token",
@@ -6619,6 +6623,66 @@ test("residual-only unwind credits ZERO when a partial sell's limit fails the ca
 
   assert.equal(result.recoveryStatus, "risk_quarantined");
   assert.equal(result.riskQuarantineExposureDollars, 1.68); // gross 2 shares — no credit on cap ambiguity
+});
+
+test("residual unwind MARKET-sell mode sells at the lowest tick (no loss cap) and flattens", async () => {
+  const clob = new FakeUnwindClob(
+    { min_order_size: "1", tick_size: "0.01", neg_risk: false },
+    { success: true, orderID: "ms-1", status: "matched", makingAmount: "10", takingAmount: "3.0" }, // sold 10 @ 0.30 — deep slip, no cap
+  );
+  const client = new PolymarketOrderClient(
+    config({ liveAutoUnwindMarketSell: true }),
+    async () => clob,
+    allowedGeoblock,
+  );
+  const outcome = await client.unwindPosition!({
+    leg: unwindLeg,
+    fillCount: 10,
+    fillPrice: 0.84,
+    maxLossDollars: 0.2,
+    timeoutMs: 1500,
+    hedgedCount: 20,
+    totalFilled: 30,
+    clientOrderId: "grp:unwind",
+  });
+  assert.equal(clob.createdOrder?.side, Side.SELL);
+  assert.equal(clob.createdOrder?.price, 0.01); // lowest tick = market (crosses any resting bid)
+  assert.equal(outcome?.flattened, true); // full fill; NO cap rejection despite (0.84-0.30)*10 = 5.4 >> cap
+  assert.equal(outcome?.result?.fillCount, 10);
+  assert.equal(outcome?.result?.metadata?.unwindMarketSell, true);
+});
+
+test("residual-only unwind in MARKET mode flattens regardless of price (executor cap check skipped)", async () => {
+  const now = 1_799_999_900_000;
+  const { candidate } = liveCandidate(now);
+  const locks = new FakeLiveLockStore();
+  // Same shape as the "lying adapter" quarantine test, but unwindMarketSell:true -> the cap re-check is skipped
+  // and the verified sold count flattens (operator accepted the deep loss to flatten).
+  const { executor } = residualUnwindExecutor(
+    true,
+    {
+      flattened: true,
+      lossDollars: 0.68,
+      result: {
+        venue: "polymarket",
+        clientOrderId: "grp:unwind",
+        orderId: "ms-1",
+        status: "matched",
+        fillPrice: 0.5,
+        fillCount: 2,
+        requestedAt: "2026-04-29T20:00:00.000Z",
+        respondedAt: "2026-04-29T20:00:00.050Z",
+        error: null,
+        metadata: { unwindLimitPrice: 0.01, unwindMarketSell: true },
+      },
+    },
+    now,
+    locks,
+  );
+
+  const result = await executor.execute(candidate);
+
+  assert.notEqual(result.recoveryStatus, "risk_quarantined"); // market mode: cap skipped, residual flattened
 });
 
 test("live executor readiness surfaces persisted quarantined exposure after restart", async () => {

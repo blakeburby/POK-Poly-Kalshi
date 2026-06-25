@@ -1917,6 +1917,9 @@ export class LiveExecutor implements ArbExecutor {
     const sold = result.fillCount ?? 0;
     if (!(sold > 0)) return 0;
     const clamped = Math.min(sold, delta);
+    // MARKET-sell mode deliberately has NO loss cap (operator chose flattening over capital preservation), so
+    // the limit-price worst-case check does not apply — the credit is the verified sold count.
+    if ((result.metadata ?? {}).unwindMarketSell === true) return clamped;
     const limitRaw = (result.metadata ?? {}).unwindLimitPrice;
     const limitPrice = typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : null;
     if (buyFillPrice == null || limitPrice == null) return 0;

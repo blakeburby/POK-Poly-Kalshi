@@ -169,6 +169,10 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveAutoUnwindResidualOnly: false,
     liveAutoUnwindRequireTerminalCounterLeg: true,
     liveAutoUnwindMaxLossCentsPerShare: 2,
+    liveAutoUnwindMarketSell: false,
+    livePolymarketSellAllowanceEnabled: false,
+    liveNakedFlattenEnabled: false,
+    liveNakedFlattenIntervalMs: 45_000,
     dashboardRealtimeSecret: "",
     ...input,
   };

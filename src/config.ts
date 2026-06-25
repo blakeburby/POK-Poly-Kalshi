@@ -162,6 +162,17 @@ export interface AppConfig {
   liveAutoUnwindResidualOnly: boolean;
   liveAutoUnwindRequireTerminalCounterLeg: boolean;
   liveAutoUnwindMaxLossCentsPerShare: number;
+  // Sell unhedged residuals at MARKET (most-aggressive crossing price, no loss cap) for max fill chance,
+  // instead of the loss-capped limit. Operator choice when capital preservation < flattening naked exposure.
+  liveAutoUnwindMarketSell: boolean;
+  // Ensure the Polymarket conditional-token (ERC-1155 outcome-share) sell allowance is set before a SELL —
+  // without it the CLOB rejects sells with "not enough balance / allowance". Idempotent.
+  livePolymarketSellAllowanceEnabled: boolean;
+  // Async post-settlement naked-position flattener: periodically market-sells recorded unhedged residuals
+  // (by tokenId, cross-checked against held shares) that the synchronous unwind could not flatten (e.g. the
+  // shares had not settled yet). Default off.
+  liveNakedFlattenEnabled: boolean;
+  liveNakedFlattenIntervalMs: number;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
@@ -579,6 +590,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // Moderate, operator-tunable loss budget for the residual unwind, in cents PER SHARE of the delta (the
     // effective dollar cap = centsPerShare/100 * delta, so it scales with residual size). Default 2.0c/share.
     liveAutoUnwindMaxLossCentsPerShare: Math.max(0, envNumber(env, "LIVE_AUTO_UNWIND_MAX_LOSS_CENTS_PER_SHARE", 2)),
+    liveAutoUnwindMarketSell: envBoolean(env, "LIVE_AUTO_UNWIND_MARKET_SELL", false),
+    livePolymarketSellAllowanceEnabled: envBoolean(env, "LIVE_POLYMARKET_SELL_ALLOWANCE_ENABLED", false),
+    liveNakedFlattenEnabled: envBoolean(env, "LIVE_NAKED_FLATTEN_ENABLED", false),
+    liveNakedFlattenIntervalMs: Math.max(5_000, envNumber(env, "LIVE_NAKED_FLATTEN_INTERVAL_MS", 45_000)),
     kalshiUserWsUrl: envString(
       env,
       "KALSHI_USER_WS_URL",
