@@ -173,6 +173,11 @@ export interface AppConfig {
   // shares had not settled yet). Default off.
   liveNakedFlattenEnabled: boolean;
   liveNakedFlattenIntervalMs: number;
+  // Defang Polymarket CLOB axios errors so the clob-client SDK's errorHandling() cannot throw "Converting
+  // circular structure to JSON" while serializing the request socket — which masks the real (benign) 4xx
+  // rejection reason. Strips the circular config off CLOB error responses so the genuine reason surfaces in
+  // failure_reason. Diagnostic-only (no trading-behavior change). Default off.
+  livePolymarketErrorConfigStripEnabled: boolean;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
@@ -594,6 +599,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     livePolymarketSellAllowanceEnabled: envBoolean(env, "LIVE_POLYMARKET_SELL_ALLOWANCE_ENABLED", false),
     liveNakedFlattenEnabled: envBoolean(env, "LIVE_NAKED_FLATTEN_ENABLED", false),
     liveNakedFlattenIntervalMs: Math.max(5_000, envNumber(env, "LIVE_NAKED_FLATTEN_INTERVAL_MS", 45_000)),
+    livePolymarketErrorConfigStripEnabled: envBoolean(env, "LIVE_POLYMARKET_ERROR_CONFIG_STRIP_ENABLED", false),
     kalshiUserWsUrl: envString(
       env,
       "KALSHI_USER_WS_URL",

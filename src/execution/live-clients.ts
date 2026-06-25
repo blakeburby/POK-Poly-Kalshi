@@ -19,6 +19,7 @@ import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
 import { ceilToTick, roundPrice } from "./num-utils";
+import { registerPolymarketAxiosErrorDefang } from "./polymarket-error-defang";
 import { getKalshiHeaders } from "../kalshi/auth";
 import { KalshiFixOrderSession, type KalshiFixOrderExecution, type KalshiFixOrderInput } from "../kalshi/fix";
 import type {
@@ -2240,7 +2241,11 @@ export class PolymarketOrderClient implements VenueOrderClient {
       config: AppConfig,
     ) => Promise<PolymarketClobLike | PolymarketClobClientBundle> = defaultPolymarketClientFactory,
     private readonly geoblockChecker: PolymarketGeoblockChecker = (now) => checkPolymarketGeoblock(config, fetch, now),
-  ) {}
+  ) {
+    // Diagnostic-only: stop the clob-client SDK's error logger from masking real CLOB rejection reasons with a
+    // "Converting circular structure to JSON" TypeError. Global one-time registration; no-op when disabled.
+    if (config.livePolymarketErrorConfigStripEnabled) registerPolymarketAxiosErrorDefang();
+  }
 
   async readiness(now = Date.now()): Promise<VenueExecutionReadiness> {
     return this.checkReadiness(now);

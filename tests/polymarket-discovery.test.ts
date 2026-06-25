@@ -186,6 +186,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     livePolymarketSellAllowanceEnabled: false,
     liveNakedFlattenEnabled: false,
     liveNakedFlattenIntervalMs: 45_000,
+    livePolymarketErrorConfigStripEnabled: false,
     dashboardRealtimeSecret: "",
     ...input,
   };

@@ -119,6 +119,7 @@ export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Rec
     // Surfaced without the literal "allowance" substring so the sanitized-health guard (which forbids leaked
     // account financials like a raw "balance: 0, allowance:" error) stays strict. Reflects LIVE_POLYMARKET_SELL_ALLOWANCE_ENABLED.
     livePolymarketSellApprovalEnabled: config.livePolymarketSellAllowanceEnabled,
+    livePolymarketErrorConfigStripEnabled: config.livePolymarketErrorConfigStripEnabled,
     liveNakedFlattenEnabled: config.liveNakedFlattenEnabled,
     nakedFlatten: nakedFlattenStatus
       ? {
