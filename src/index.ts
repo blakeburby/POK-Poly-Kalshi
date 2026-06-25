@@ -16,6 +16,7 @@ import { discoverPolymarketBtcContractsWithDiagnostics, emptyPolymarketDiagnosti
 import { LiveExecutor } from "./execution/executor";
 import { buildPublicWorkerHealth } from "./health";
 import { startRuntimeHealthMonitor, sampleRuntimeHealth, getRuntimeHealth } from "./diagnostics/runtime-health";
+import { configureHotPathTiming, getHotPathTimings, time } from "./diagnostics/hot-path-timing";
 import { installLowLatencyHttpTransport, preconnectLiveHttpEndpoints } from "./execution/http-transport";
 import { CachedLiveExecutionLockStore, LiveExposureCache } from "./execution/live-hot-path";
 import { buildUserStreamReadiness, LiveVenueConfirmationCoordinator } from "./execution/venue-confirmations";
@@ -41,7 +42,7 @@ import type { PolymarketDiagnostics } from "./types";
 
 function sendJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json" });
-  response.end(JSON.stringify(body));
+  response.end(time("workerSerialize", () => JSON.stringify(body)));
 }
 
 async function main(): Promise<void> {
@@ -409,6 +410,10 @@ async function main(): Promise<void> {
   // Runtime-health watchdog: surface event-loop stall / CPU steal (burst-credit throttle) immediately instead
   // of letting it silently halt trading. Single sampler so the /proc/stat steal delta stays consistent.
   startRuntimeHealthMonitor();
+  // Hot-path timing: attribute event-loop lag to specific synchronous sections (+ GC) so we know WHAT to
+  // optimize, not just that the loop lags. Cheap; default on. No-op when disabled.
+  configureHotPathTiming(config.liveHotPathTimingEnabled);
+  let runtimeHealthTicks = 0;
   const runtimeHealthTimer = setInterval(() => {
     const h = sampleRuntimeHealth();
     if (h.eventLoopLagP99Ms > 1_000 || (h.cpuStealPercent ?? 0) > 40) {
@@ -420,6 +425,22 @@ async function main(): Promise<void> {
           eventLoopLagMeanMs: h.eventLoopLagMeanMs,
           eventLoopLagP99Ms: h.eventLoopLagP99Ms,
           cpuStealPercent: h.cpuStealPercent,
+        },
+      });
+    }
+    // Emit a hot-path timing summary every 60s (every 6th 10s tick) for easy baseline capture from logs.
+    runtimeHealthTicks += 1;
+    const timings = getHotPathTimings();
+    if (timings && runtimeHealthTicks % 6 === 0) {
+      logEvent({
+        severity: "INFO",
+        category: "BOOT",
+        message: "hot-path timing",
+        context: {
+          eventLoopLagMeanMs: h.eventLoopLagMeanMs,
+          eventLoopLagP99Ms: h.eventLoopLagP99Ms,
+          gc: timings.gc,
+          sections: timings.sections,
         },
       });
     }
@@ -495,6 +516,7 @@ async function main(): Promise<void> {
             nakedFlattenStatus: nakedFlattener.status(),
           }),
           runtimeHealth: getRuntimeHealth(),
+          hotPathTimings: getHotPathTimings(),
         });
         return;
       }

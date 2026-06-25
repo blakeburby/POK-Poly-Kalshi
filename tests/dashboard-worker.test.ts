@@ -174,6 +174,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveNakedFlattenEnabled: false,
     liveNakedFlattenIntervalMs: 45_000,
     livePolymarketErrorConfigStripEnabled: false,
+    liveHotPathTimingEnabled: false,
     dashboardRealtimeSecret: "",
     ...input,
   };

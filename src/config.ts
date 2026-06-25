@@ -178,6 +178,9 @@ export interface AppConfig {
   // rejection reason. Strips the circular config off CLOB error responses so the genuine reason surfaces in
   // failure_reason. Diagnostic-only (no trading-behavior change). Default off.
   livePolymarketErrorConfigStripEnabled: boolean;
+  // Per-section hot-path timing + GC attribution on /health (which work blocks the event loop). Cheap,
+  // diagnostic-only; default on. Disable to make all timing a true no-op.
+  liveHotPathTimingEnabled: boolean;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
@@ -600,6 +603,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveNakedFlattenEnabled: envBoolean(env, "LIVE_NAKED_FLATTEN_ENABLED", false),
     liveNakedFlattenIntervalMs: Math.max(5_000, envNumber(env, "LIVE_NAKED_FLATTEN_INTERVAL_MS", 45_000)),
     livePolymarketErrorConfigStripEnabled: envBoolean(env, "LIVE_POLYMARKET_ERROR_CONFIG_STRIP_ENABLED", false),
+    liveHotPathTimingEnabled: envBoolean(env, "LIVE_HOT_PATH_TIMING_ENABLED", true),
     kalshiUserWsUrl: envString(
       env,
       "KALSHI_USER_WS_URL",

@@ -4,6 +4,7 @@ import type { AppConfig } from "../config";
 import { buildDashboardAnalytics, oldestAnalyticsSinceMs } from "../analytics/performance";
 import type { BookStore } from "../books/book-store";
 import { emptyPolymarketDiagnostics } from "../discovery/polymarket";
+import { time } from "../diagnostics/hot-path-timing";
 import type { ScannerStatus } from "../scanner/scanner";
 import { enumerateCandidates } from "../scanner/pairing";
 import type {
@@ -123,7 +124,9 @@ function trimBookSnapshot(books: { kalshi: BinaryContract[]; polymarket: BinaryC
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json" });
-  response.end(JSON.stringify(body));
+  // Time the synchronous serialize — large dashboard payloads (the ~778KB /dashboard/snapshot) stringify on
+  // the event loop and are a candidate event-loop-lag source.
+  response.end(time("dashboardSerialize", () => JSON.stringify(body)));
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -401,7 +404,7 @@ export async function createLiveSnapshot(
   cache?: DashboardSnapshotCache,
 ): Promise<Partial<DashboardSnapshot>> {
   const startedAt = Date.now();
-  const books = trimBookSnapshot(runtime.books.snapshot());
+  const books = time("liveSnapshotTrim", () => trimBookSnapshot(runtime.books.snapshot()));
   const scannerStatus = runtime.getScannerStatus();
   const execution = await cachedExecutionReadiness(runtime, now, cache);
   const { liveCandidates, syntheticStructures } = sortedCandidates(runtime, now);
