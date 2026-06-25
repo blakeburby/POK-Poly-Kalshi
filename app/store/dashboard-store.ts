@@ -24,6 +24,26 @@ export type ViewId =
   | "health"
   | "threeD";
 
+/** Runtime list of valid view ids — mirrors the ViewId union (used to validate persisted prefs). */
+export const VIEW_IDS: ViewId[] = [
+  "overview",
+  "performance",
+  "execution",
+  "risk",
+  "ledger",
+  "venuePnl",
+  "edge",
+  "books",
+  "ladder",
+  "positions",
+  "tape",
+  "orderEntry",
+  "candles",
+  "releases",
+  "health",
+  "threeD",
+];
+
 interface DashboardState {
   snapshot: DashboardSnapshot | null;
   source: FeedSource;
@@ -230,4 +250,41 @@ export function useDashboardStream(): void {
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
   }, [setSnapshot, setSource]);
+}
+
+const PREFS_KEY = "pok_dashboard_prefs";
+
+/**
+ * Persist the operator's workspace (last view, reduced-motion, selected strike) to localStorage so
+ * the terminal reopens where they left off. Hydrates after mount (no SSR mismatch) and writes only
+ * when the persisted subset actually changes (not on every sub-second snapshot tick).
+ */
+export function useDashboardPersistence(): void {
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as Partial<{ view: ViewId; reducedMotion: boolean; selectedStrike: number }>;
+        const s = useDashboardStore.getState();
+        if (p.view && VIEW_IDS.includes(p.view)) s.setView(p.view);
+        if (typeof p.reducedMotion === "boolean") s.setReducedMotion(p.reducedMotion);
+        if (typeof p.selectedStrike === "number") s.setSelectedStrike(p.selectedStrike);
+      }
+    } catch {
+      /* ignore unreadable/again-blocked storage */
+    }
+
+    let prev = "";
+    const unsub = useDashboardStore.subscribe((s) => {
+      const next = JSON.stringify({ view: s.view, reducedMotion: s.reducedMotion, selectedStrike: s.selectedStrike });
+      if (next === prev) return;
+      prev = next;
+      try {
+        localStorage.setItem(PREFS_KEY, next);
+      } catch {
+        /* ignore quota/again-blocked storage */
+      }
+    });
+    return unsub;
+  }, []);
 }

@@ -245,6 +245,26 @@ function Ladder({
     return m || 1;
   }, [rows]);
 
+  // Cumulative resting depth from the inside (best price) outward, keyed by price — reveals walls.
+  const cumBid = React.useMemo(() => {
+    const m = new Map<number, number>();
+    let run = 0;
+    for (const l of [...bids].sort((a, b) => b.price - a.price)) {
+      run += l.size;
+      m.set(round3(l.price), run);
+    }
+    return m;
+  }, [bids]);
+  const cumAsk = React.useMemo(() => {
+    const m = new Map<number, number>();
+    let run = 0;
+    for (const l of [...asks].sort((a, b) => a.price - b.price)) {
+      run += l.size;
+      m.set(round3(l.price), run);
+    }
+    return m;
+  }, [asks]);
+
   const totalBid = bids.reduce((s, l) => s + l.size, 0);
   const totalAsk = asks.reduce((s, l) => s + l.size, 0);
   const bidShare = totalBid + totalAsk > 0 ? totalBid / (totalBid + totalAsk) : 0.5;
@@ -276,6 +296,8 @@ function Ladder({
                 bidSize={r.bidSize}
                 askSize={r.askSize}
                 maxSize={maxSize}
+                cumBidPct={totalBid > 0 ? ((cumBid.get(r.price) ?? 0) / totalBid) * 100 : 0}
+                cumAskPct={totalAsk > 0 ? ((cumAsk.get(r.price) ?? 0) / totalAsk) * 100 : 0}
                 isBestBid={bestBid != null && r.price === round3(bestBid)}
                 isBestAsk={bestAsk != null && r.price === round3(bestAsk)}
                 flashEnabled={flashEnabled}
@@ -312,6 +334,8 @@ function LadderRow({
   bidSize,
   askSize,
   maxSize,
+  cumBidPct,
+  cumAskPct,
   isBestBid,
   isBestAsk,
   flashEnabled,
@@ -320,6 +344,8 @@ function LadderRow({
   bidSize: number | null;
   askSize: number | null;
   maxSize: number;
+  cumBidPct: number;
+  cumAskPct: number;
   isBestBid: boolean;
   isBestAsk: boolean;
   flashEnabled: boolean;
@@ -337,11 +363,17 @@ function LadderRow({
         isBestAsk && "bg-down/[0.04]",
       )}
     >
-      {/* bid cell — bar grows from the centre price leftwards */}
+      {/* bid cell — bars grow from the centre price leftwards (faint cumulative depth + bright instant size) */}
       <div className={cn("relative flex items-center justify-end overflow-hidden px-2 py-[3px]", bidFlash)}>
         {bidSize != null ? (
           <span
-            className="absolute inset-y-0 right-0 bg-up/15 transition-[width] duration-300"
+            className="absolute inset-y-0 right-0 bg-up/[0.07] transition-[width] duration-300"
+            style={{ width: `${cumBidPct}%` }}
+          />
+        ) : null}
+        {bidSize != null ? (
+          <span
+            className="absolute inset-y-0 right-0 bg-up/20 transition-[width] duration-300"
             style={{ width: `${bidPct}%` }}
           />
         ) : null}
@@ -360,11 +392,17 @@ function LadderRow({
         {fmtCents(price)}
       </div>
 
-      {/* ask cell — bar grows from the centre price rightwards */}
+      {/* ask cell — bars grow from the centre price rightwards (faint cumulative depth + bright instant size) */}
       <div className={cn("relative flex items-center justify-start overflow-hidden px-2 py-[3px]", askFlash)}>
         {askSize != null ? (
           <span
-            className="absolute inset-y-0 left-0 bg-down/15 transition-[width] duration-300"
+            className="absolute inset-y-0 left-0 bg-down/[0.07] transition-[width] duration-300"
+            style={{ width: `${cumAskPct}%` }}
+          />
+        ) : null}
+        {askSize != null ? (
+          <span
+            className="absolute inset-y-0 left-0 bg-down/20 transition-[width] duration-300"
             style={{ width: `${askPct}%` }}
           />
         ) : null}

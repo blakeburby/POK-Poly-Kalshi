@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useDashboardStore, useDashboardStream } from "@/store/dashboard-store";
+import { useDashboardStore, useDashboardStream, useDashboardPersistence } from "@/store/dashboard-store";
 import { TopBar } from "@/components/shell/TopBar";
 import { KpiStrip } from "@/components/shell/KpiStrip";
 import { NavRail } from "@/components/shell/NavRail";
@@ -16,6 +16,7 @@ import { StatusDot } from "@/components/ui/stat";
 
 export default function DashboardApp({ dashboardName }: { dashboardName?: string }) {
   useDashboardStream();
+  useDashboardPersistence();
   const snap = useDashboardStore((s) => s.snapshot);
 
   return (
