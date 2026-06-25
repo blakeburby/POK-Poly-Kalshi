@@ -267,6 +267,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveNakedFlattenIntervalMs: 45_000,
     livePolymarketErrorConfigStripEnabled: false,
     liveHotPathTimingEnabled: false,
+    dashboardSnapshotCacheMs: 1000,
     kalshiUserWsUrl: "",
     polymarketUserWsUrl: "",
     dashboardApiToken: "token",

@@ -181,6 +181,10 @@ export interface AppConfig {
   // Per-section hot-path timing + GC attribution on /health (which work blocks the event loop). Cheap,
   // diagnostic-only; default on. Disable to make all timing a true no-op.
   liveHotPathTimingEnabled: boolean;
+  // Cache the heavy /dashboard/snapshot response body this long (ms) so bursts / multiple dashboard viewers
+  // don't rebuild + re-serialize the ~778KB payload on the event loop every poll. 0 disables. Monitoring-only
+  // (the real-time /dashboard/live feed is never cached); no effect on trading.
+  dashboardSnapshotCacheMs: number;
   kalshiUserWsUrl: string;
   polymarketUserWsUrl: string;
   dashboardApiToken: string;
@@ -604,6 +608,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     liveNakedFlattenIntervalMs: Math.max(5_000, envNumber(env, "LIVE_NAKED_FLATTEN_INTERVAL_MS", 45_000)),
     livePolymarketErrorConfigStripEnabled: envBoolean(env, "LIVE_POLYMARKET_ERROR_CONFIG_STRIP_ENABLED", false),
     liveHotPathTimingEnabled: envBoolean(env, "LIVE_HOT_PATH_TIMING_ENABLED", true),
+    dashboardSnapshotCacheMs: Math.max(0, envNumber(env, "DASHBOARD_SNAPSHOT_CACHE_MS", 1000)),
     kalshiUserWsUrl: envString(
       env,
       "KALSHI_USER_WS_URL",

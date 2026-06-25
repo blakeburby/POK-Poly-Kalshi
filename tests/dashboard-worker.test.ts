@@ -5,9 +5,11 @@ import { buildDashboardAnalytics } from "../src/analytics/performance";
 import {
   dashboardRequestAuthorized,
   createDashboardSnapshot,
+  buildSnapshotResponseBody,
   formatSseEvent,
   type DashboardRuntime,
   type DashboardSnapshotCache,
+  type DashboardResponseCache,
 } from "../src/dashboard/worker-api";
 import type { AppConfig } from "../src/config";
 import { LatencyMonitor } from "../src/latency/metrics";
@@ -175,6 +177,7 @@ function config(input: Partial<AppConfig> = {}): AppConfig {
     liveNakedFlattenIntervalMs: 45_000,
     livePolymarketErrorConfigStripEnabled: false,
     liveHotPathTimingEnabled: false,
+    dashboardSnapshotCacheMs: 1000,
     dashboardRealtimeSecret: "",
     ...input,
   };
@@ -449,6 +452,45 @@ test("dashboard snapshot cache avoids querying heavy DB-backed sections on every
   await createDashboardSnapshot(runtime, now + 5_001, cache);
   assert.equal(recentCalls, 3);
   assert.equal(analyticsCalls, 2);
+});
+
+test("dashboard snapshot RESPONSE cache reuses the serialized body within the TTL, rebuilds after", async () => {
+  const books = new BookStore();
+  const now = 1_800_000_000_000;
+  const makeRuntime = (cacheMs: number): DashboardRuntime => ({
+    config: { ...config(), dashboardSnapshotCacheMs: cacheMs },
+    books,
+    signals: {
+      listRecentSignals: async () => [signal()],
+      listFilledSignalsSince: async () => [signal()],
+    },
+    getScannerStatus: () => ({
+      scanning: false,
+      lastScanAt: now,
+      lastCandidateCount: 0,
+      queuedExecutions: 0,
+      activeExecutions: 0,
+    }),
+    getDiscoveryState: () => ({ lastDiscoveryAt: now, lastDiscoveryError: null }),
+    getLogs: () => [],
+  });
+
+  const runtime = makeRuntime(1_000);
+  const rc: DashboardResponseCache = {};
+  const b1 = await buildSnapshotResponseBody(runtime, now, rc);
+  const b2 = await buildSnapshotResponseBody(runtime, now + 500, rc); // within TTL -> cached
+  const b3 = await buildSnapshotResponseBody(runtime, now + 1_001, rc); // past TTL -> rebuilt
+  assert.equal(b2, b1); // byte-identical serialized body (cache hit, no rebuild/re-serialize)
+  assert.notEqual(b3, b1);
+  assert.equal(JSON.parse(b1).generatedAt, now);
+  assert.equal(JSON.parse(b3).generatedAt, now + 1_001);
+
+  // TTL=0 disables the cache: each call rebuilds with a fresh generatedAt.
+  const off = makeRuntime(0);
+  const rc2: DashboardResponseCache = {};
+  const c1 = await buildSnapshotResponseBody(off, now, rc2);
+  const c2 = await buildSnapshotResponseBody(off, now + 10, rc2);
+  assert.notEqual(c2, c1);
 });
 
 test("dashboard snapshot uses hot analytics provider without polling filled signals", async () => {

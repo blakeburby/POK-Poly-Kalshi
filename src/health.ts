@@ -120,6 +120,8 @@ export function buildPublicWorkerHealth(options: PublicWorkerHealthOptions): Rec
     // account financials like a raw "balance: 0, allowance:" error) stays strict. Reflects LIVE_POLYMARKET_SELL_ALLOWANCE_ENABLED.
     livePolymarketSellApprovalEnabled: config.livePolymarketSellAllowanceEnabled,
     livePolymarketErrorConfigStripEnabled: config.livePolymarketErrorConfigStripEnabled,
+    liveHotPathTimingEnabled: config.liveHotPathTimingEnabled,
+    dashboardSnapshotCacheMs: config.dashboardSnapshotCacheMs,
     liveNakedFlattenEnabled: config.liveNakedFlattenEnabled,
     nakedFlatten: nakedFlattenStatus
       ? {

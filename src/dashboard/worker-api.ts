@@ -485,8 +485,37 @@ export function formatSseEvent(event: string, data: unknown): string {
 // within their refresh windows instead of rebuilt on every poll.
 const sharedSnapshotCache: DashboardSnapshotCache = {};
 
+/** Cache of the fully-SERIALIZED heavy snapshot body, so bursts / multiple viewers don't rebuild +
+ *  re-stringify the ~778KB payload on the event loop every poll (config.dashboardSnapshotCacheMs window). */
+export interface DashboardResponseCache {
+  body?: string;
+  builtAtMs?: number;
+}
+const sharedSnapshotResponseCache: DashboardResponseCache = {};
+
+/** Build (or reuse, within the TTL) the serialized /dashboard/snapshot body. Exported for testing. */
+export async function buildSnapshotResponseBody(
+  runtime: DashboardRuntime,
+  now = Date.now(),
+  responseCache: DashboardResponseCache = sharedSnapshotResponseCache,
+): Promise<string> {
+  const ttl = runtime.config.dashboardSnapshotCacheMs;
+  if (ttl > 0 && responseCache.body != null && responseCache.builtAtMs != null && now - responseCache.builtAtMs < ttl) {
+    return responseCache.body;
+  }
+  const snapshot = await createDashboardSnapshot(runtime, now, sharedSnapshotCache);
+  const body = time("dashboardSerialize", () => JSON.stringify(snapshot));
+  if (ttl > 0) {
+    responseCache.body = body;
+    responseCache.builtAtMs = now;
+  }
+  return body;
+}
+
 async function writeSnapshot(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
-  sendJson(response, 200, await createDashboardSnapshot(runtime, Date.now(), sharedSnapshotCache));
+  const body = await buildSnapshotResponseBody(runtime, Date.now());
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(body);
 }
 
 async function writeLive(response: ServerResponse, runtime: DashboardRuntime): Promise<void> {
