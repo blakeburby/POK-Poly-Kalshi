@@ -18,7 +18,7 @@ import { createWalletClient, http } from "viem";
 import { polygon, polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../config";
-import { ceilToTick, roundPrice } from "./num-utils";
+import { ceilToTick, floorToTick, roundPrice } from "./num-utils";
 import { registerPolymarketAxiosErrorDefang } from "./polymarket-error-defang";
 import { getKalshiHeaders } from "../kalshi/auth";
 import { KalshiFixOrderSession, type KalshiFixOrderExecution, type KalshiFixOrderInput } from "../kalshi/fix";
@@ -467,8 +467,17 @@ function kalshiCashBalanceFromPayload(payload: Record<string, unknown>): {
   return { balance: null, rawBalance: null, rawField: null };
 }
 
+// Kalshi accepts only whole-cent (1¢ tick) prices. `context.maxBuyPrice` can arrive sub-cent (e.g. 0.5749 from
+// the 4-decimal money round of the hedge cap), which Kalshi rejects 400 `invalid_price` — stranding the order
+// (in `polymarket_first_exact`, the hedge) one-sided. This was ~35% of recent hedge misses.
+const KALSHI_PRICE_TICK_DOLLARS = 0.01;
+
 function kalshiYesBookPrice(leg: ArbLeg, context: LiveOrderContext): number {
-  return roundPrice(leg.direction === "yes" ? context.maxBuyPrice : 1 - context.maxBuyPrice);
+  // maxBuyPrice is always a BUY cap here, so floor it to the cent: the submitted price is on-tick AND never
+  // above the budgeted max. Resting Kalshi asks are themselves on-tick, so flooring forfeits no fill. For a NO
+  // leg the yes-book price is `1 - cap`, which stays on-tick because the floored cap is.
+  const cap = floorToTick(context.maxBuyPrice, KALSHI_PRICE_TICK_DOLLARS);
+  return roundPrice(leg.direction === "yes" ? cap : 1 - cap);
 }
 
 export function buildKalshiV2OrderBody(
@@ -694,7 +703,9 @@ export function buildKalshiUiQuickOrderBody(
     market_id: marketId,
     count_fp: fixedCount(context.size),
     side: leg.direction,
-    price_dollars: fixedDollars(context.maxBuyPrice),
+    // Floor to the cent like the V2 path: Kalshi rejects sub-cent prices (invalid_price). Non-default route,
+    // but kept consistent so the whole-cent invariant holds across every Kalshi order path.
+    price_dollars: fixedDollars(floorToTick(context.maxBuyPrice, KALSHI_PRICE_TICK_DOLLARS)),
     max_cost_cents: kalshiUiMaxCostCents(context),
     sell_position_capped: false,
     expiration_unix_ts: 0,

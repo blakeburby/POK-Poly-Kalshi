@@ -19,3 +19,16 @@ export function ceilToTick(value: number, tick: number): number {
   if (!(tick > 0)) return roundPrice(value);
   return roundPrice(Math.ceil(value / tick - 1e-9) * tick);
 }
+
+/**
+ * Round a price DOWN to the nearest exchange `tick` (e.g. Kalshi's 0.01). Mirror of `ceilToTick` for a
+ * marketable BUY limit: the exchange accepts only on-tick prices, so a sub-tick buy cap like 0.5749 is
+ * rejected `invalid_price` (which strands the order — commonly the Kalshi hedge — one-sided). Flooring keeps
+ * the limit on-tick AND at-or-below the budgeted max price (never paying more than intended); since resting
+ * asks are themselves on-tick, flooring forfeits no fill. The `+ 1e-9` epsilon keeps an already-on-tick value
+ * from dropping a full tick by floating-point error. `tick <= 0` falls back to plain money rounding.
+ */
+export function floorToTick(value: number, tick: number): number {
+  if (!(tick > 0)) return roundPrice(value);
+  return roundPrice(Math.floor(value / tick + 1e-9) * tick);
+}

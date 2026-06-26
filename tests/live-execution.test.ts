@@ -39,7 +39,7 @@ import {
   type VenueUnwindOutcome,
   type VenueUnwindRequest,
 } from "../src/execution/live-clients";
-import { ceilToTick } from "../src/execution/num-utils";
+import { ceilToTick, floorToTick } from "../src/execution/num-utils";
 import { LiveExposureCache } from "../src/execution/live-hot-path";
 import type { LiveExecutionLockInput, LiveExecutionLockWriter } from "../src/db/live-execution-locks";
 import { buildDeadZoneCandidate, buildGuaranteedCandidate } from "../src/scanner/payoff";
@@ -678,6 +678,45 @@ function kalshiLowerLiveCandidate(now: number) {
   assert.ok(candidate);
   return { candidate, lower, higher };
 }
+
+test("floorToTick rounds a buy cap DOWN to the exchange tick (Kalshi 1¢), within budget", () => {
+  assert.equal(floorToTick(0.5749, 0.01), 0.57); // the prod invalid_price value -> valid cent, <= cap
+  assert.equal(floorToTick(0.395, 0.01), 0.39);
+  assert.equal(floorToTick(0.1133, 0.01), 0.11);
+  assert.equal(floorToTick(0.57, 0.01), 0.57); // already on-tick: unchanged (epsilon guards the float)
+  assert.equal(floorToTick(0.999, 0.01), 0.99);
+  assert.equal(floorToTick(0.5749, 0), 0.5749); // tick<=0 falls back to money rounding
+});
+
+test("Kalshi V2 order body floors a sub-cent buy cap to a whole-cent price (invalid_price fix)", () => {
+  const wholeCent = (s: unknown) => Math.abs(Number(s) * 100 - Math.round(Number(s) * 100)) < 1e-9;
+  // YES leg: a sub-cent cap (0.5749) was sent verbatim -> Kalshi 400 invalid_price -> hedge stranded one-sided.
+  const yes = buildKalshiV2OrderBody(
+    { venue: "kalshi", contractId: "K-YES", direction: "yes", strike: 1, ask: 0.55 },
+    {
+      executionGroupId: "g",
+      clientOrderId: "c",
+      size: 8,
+      maxBuyPrice: 0.5749,
+      placementMode: "polymarket_first_exact",
+    },
+  );
+  assert.equal(yes.price, "0.5700");
+  assert.ok(wholeCent(yes.price));
+  // NO leg: yes-book price = 1 - floor(cap) = 0.43, on-tick, and NO cost (0.57) stays within the 0.5749 budget.
+  const no = buildKalshiV2OrderBody(
+    { venue: "kalshi", contractId: "K-NO", direction: "no", strike: 1, ask: 0.4 },
+    {
+      executionGroupId: "g",
+      clientOrderId: "c",
+      size: 8,
+      maxBuyPrice: 0.5749,
+      placementMode: "polymarket_first_exact",
+    },
+  );
+  assert.equal(no.price, "0.4300");
+  assert.ok(wholeCent(no.price));
+});
 
 test("Kalshi V2 order body maps YES and NO legs onto the YES order book", () => {
   const yes = buildKalshiV2OrderBody(
