@@ -86,8 +86,8 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
             <EChart
               option={scatterOption({
                 points: scatter,
-                xName: "premium",
-                yName: "edge",
+                xName: "Premium (¢)",
+                yName: "Guaranteed edge (¢)",
                 xFmt: (v) => fmtCents(v),
                 yFmt: (v) => fmtCents(v, true),
                 markLineY: threshold,

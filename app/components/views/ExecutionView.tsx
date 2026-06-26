@@ -159,8 +159,8 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
               height={216}
               option={scatterOption({
                 points: scatter,
-                xName: "time",
-                yName: "slippage",
+                xName: "Time (ET)",
+                yName: "Slippage (¢)",
                 xFmt: (v) =>
                   new Date(v).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
                 yFmt: (v) => fmtCents(v, true),

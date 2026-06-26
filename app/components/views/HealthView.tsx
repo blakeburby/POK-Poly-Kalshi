@@ -233,7 +233,7 @@ function LogTape({ logs, now }: { logs: DashboardLogEntry[]; now: number }) {
         return (
           <div
             key={i}
-            className="flex min-w-[560px] items-center gap-3 border-b border-line/30 px-3 py-1 hover:bg-surface-2/40"
+            className="flex min-w-0 items-center gap-3 border-b border-line/30 px-3 py-1 hover:bg-surface-2/40 sm:min-w-[560px]"
           >
             <StatusDot tone={sevTone[l.severity]} className="size-1" />
             <span className="w-20 shrink-0 tabular-nums text-fg-faint">{fmtClock(t, true).slice(0, 12)}</span>

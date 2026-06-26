@@ -207,9 +207,11 @@ export function CandleChartPanel({
 }
 
 export function CandlesView() {
+  // BTC-only dashboard: lock the standalone Price Charts to BTC (hides the asset switcher), matching the
+  // Cockpit embed — no off-strategy ETH/SOL/XRP reference data.
   return (
     <ViewScroll>
-      <CandleChartPanel />
+      <CandleChartPanel lockedAsset="BTC" />
     </ViewScroll>
   );
 }

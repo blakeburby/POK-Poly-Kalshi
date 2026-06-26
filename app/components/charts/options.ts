@@ -25,6 +25,13 @@ const valueAxis = (fmt?: (v: number) => string, opts?: { compact?: boolean }): A
     show: !opts?.compact,
   }) as unknown as AxisOpt;
 
+// Consistent, unit-bearing axis titles. Spread into an axis config to add a label.
+// x-titles sit centered below the axis; y-titles tuck at the axis top (no extra left margin needed).
+const nameStyle = { color: CHART.fgMuted, fontFamily: CHART.fontMono, fontSize: 9 } as const;
+const xName = (name: string) => ({ name, nameLocation: "middle" as const, nameGap: 19, nameTextStyle: nameStyle });
+// y-title rotated along the left side (standard) — never overlaps tick labels. nameGap clears the value labels.
+const yName = (name: string) => ({ name, nameLocation: "middle" as const, nameGap: 40, nameTextStyle: nameStyle });
+
 export function equityAreaOption(
   points: Pt[],
   opts?: { positive?: boolean; fmt?: (v: number) => string },
@@ -32,15 +39,15 @@ export function equityAreaOption(
   const color = (opts?.positive ?? true) ? CHART.up : CHART.down;
   return {
     animation: false,
-    grid: baseGrid,
+    grid: { ...baseGrid, bottom: 22 },
     tooltip: {
       ...baseTooltip,
       trigger: "axis",
       axisPointer: { type: "line", lineStyle: { color: CHART.lineStrong } },
       valueFormatter: (v) => (opts?.fmt ? opts.fmt(Number(v)) : String(v)),
     },
-    xAxis: timeAxis(),
-    yAxis: valueAxis(opts?.fmt),
+    xAxis: { ...timeAxis(), ...xName("Time (ET)") },
+    yAxis: { ...valueAxis(opts?.fmt), ...yName("Net P&L ($)") },
     series: [
       {
         type: "line",
@@ -72,10 +79,10 @@ export function pnlBarsDrawdownOption(
 ): EChartsOption {
   return {
     animation: false,
-    grid: { ...baseGrid, right: 40 },
+    grid: { ...baseGrid, right: 40, bottom: 22 },
     tooltip: { ...baseTooltip, trigger: "axis", axisPointer: { type: "shadow" } },
     legend: {
-      data: ["Net PnL", "Drawdown"],
+      data: ["Net PnL ($)", "Drawdown ($)"],
       textStyle: { color: CHART.fgMuted, fontFamily: CHART.fontMono, fontSize: 10 },
       right: 4,
       top: 0,
@@ -88,11 +95,15 @@ export function pnlBarsDrawdownOption(
       axisLine: { lineStyle: { color: CHART.line } },
       axisTick: { show: false },
       axisLabel: { ...axisLabel, hideOverlap: true },
+      ...xName("Period"),
     },
-    yAxis: [valueAxis(fmt), { ...valueAxis(fmt), position: "right", splitLine: { show: false } }],
+    yAxis: [
+      { ...valueAxis(fmt), ...yName("Net P&L ($)") },
+      { ...valueAxis(fmt), position: "right", splitLine: { show: false }, ...yName("Drawdown ($)") },
+    ],
     series: [
       {
-        name: "Net PnL",
+        name: "Net PnL ($)",
         type: "bar",
         data: buckets.map((b) => ({
           value: b.net,
@@ -101,7 +112,7 @@ export function pnlBarsDrawdownOption(
         barWidth: "55%",
       },
       {
-        name: "Drawdown",
+        name: "Drawdown ($)",
         type: "line",
         yAxisIndex: 1,
         showSymbol: false,
@@ -116,10 +127,10 @@ export function pnlBarsDrawdownOption(
 export function drawdownAreaOption(points: Pt[], fmt: (v: number) => string): EChartsOption {
   return {
     animation: false,
-    grid: baseGrid,
+    grid: { ...baseGrid, bottom: 22 },
     tooltip: { ...baseTooltip, trigger: "axis", valueFormatter: (v) => fmt(Number(v)) },
-    xAxis: timeAxis(),
-    yAxis: { ...valueAxis(fmt), max: 0 },
+    xAxis: { ...timeAxis(), ...xName("Time (ET)") },
+    yAxis: { ...valueAxis(fmt), max: 0, ...yName("Drawdown ($)") },
     series: [
       {
         type: "line",
@@ -157,7 +168,7 @@ export function histogramOption(bars: Array<{ label: string; count: number; colo
       axisTick: { show: false },
       axisLabel: axisLabel,
     },
-    yAxis: valueAxis(),
+    yAxis: { ...valueAxis(), ...yName("Count (trades)") },
     series: [
       {
         type: "bar",
@@ -233,7 +244,7 @@ export function scatterOption(opts: {
 export function depthOption(kalshi: Array<[number, number]>, poly: Array<[number, number]>): EChartsOption {
   return {
     animation: false,
-    grid: baseGrid,
+    grid: { ...baseGrid, bottom: 22 },
     tooltip: { ...baseTooltip, trigger: "axis" },
     legend: {
       data: ["Kalshi", "Polymarket"],
@@ -243,8 +254,8 @@ export function depthOption(kalshi: Array<[number, number]>, poly: Array<[number
       itemWidth: 10,
       itemHeight: 8,
     },
-    xAxis: { ...valueAxis((v) => `${(v * 100).toFixed(0)}¢`), name: "price" },
-    yAxis: valueAxis((v) => `${v}`),
+    xAxis: { ...valueAxis((v) => `${(v * 100).toFixed(0)}¢`), ...xName("Price (¢) — cumulative size (sh)") },
+    yAxis: valueAxis((v) => v.toLocaleString("en-US", { maximumFractionDigits: 0 })),
     series: [
       {
         name: "Kalshi",
@@ -271,17 +282,17 @@ export function depthOption(kalshi: Array<[number, number]>, poly: Array<[number
 export function calibrationOption(bins: Array<{ predicted: number; realized: number; count: number }>): EChartsOption {
   return {
     animation: false,
-    grid: { ...baseGrid, top: 20 },
+    grid: { ...baseGrid, top: 20, bottom: 22 },
     tooltip: {
       ...baseTooltip,
       trigger: "item",
       formatter: (p: any) =>
         Array.isArray(p.data.value)
-          ? `pred ${(p.data.value[0] * 100).toFixed(0)}% · real ${(p.data.value[1] * 100).toFixed(0)}%<br/>n=${p.data.count ?? ""}`
+          ? `Predicted ${(p.data.value[0] * 100).toFixed(0)}% · Realized ${(p.data.value[1] * 100).toFixed(0)}%<br/>n=${p.data.count ?? ""} trades`
           : "",
     },
-    xAxis: { ...valueAxis((v) => `${(v * 100).toFixed(0)}%`), min: 0, max: 1, name: "predicted" },
-    yAxis: { ...valueAxis((v) => `${(v * 100).toFixed(0)}%`), min: 0, max: 1, name: "realized" },
+    xAxis: { ...valueAxis((v) => `${(v * 100).toFixed(0)}%`), min: 0, max: 1, ...xName("Predicted exact-pair (%)") },
+    yAxis: { ...valueAxis((v) => `${(v * 100).toFixed(0)}%`), min: 0, max: 1, ...yName("Realized (%)") },
     series: [
       {
         type: "line",
@@ -407,6 +418,10 @@ export function candlestickOption(candles: Candle[], fmt: (v: number) => string)
         gridIndex: 0,
         scale: true,
         position: "right",
+        name: "Price (USD)",
+        nameLocation: "end",
+        nameGap: 6,
+        nameTextStyle: nameStyle,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { ...axisLabel, formatter: (v: number) => fmt(Number(v)) },
@@ -416,6 +431,10 @@ export function candlestickOption(candles: Candle[], fmt: (v: number) => string)
         gridIndex: 1,
         scale: true,
         position: "right",
+        name: "Vol (sh)",
+        nameLocation: "end",
+        nameGap: 4,
+        nameTextStyle: nameStyle,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { show: false },
@@ -503,7 +522,7 @@ export function perTradePnlOption(pnls: number[], fmt: (v: number) => string): E
   const cum = pnls.map((p) => (run += p));
   return {
     animation: false,
-    grid: { ...baseGrid, right: 44, bottom: 4 },
+    grid: { ...baseGrid, right: 44, bottom: 22 },
     tooltip: {
       ...baseTooltip,
       trigger: "axis",
@@ -516,12 +535,17 @@ export function perTradePnlOption(pnls: number[], fmt: (v: number) => string): E
       axisLine: { lineStyle: { color: CHART.line } },
       axisTick: { show: false },
       axisLabel: { ...axisLabel, hideOverlap: true },
+      ...xName("Trade #"),
     },
     yAxis: [
-      valueAxis(fmt),
+      { ...valueAxis(fmt), ...yName("Per-trade ($)") },
       {
         type: "value",
         position: "right",
+        name: "Cumulative ($)",
+        nameLocation: "end",
+        nameGap: 6,
+        nameTextStyle: { ...nameStyle, align: "right" },
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { ...axisLabel, formatter: fmt },
