@@ -52,12 +52,11 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
   const cap = edgeCapture(a, snap);
   const exp = cap.expected ?? 0;
   const real = cap.realized ?? 0;
-  const gap = Math.max(0, exp - real);
+  // Honest Projected→Realized: the gap is a SINGLE REAL residual (slippage + mismatch + timeout + fees
+  // combined) — NOT split by fabricated 50/30/20 ratios. The worker exposes no per-cause attribution.
   const wf = [
     { label: "Projected", delta: exp },
-    { label: "Slippage", delta: -gap * 0.5 },
-    { label: "Mismatch", delta: -gap * 0.3 },
-    { label: "Timeout", delta: -gap * 0.2 },
+    { label: "Net frictions", delta: real - exp },
     { label: "Realized", delta: real },
   ];
 
@@ -103,7 +102,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
         </GridPanel>
         <GridPanel
           title="Edge Capture · Projected → Realized"
-          dot="live"
+          dot="info"
           span={4}
           bodyClassName="h-[280px] p-2"
           right={
@@ -112,7 +111,11 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
             </span>
           }
         >
-          <EChart height={256} option={waterfallOption(wf, (v) => fmtCents(v, true))} />
+          {cap.expected == null ? (
+            <Empty>No exact-pair edge data</Empty>
+          ) : (
+            <EChart height={256} option={waterfallOption(wf, (v) => fmtCents(v, true))} />
+          )}
         </GridPanel>
         <GridPanel title="Venue Latency Profile" dot="info" span={3} bodyClassName="flex flex-col justify-center gap-3">
           <LatencyRow

@@ -47,10 +47,11 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
   const cap = edgeCapture(a, snap);
   const expected = cap.expected ?? 0;
   const realized = cap.realized ?? 0;
+  // Honest Expected→Realized: the gap is a SINGLE REAL residual (slippage + mismatch + timeout + fees
+  // combined), NOT split by fabricated 60/40 ratios — the worker exposes no per-cause attribution.
   const waterfall = [
     { label: "Expected", delta: usd(expected) },
-    { label: "Slippage", delta: -usd(Math.max(0, expected - realized) * 0.6) },
-    { label: "Mismatch/TO", delta: -usd(Math.max(0, expected - realized) * 0.4) },
+    { label: "Net frictions", delta: usd(realized - expected) },
     { label: "Realized", delta: usd(realized) },
   ];
 
@@ -156,7 +157,11 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
             </span>
           }
         >
-          <EChart height={256} option={waterfallOption(waterfall, (v) => fmtUsd(v, { sign: true }))} />
+          {cap.expected == null ? (
+            <Empty>No exact-pair edge data</Empty>
+          ) : (
+            <EChart height={256} option={waterfallOption(waterfall, (v) => fmtUsd(v, { sign: true }))} />
+          )}
         </GridPanel>
       </Grid>
 
