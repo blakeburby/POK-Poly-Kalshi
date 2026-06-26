@@ -11,7 +11,7 @@ import { fmtCents, fmtMs, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { strikeUniverse, resolveStrike } from "@/lib/selectors";
+import { strikeUniverse, resolveStrike, nearestContract, type NearestContract } from "@/lib/selectors";
 
 function cumulative(levels: BookLevel[] | undefined): Array<[number, number]> {
   if (!levels?.length) return [];
@@ -30,12 +30,17 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
   const selectedStrike = useDashboardStore((s) => s.selectedStrike);
   const setSelectedStrike = useDashboardStore((s) => s.setSelectedStrike);
 
-  // Default to a strike BOTH venues quote so the Polymarket book/depth populate (Kalshi lists denser strikes).
+  // Default to a both-venue strike, then resolve each venue's depth/heatmap to its OWN nearest book so the
+  // cross-venue panels stay populated even when the grids differ — kept consistent with the Cockpit/Ladder
+  // DOMs. The panels label each venue's actual strike (and flag "≈ nearest") so the comparison stays honest;
+  // the per-venue order-book tables below always list every strike regardless.
   const universe = React.useMemo(() => strikeUniverse(snap), [snap]);
   const sel = resolveStrike(selectedStrike, universe);
 
-  const kc = snap.books.kalshi.find((c) => c.strike === sel);
-  const pc = snap.books.polymarket.find((c) => c.strike === sel);
+  const kNear = React.useMemo(() => nearestContract(snap.books.kalshi, sel), [snap.books.kalshi, sel]);
+  const pNear = React.useMemo(() => nearestContract(snap.books.polymarket, sel), [snap.books.polymarket, sel]);
+  const kc = kNear.contract;
+  const pc = pNear.contract;
   const kDepth = cumulative(kc?.yesAskLevels);
   const pDepth = cumulative(pc?.yesAskLevels);
 
@@ -63,7 +68,8 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
           />
         </GridPanel>
         <GridPanel
-          title={`Cross-Venue Depth · ${sel != null ? `BTC ${sel.toLocaleString()}` : "—"} (YES ask)`}
+          title="Cross-Venue Depth · YES ask"
+          right={<PairStrikeTag kNear={kNear} pNear={pNear} />}
           dot="live"
           span={4}
           bodyClassName="h-[360px] p-2"
@@ -71,7 +77,7 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
           {kDepth.length || pDepth.length ? (
             <EChart option={depthOption(kDepth, pDepth)} />
           ) : (
-            <Empty>Select a strike with depth</Empty>
+            <Empty>No depth on either venue</Empty>
           )}
         </GridPanel>
       </Grid>
@@ -81,7 +87,8 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
       </GridPanel>
 
       <GridPanel
-        title={`Liquidity Heatmap · ${sel != null ? `BTC ${sel.toLocaleString()}` : "—"} (YES book)`}
+        title="Liquidity Heatmap · YES book"
+        right={<PairStrikeTag kNear={kNear} pNear={pNear} />}
         dot="live"
         pulse
         span={12}
@@ -287,6 +294,32 @@ function LatRow({
         </span>
       </span>
     </div>
+  );
+}
+
+/**
+ * Cross-venue panel header tag: the strike each venue is actually showing. When the two differ (the venues
+ * quote independent grids) it flags "≈ nearest" so the overlaid depth/heatmap is read as each venue's
+ * nearest book, not a same-strike comparison.
+ */
+function PairStrikeTag({ kNear, pNear }: { kNear: NearestContract; pNear: NearestContract }) {
+  const k = kNear.contract;
+  const p = pNear.contract;
+  if (!k && !p) return null;
+  const differ = k != null && p != null && k.strike !== p.strike;
+  return (
+    <span className="flex items-center gap-2 font-mono text-[10px] tabular-nums">
+      {k ? <span className="text-kalshi">K {k.strike.toLocaleString()}</span> : null}
+      {p ? <span className="text-poly">P {p.strike.toLocaleString()}</span> : null}
+      {differ ? (
+        <span
+          title="Venues quote different strikes — showing each venue's nearest book, not a same-strike comparison"
+          className="rounded-sm border border-amber/40 bg-amber/10 px-1 py-px text-[8.5px] uppercase tracking-wide text-amber"
+        >
+          ≈ nearest
+        </span>
+      ) : null}
+    </span>
   );
 }
 

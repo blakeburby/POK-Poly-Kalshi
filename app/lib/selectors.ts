@@ -10,6 +10,7 @@ import type {
   DashboardAnalyticsWindow,
   LiveExecutionReadiness,
   TradingPlatformActivity,
+  BinaryContract,
   Venue,
 } from "./types";
 import type { StatusTone } from "./format";
@@ -212,6 +213,41 @@ export function resolveStrike(selected: number | null | undefined, u: StrikeUniv
   return selected != null && u.strikes.includes(selected) ? selected : u.defaultStrike;
 }
 
+export interface NearestContract {
+  contract: BinaryContract | null;
+  /** True when the venue quotes a contract at EXACTLY the target strike. */
+  exact: boolean;
+  /** |contract.strike − target| in dollars; null when there is no contract or no target. */
+  deltaDollars: number | null;
+}
+
+/**
+ * The venue's book closest to `target`. Kalshi and Polymarket maintain INDEPENDENT strike grids
+ * (Kalshi from floor_strike/subtitle, Polymarket from priceToBeat), so a strike one venue quotes is
+ * frequently absent on the other — keying both ladders to a single shared strike then leaves one side
+ * blank. Falling back to the nearest available strike (flagged `exact: false` so the UI can label it as
+ * an approximation) lets both venues stay visible at once. Returns a null contract only when the venue
+ * has no book at all (e.g. Kalshi's daily settlement gap), which callers render as an explicit empty state.
+ */
+export function nearestContract(contracts: BinaryContract[] | undefined, target: number | null): NearestContract {
+  if (!contracts?.length) return { contract: null, exact: false, deltaDollars: null };
+  if (target == null) {
+    // No anchor strike — show the median book so the ladder is still populated.
+    const sorted = [...contracts].sort((a, b) => a.strike - b.strike);
+    return { contract: sorted[Math.floor(sorted.length / 2)] ?? null, exact: false, deltaDollars: null };
+  }
+  let best = contracts[0];
+  let bestDelta = Math.abs(contracts[0].strike - target);
+  for (const c of contracts) {
+    const d = Math.abs(c.strike - target);
+    if (d < bestDelta) {
+      best = c;
+      bestDelta = d;
+    }
+  }
+  return { contract: best, exact: bestDelta === 0, deltaDollars: bestDelta };
+}
+
 /** per-share contract dollars -> account dollars at the configured clip. */
 export function toDollars(perShare: number | null | undefined, size: number): number | null {
   if (perShare == null || !Number.isFinite(perShare)) return null;
@@ -383,18 +419,30 @@ export function operationalStatus(snap: DashboardSnapshot): {
     return { state: "blocked", tone: "halt", label: "CIRCUIT BREAKER", reason: e.circuitBreakerReason };
   if (e.riskState === "hard_locked")
     return { state: "blocked", tone: "halt", label: "HARD LOCKED", reason: e.riskStateReason };
-  if (e.riskState === "quarantined" || (e.reconciliation.quarantinedExposureDollars ?? 0) > 0)
+  // A quarantined RISK STATE blocks trading (tradeableNow requires riskState === "trading") — that is a hard
+  // halt and renders red, alongside the other hard locks. Residual unhedged exposure while the engine still
+  // permits trading is handled lower down as an amber warning (NOT a red halt — trading is not stopped).
+  if (e.riskState === "quarantined")
     return {
       state: "quarantined",
-      tone: "stale",
+      tone: "halt",
       label: "QUARANTINED",
-      reason: e.riskStateReason ?? "unhedged exposure",
+      reason: e.riskStateReason ?? "trading halted — quarantine",
     };
   if (e.partialFillLocked)
     return { state: "blocked", tone: "halt", label: "PARTIAL-FILL LOCK", reason: "partial fill lock active" };
   if (e.riskState === "recovering")
     return { state: "degraded", tone: "stale", label: "RECOVERING", reason: e.riskStateReason };
   if (e.riskState === "blocked") return { state: "blocked", tone: "halt", label: "BLOCKED", reason: e.riskStateReason };
+  // Residual quarantined exposure while otherwise trading = a warning (amber), not a halt. Distinct label so
+  // it never reads identically to the hard "QUARANTINED" risk-state halt above.
+  if ((e.reconciliation.quarantinedExposureDollars ?? 0) > 0)
+    return {
+      state: "degraded",
+      tone: "stale",
+      label: "UNHEDGED EXPOSURE",
+      reason: e.riskStateReason ?? "residual quarantined exposure",
+    };
   if (!e.kalshi.ready || !e.polymarket.ready)
     return {
       state: "degraded",
@@ -533,8 +581,10 @@ export function ledgerRow(s: DashboardSignal, size: number): LedgerRow {
   const lower = Math.min(s.lower.strike, s.higher.strike);
   const higher = Math.max(s.lower.strike, s.higher.strike);
   const realized = s.realizedGuaranteedProfit ?? null;
-  const realizedPremium = s.depthVwap ?? s.premium;
-  const slippage = Number.isFinite(realizedPremium) ? realizedPremium - s.premium : null;
+  // Slippage is only meaningful when the realized premium (depth VWAP) was actually captured. Falling back to
+  // s.premium would yield slippage 0 ("perfect execution") for unmeasured fills — return null instead, so the
+  // ledger reads "–" consistently with its Realized-premium row rather than a fabricated 0.
+  const slippage = s.depthVwap != null ? s.depthVwap - s.premium : null;
   const exact = isExactPair(s);
   // Dollar P&L uses THIS trade's actual paired fill size (min of the legs), not the static config order
   // size — W2 dynamic sizing makes per-trade size vary (5-30). realized_guaranteed_profit is per-share over
@@ -627,7 +677,9 @@ export function executionAggregates(snap: DashboardSnapshot): {
     exactPairRate: eq?.exactPairFillRate ?? exact.length / Math.max(1, filled.length),
     mismatchRate: eq?.mismatchRate ?? partial.length / n,
     timeoutRate: eq?.polymarketTimeoutRate ?? null,
-    avgSlippage: snap.analytics?.daily.avgSlippage ?? avg(filled.map((s) => (s.depthVwap ?? s.premium) - s.premium)),
+    avgSlippage:
+      snap.analytics?.daily.avgSlippage ??
+      avg(filled.map((s) => (s.depthVwap != null ? s.depthVwap - s.premium : null))),
     avgTimeToFillMs:
       snap.analytics?.daily.avgFillLatencyMs ??
       avg(filled.map((s) => new Date(s.updatedAt).getTime() - new Date(s.createdAt).getTime())),

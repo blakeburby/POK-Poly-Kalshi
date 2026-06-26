@@ -8,7 +8,7 @@ import { fmtCents, fmtInt, fmtMs, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { strikeUniverse, resolveStrike, type StrikeUniverse } from "@/lib/selectors";
+import { strikeUniverse, resolveStrike, nearestContract, type StrikeUniverse, type NearestContract } from "@/lib/selectors";
 
 export type Side = "yes" | "no";
 
@@ -58,13 +58,16 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
   const setSelectedStrike = useDashboardStore((s) => s.setSelectedStrike);
   const [side, setSide] = React.useState<Side>("yes");
 
-  // Default to a strike BOTH venues quote so the Polymarket ladder populates (Kalshi lists denser strikes).
+  // Kalshi and Polymarket list independent strike grids, so resolve EACH ladder to its own nearest book —
+  // both venues stay visible side-by-side even when the selected strike exists on only one of them.
   const universe = React.useMemo(() => strikeUniverse(snap), [snap]);
   const strikes = universe.strikes;
   const sel = resolveStrike(selectedStrike, universe);
 
-  const kc = snap.books.kalshi.find((c) => c.strike === sel) ?? null;
-  const pc = snap.books.polymarket.find((c) => c.strike === sel) ?? null;
+  const kNear = React.useMemo(() => nearestContract(snap.books.kalshi, sel), [snap.books.kalshi, sel]);
+  const pNear = React.useMemo(() => nearestContract(snap.books.polymarket, sel), [snap.books.polymarket, sel]);
+  const kc = kNear.contract;
+  const pc = pNear.contract;
 
   if (!strikes.length) {
     return (
@@ -85,8 +88,8 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
         onSel={setSelectedStrike}
         side={side}
         onSide={setSide}
-        kc={kc}
-        pc={pc}
+        kNear={kNear}
+        pNear={pNear}
       />
 
       <Grid>
@@ -95,13 +98,13 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
           dot={kc ? ageTone(now - kc.updatedAt, staleMs) : "idle"}
           accent={VENUE_ACCENT.kalshi}
           span={6}
-          right={kc ? <AgeTag age={now - kc.updatedAt} staleMs={staleMs} /> : undefined}
+          right={<LadderHead near={kNear} now={now} staleMs={staleMs} />}
           bodyClassName="p-0"
         >
           {kc ? (
             <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} />
           ) : (
-            <Empty>No Kalshi book at this strike</Empty>
+            <Empty>No Kalshi book — no open BTC market</Empty>
           )}
         </GridPanel>
         <GridPanel
@@ -109,13 +112,13 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
           dot={pc ? ageTone(now - pc.updatedAt, staleMs) : "idle"}
           accent={VENUE_ACCENT.polymarket}
           span={6}
-          right={pc ? <AgeTag age={now - pc.updatedAt} staleMs={staleMs} /> : undefined}
+          right={<LadderHead near={pNear} now={now} staleMs={staleMs} />}
           bodyClassName="p-0"
         >
           {pc ? (
             <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} />
           ) : (
-            <Empty>No Polymarket book at this strike</Empty>
+            <Empty>No Polymarket book — no open BTC market</Empty>
           )}
         </GridPanel>
       </Grid>
@@ -130,8 +133,8 @@ function ControlBar({
   onSel,
   side,
   onSide,
-  kc,
-  pc,
+  kNear,
+  pNear,
 }: {
   strikes: number[];
   universe: StrikeUniverse;
@@ -139,15 +142,20 @@ function ControlBar({
   onSel: (s: number) => void;
   side: Side;
   onSide: (s: Side) => void;
-  kc: BinaryContract | null;
-  pc: BinaryContract | null;
+  kNear: NearestContract;
+  pNear: NearestContract;
 }) {
+  const kc = kNear.contract;
+  const pc = pNear.contract;
   const kInside = kc ? sideLevels(kc, side) : null;
   const pInside = pc ? sideLevels(pc, side) : null;
-  // illustrative synthetic premium (observational only): cheapest YES + cross NO, mirrors Books view
+  // A synthetic premium only makes sense when both legs are the SAME strike. The two venues quote
+  // independent grids, so when the displayed books are at different strikes we suppress it rather than
+  // print a cross-strike number under a same-strike label.
+  const sameStrike = kc != null && pc != null && kc.strike === pc.strike;
   const synth =
-    kc?.yesAsk != null && pc?.noAsk != null
-      ? Math.min(kc.yesAsk + pc.noAsk, (pc.yesAsk ?? Infinity) + (kc.noAsk ?? Infinity))
+    sameStrike && kc!.yesAsk != null && pc!.noAsk != null
+      ? Math.min(kc!.yesAsk + pc!.noAsk, (pc!.yesAsk ?? Infinity) + (kc!.noAsk ?? Infinity))
       : null;
 
   return (
@@ -162,7 +170,11 @@ function ControlBar({
               <button
                 key={s}
                 onClick={() => onSel(s)}
-                title={onBoth ? "Quoted on both venues" : `${only === "K" ? "Kalshi" : "Polymarket"} only`}
+                title={
+                  onBoth
+                    ? "Quoted on both venues"
+                    : `${only === "K" ? "Kalshi" : "Polymarket"}-only strike — the other venue shows its nearest book`
+                }
                 className={cn(
                   "flex items-center gap-1 rounded-sm border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors",
                   s === sel
@@ -202,10 +214,22 @@ function ControlBar({
         <Label>Inside Market · {side.toUpperCase()}</Label>
         <div className="flex items-center gap-4 font-mono text-[11px] tabular-nums">
           <span className="text-kalshi">
-            K {fmtCents(kInside?.bestBid ?? null)} / {fmtCents(kInside?.bestAsk ?? null)}
+            K{kc ? ` ${kc.strike.toLocaleString()}` : ""} {fmtCents(kInside?.bestBid ?? null)} /{" "}
+            {fmtCents(kInside?.bestAsk ?? null)}
+            {kNear.contract && !kNear.exact ? (
+              <span className="ml-1 rounded-sm bg-amber/15 px-1 text-[8px] uppercase tracking-wide text-amber">
+                nearest
+              </span>
+            ) : null}
           </span>
           <span className="text-poly">
-            P {fmtCents(pInside?.bestBid ?? null)} / {fmtCents(pInside?.bestAsk ?? null)}
+            P{pc ? ` ${pc.strike.toLocaleString()}` : ""} {fmtCents(pInside?.bestBid ?? null)} /{" "}
+            {fmtCents(pInside?.bestAsk ?? null)}
+            {pNear.contract && !pNear.exact ? (
+              <span className="ml-1 rounded-sm bg-amber/15 px-1 text-[8px] uppercase tracking-wide text-amber">
+                nearest
+              </span>
+            ) : null}
           </span>
         </div>
       </div>
@@ -223,6 +247,9 @@ function ControlBar({
             <span className="ml-1.5 rounded-sm bg-up-dim px-1 py-0.5 text-[9px] uppercase tracking-wide text-up">
               arbitrable
             </span>
+          ) : null}
+          {synth == null && kc && pc && !sameStrike ? (
+            <span className="ml-1 text-[9px] uppercase tracking-wide text-fg-faint">strikes differ</span>
           ) : null}
         </span>
       </div>
@@ -438,6 +465,31 @@ function SpreadDivider({ spread, mid }: { spread: number; mid: number | null }) 
         {mid != null ? `mid ${fmtCents(mid)}` : ""}
       </span>
     </div>
+  );
+}
+
+/**
+ * Depth-ladder header: the strike actually shown for this venue, an "≈ nearest" flag when that strike was
+ * substituted because the venue has no book at the selected strike, and the book's age.
+ */
+function LadderHead({ near, now, staleMs }: { near: NearestContract; now: number; staleMs: number }) {
+  const c = near.contract;
+  if (!c) return null;
+  return (
+    <span className="flex items-center gap-2 font-mono text-[10px] tabular-nums">
+      <span className="text-fg-secondary">{c.strike.toLocaleString()}</span>
+      {!near.exact ? (
+        <span
+          title={`Nearest available strike — this venue has no book at the selected strike${
+            near.deltaDollars ? ` (off by $${near.deltaDollars.toLocaleString()})` : ""
+          }`}
+          className="rounded-sm border border-amber/40 bg-amber/10 px-1 py-px text-[8.5px] uppercase tracking-wide text-amber"
+        >
+          ≈ nearest
+        </span>
+      ) : null}
+      <AgeTag age={now - c.updatedAt} staleMs={staleMs} />
+    </span>
   );
 }
 

@@ -44,11 +44,13 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
 
   // Venue-truth: change in combined account value over the last 24h (equity-curve delta).
   const day = equityPnlOverMs(snap, 24 * 60 * 60_000, now);
-  const fillRate = a?.daily.fillRate ?? 0;
-  const exactRate = exec?.executionQuality?.exactPairFillRate ?? 0;
-  const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? 0;
+  // Preserve null so an UNMEASURED metric reads "–" + idle, never a fake 0 with a real halt/stale tone (a
+  // 0% fill rendered red is indistinguishable from "data unavailable"). Mirrors HealthRail's RailStat.
+  const fillRate = a?.daily.fillRate ?? null;
+  const exactRate = exec?.executionQuality?.exactPairFillRate ?? null;
+  const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? null;
   const candidates = snap.scanner.lastCandidateCount;
-  const estEdge = exec?.executionQuality?.estimatedExecutableEdge ?? 0;
+  const estEdge = exec?.executionQuality?.estimatedExecutableEdge ?? null;
 
   const answers: AnswerProps[] = [
     {
@@ -60,19 +62,19 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
     {
       q: "Edge working?",
       value: fmtCents(estEdge),
-      tone: estEdge > 0 && candidates >= 0 ? "live" : "stale",
+      tone: estEdge == null ? "idle" : estEdge > 0 ? "live" : "stale",
       sub: `${candidates} live candidates`,
     },
     {
       q: "Filling?",
       value: fmtPct(fillRate),
-      tone: fillRate >= 0.6 ? "live" : fillRate >= 0.4 ? "stale" : "halt",
+      tone: fillRate == null ? "idle" : fillRate >= 0.6 ? "live" : fillRate >= 0.4 ? "stale" : "halt",
       sub: "filled / opportunities",
     },
     {
       q: "Hedging?",
       value: fmtPct(exactRate),
-      tone: exactRate >= 0.6 ? "live" : exactRate >= 0.4 ? "stale" : "halt",
+      tone: exactRate == null ? "idle" : exactRate >= 0.6 ? "live" : exactRate >= 0.4 ? "stale" : "halt",
       sub: "exact-pair fills",
     },
     {
@@ -83,8 +85,8 @@ export function OverviewView({ snap }: { snap: DashboardSnapshot }) {
     },
     {
       q: "Managing risk?",
-      value: unhedged > 0 ? fmtUsd(unhedged) : "Clean",
-      tone: unhedged > 0 ? "halt" : "live",
+      value: unhedged == null ? "–" : unhedged > 0 ? fmtUsd(unhedged) : "Clean",
+      tone: unhedged == null ? "idle" : unhedged > 0 ? "halt" : "live",
       sub: `risk · ${exec?.riskState ?? "?"}`,
     },
     {
@@ -269,7 +271,13 @@ function OpportunitiesMini({ snap }: { snap: DashboardSnapshot }) {
                 <Td className="text-right">
                   <div className="flex items-center justify-end gap-2">
                     <MiniBar value={c.guaranteedProfit / maxEdge} tone="live" className="w-10" />
-                    <span className="text-up">{fmtCents(c.guaranteedProfit)}</span>
+                    <span
+                      className={
+                        c.guaranteedProfit > 0 ? "text-up" : c.guaranteedProfit < 0 ? "text-down" : "text-fg-secondary"
+                      }
+                    >
+                      {fmtCents(c.guaranteedProfit)}
+                    </span>
                   </div>
                 </Td>
                 <Td className={cn("text-right", over >= 0 ? "text-up" : "text-down")}>{fmtCents(over, true)}</Td>

@@ -49,7 +49,7 @@ export function CandleChartPanel({
   const [asset, setAsset] = React.useState<Asset>(lockedAsset ?? "BTC");
   const [gran, setGran] = React.useState(60);
   const [candles, setCandles] = React.useState<Candle[]>([]);
-  const [state, setState] = React.useState<"loading" | "ok" | "error">("loading");
+  const [state, setState] = React.useState<"loading" | "ok" | "empty" | "error">("loading");
   const [updatedAt, setUpdatedAt] = React.useState<number | null>(null);
 
   React.useEffect(() => {
@@ -62,7 +62,8 @@ export function CandleChartPanel({
         if (cancelled) return;
         const cs = data.candles ?? [];
         setCandles(cs);
-        setState(cs.length ? "ok" : "error");
+        // A successful fetch with no candles is EMPTY (no data), not an ERROR (feed failure — the catch below).
+        setState(cs.length ? "ok" : "empty");
         setUpdatedAt(cs.length ? Date.now() : null);
       } catch {
         if (!cancelled) setState("error");
@@ -90,14 +91,20 @@ export function CandleChartPanel({
     <>
       <GridPanel
         title="Price · Spot Candles"
-        dot={state === "ok" ? "live" : state === "loading" ? "stale" : "halt"}
+        dot={state === "ok" ? "live" : state === "loading" ? "stale" : state === "error" ? "halt" : "idle"}
         pulse={state === "ok"}
         span={12}
         className={fill ? "h-full" : undefined}
         right={
           <div className="flex items-center gap-3">
             <span className="hidden font-mono text-[10px] text-fg-faint sm:inline">
-              {state === "error" ? "feed unavailable" : updatedAt ? "live · Coinbase spot" : "loading…"}
+              {state === "error"
+                ? "feed unavailable"
+                : state === "empty"
+                  ? "no candles"
+                  : updatedAt
+                    ? "live · Coinbase spot"
+                    : "loading…"}
             </span>
             <div className="flex items-center gap-1">
               {GRANS.map((g) => (
@@ -163,11 +170,20 @@ export function CandleChartPanel({
             <EChart option={candlestickOption(candles, (v) => fmtPrice(v))} />
           ) : state === "loading" ? (
             <Empty>Loading {asset} candles…</Empty>
-          ) : (
+          ) : state === "error" ? (
             <div className="bg-grid flex h-full flex-col items-center justify-center gap-2">
               <StatusDot tone="halt" className="size-2.5" />
               <p className="font-mono text-[11px] uppercase tracking-wide text-fg-secondary">Price feed unavailable</p>
               <p className="font-mono text-[10px] text-fg-faint">Coinbase spot data could not be reached</p>
+            </div>
+          ) : (
+            // empty (fetch ok, no/too-few candles) — not a feed failure
+            <div className="bg-grid flex h-full flex-col items-center justify-center gap-2">
+              <StatusDot tone="idle" className="size-2.5" />
+              <p className="font-mono text-[11px] uppercase tracking-wide text-fg-secondary">No candles yet</p>
+              <p className="font-mono text-[10px] text-fg-faint">
+                No spot data for {asset} · {granLabel}
+              </p>
             </div>
           )}
         </div>
@@ -180,7 +196,7 @@ export function CandleChartPanel({
             className="col-span-6 xl:col-span-3"
             label={`Change · ${granLabel} window`}
             value={fmtPctSigned(changePct)}
-            tone={(changePct ?? 0) >= 0 ? "up" : "down"}
+            tone={changePct == null ? "neutral" : changePct > 0 ? "up" : changePct < 0 ? "down" : "neutral"}
           />
           <StatTile className="col-span-6 xl:col-span-3" label="High" value={fmtPrice(hi)} tone="up" />
           <StatTile className="col-span-6 xl:col-span-3" label="Low" value={fmtPrice(lo)} tone="down" />

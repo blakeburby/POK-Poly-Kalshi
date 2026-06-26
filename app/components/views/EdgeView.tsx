@@ -57,7 +57,7 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
         <StatTile label="Min Edge (Thr)" value={fmtCents(threshold)} tone="neutral" />
         <StatTile
           label="Opportunity / Fill"
-          value={`${fmtNum(a?.opportunityCount ?? 0)} · ${fmtPct(a?.fillRate)}`}
+          value={a ? `${fmtNum(a.opportunityCount)} · ${fmtPct(a.fillRate)}` : "– · –"}
           tone="neutral"
         />
       </div>
@@ -103,7 +103,17 @@ export function EdgeView({ snap }: { snap: DashboardSnapshot }) {
         </GridPanel>
       </Grid>
 
-      <GridPanel title="Live Opportunity Blotter" dot={live.length ? "live" : "idle"} span={12} bodyClassName="p-0">
+      <GridPanel
+        title="Live Opportunity Blotter"
+        dot={structures.length ? "live" : "idle"}
+        span={12}
+        right={
+          <span className="font-mono text-[10px] tabular-nums text-fg-muted">
+            {live.length} executable · {structures.length} total
+          </span>
+        }
+        bodyClassName="p-0"
+      >
         <CandidateTable
           candidates={structures}
           threshold={threshold}

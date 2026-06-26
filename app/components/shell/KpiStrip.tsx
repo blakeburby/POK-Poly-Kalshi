@@ -62,7 +62,12 @@ export function KpiStrip() {
   const day = equityPnlOverMs(snap, DAY, now);
   const hour = equityPnlOverMs(snap, HOUR, now);
   const week = equityPnlOverMs(snap, WEEK, now);
-  const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? 0;
+  // Preserve null on these metrics so an UNMEASURED value (worker cold start / exec-quality gate off) renders
+  // "–" + a neutral tone, never a fake 0 with a real up/stale/down tone. Mirrors HealthRail's RailStat.
+  const unhedged = exec?.reconciliation.quarantinedExposureDollars ?? null;
+  const fillRate = a?.daily.fillRate ?? null;
+  const exactPairRate = exec?.executionQuality?.exactPairFillRate ?? null;
+  const estEdge = exec?.executionQuality?.estimatedExecutableEdge ?? null;
   const pnlValue = (v: number | null) => (v == null ? "–" : fmtUsd(v, { sign: true }));
   const pnlTone = (v: number | null): Kpi["tone"] => (v == null ? "neutral" : v >= 0 ? "up" : "down");
   // Combined = Kalshi total + Polymarket total. Flag clearly when a venue is unavailable (combined is then
@@ -85,14 +90,22 @@ export function KpiStrip() {
       spark: equitySpark,
     },
     { label: "Open Positions", value: fmtNum(openPositionCount(snap)), tone: "neutral" },
-    { label: "Unhedged Exposure", value: fmtUsd(unhedged), tone: unhedged > 0 ? "down" : "up" },
-    { label: "Fill Success", value: fmtPct(a?.daily.fillRate), tone: (a?.daily.fillRate ?? 0) >= 0.6 ? "up" : "stale" },
+    {
+      label: "Unhedged Exposure",
+      value: fmtUsd(unhedged),
+      tone: unhedged == null ? "neutral" : unhedged > 0 ? "down" : "up",
+    },
+    {
+      label: "Fill Success",
+      value: fmtPct(fillRate),
+      tone: fillRate == null ? "neutral" : fillRate >= 0.6 ? "up" : "stale",
+    },
     {
       label: "Hedge / Exact-Pair",
-      value: fmtPct(exec?.executionQuality?.exactPairFillRate),
-      tone: (exec?.executionQuality?.exactPairFillRate ?? 0) >= 0.6 ? "up" : "stale",
+      value: fmtPct(exactPairRate),
+      tone: exactPairRate == null ? "neutral" : exactPairRate >= 0.6 ? "up" : "stale",
     },
-    { label: "Avg Edge Captured", value: fmtCents(exec?.executionQuality?.estimatedExecutableEdge), tone: "up" },
+    { label: "Avg Edge Captured", value: fmtCents(estEdge), tone: estEdge == null ? "neutral" : "up" },
     { label: "Net PnL · 1H", value: pnlValue(hour), tone: pnlTone(hour) },
     { label: "Net PnL · 7D", value: pnlValue(week), tone: pnlTone(week) },
     { label: "Win Rate", value: fmtPct(a?.daily.winRate), tone: "neutral" },

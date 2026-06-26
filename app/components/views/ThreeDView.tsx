@@ -30,13 +30,15 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
               : CHART.down,
         size: c.executable ? 0.06 : 0.03,
       }));
+    // Filled trades plot REALIZED (actual) EV — a single "actual" colour (cyan) keeps them visually distinct
+    // from the projected (worst-case) live candidates above; per-fill quality lives on the Execution-Quality Map.
     const realized = sigs
       .filter((s) => s.action === "filled")
       .map((s) => ({
         x: s.premium,
         y: s.guaranteedProfit,
         z: s.realizedGuaranteedProfit ?? s.expectedExecutableEdge ?? 0,
-        color: isExactPair(s) ? CHART.cyan : s.partialFill ? CHART.amber : CHART.down,
+        color: CHART.cyan,
         size: 0.045,
       }));
     return [...live, ...realized];
@@ -44,7 +46,7 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
   const edgeAxes = autoAxes(edgePts, {
     x: { label: "Market Premium", fmt: (v) => fmtCents(v) },
     y: { label: "Guaranteed Edge", fmt: (v) => fmtCents(v) },
-    z: { label: "Realized EV", fmt: (v) => fmtCents(v, true) },
+    z: { label: "Worst-Case / Realized EV", fmt: (v) => fmtCents(v, true) },
   });
 
   // (2) Execution-Quality Map: time x fill delay x realized profit
@@ -95,17 +97,17 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
     <ViewScroll>
       <Grid>
         <GridPanel
-          title="Edge Surface · Premium × Guaranteed Edge × Realized EV"
+          title="Edge Surface · Premium × Guaranteed Edge × Worst-Case / Realized EV"
           dot="live"
           span={6}
           bodyClassName="aspect-square w-full flex-none p-0"
           right={
             <Legend
               items={[
-                ["arb", CHART.up],
-                ["sub-thr", CHART.amber],
+                ["proj·arb", CHART.up],
+                ["proj·sub-thr", CHART.amber],
+                ["proj·prob", CHART.down],
                 ["realized", CHART.cyan],
-                ["prob/fail", CHART.down],
               ]}
             />
           }
@@ -155,9 +157,11 @@ export function ThreeDView({ snap }: { snap: DashboardSnapshot }) {
 
         <div className="col-span-12 flex items-center rounded-md border border-line bg-surface/40 px-4 py-3 font-mono text-[10.5px] leading-relaxed text-fg-muted lg:col-span-6">
           <span>
-            Drag to orbit · scroll to zoom. Surfaces encode only deterministic, realized data — no simulated
-            distributions. The amber plane on the Edge Surface marks the executable threshold ({fmtCents(threshold)}{" "}
-            guaranteed edge).
+            Drag to orbit · scroll to zoom. Surfaces encode deterministic data only — no simulated distributions. On
+            the Edge Surface, live candidates plot their <span className="text-fg-secondary">worst-case</span>{" "}
+            projection (classification-coloured) while filled trades plot{" "}
+            <span className="text-cyan">realized</span> EV (cyan). The amber plane marks the executable threshold (
+            {fmtCents(threshold)} guaranteed edge).
           </span>
         </div>
       </Grid>

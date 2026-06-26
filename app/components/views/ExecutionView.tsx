@@ -50,43 +50,51 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
   const slipDist = (a?.slippageDistribution ?? []).map((d) => ({ label: d.label, count: d.count, color: CHART.amber }));
 
   const cap = edgeCapture(a, snap);
-  const exp = cap.expected ?? 0;
-  const real = cap.realized ?? 0;
-  // Honest Projected→Realized: the gap is a SINGLE REAL residual (slippage + mismatch + timeout + fees
-  // combined) — NOT split by fabricated 50/30/20 ratios. The worker exposes no per-cause attribution.
-  const wf = [
-    { label: "Projected", delta: exp },
-    { label: "Net frictions", delta: real - exp },
-    { label: "Realized", delta: real },
-  ];
+  // Render the waterfall only when BOTH legs are real numbers — a null realized edge (no exact-pair fills
+  // yet) must read as "no data", never a fabricated 0. Honest Projected→Realized: the gap is a SINGLE REAL
+  // residual (slippage + mismatch + timeout + fees combined) — NOT split by fabricated 50/30/20 ratios.
+  const hasEdgeCapture = cap.expected != null && cap.realized != null;
+  const wf = hasEdgeCapture
+    ? [
+        { label: "Projected", delta: cap.expected! },
+        { label: "Net frictions", delta: cap.realized! - cap.expected! },
+        { label: "Realized", delta: cap.realized! },
+      ]
+    : [];
 
   return (
     <ViewScroll>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
-        <StatTile label="Fill Rate" value={fmtPct(ea.fillRate)} tone={(ea.fillRate ?? 0) >= 0.6 ? "up" : "amber"} />
+        {/* Tones are null-aware: an UNMEASURED metric stays neutral (value shows "–"), never a fake 0 that
+            reads as a real up/amber/down signal — e.g. unmeasured slippage must not render green "good". */}
+        <StatTile
+          label="Fill Rate"
+          value={fmtPct(ea.fillRate)}
+          tone={ea.fillRate == null ? "neutral" : ea.fillRate >= 0.6 ? "up" : "amber"}
+        />
         <StatTile
           label="Exact-Pair"
           value={fmtPct(ea.exactPairRate)}
-          tone={(ea.exactPairRate ?? 0) >= 0.6 ? "up" : "amber"}
+          tone={ea.exactPairRate == null ? "neutral" : ea.exactPairRate >= 0.6 ? "up" : "amber"}
           sub="hedge complete"
         />
-        <StatTile label="Partial Fill" value={fmtPct(ea.partialRate)} tone="amber" />
+        <StatTile label="Partial Fill" value={fmtPct(ea.partialRate)} tone={ea.partialRate == null ? "neutral" : "amber"} />
         <StatTile
           label="Failed/Reject"
           value={fmtPct(ea.rejectionRate)}
-          tone={(ea.rejectionRate ?? 0) > 0.1 ? "down" : "neutral"}
+          tone={ea.rejectionRate == null ? "neutral" : ea.rejectionRate > 0.1 ? "down" : "neutral"}
         />
         <StatTile
           label="Avg Slippage"
           value={fmtCents(ea.avgSlippage, true)}
-          tone={(ea.avgSlippage ?? 0) > 0.01 ? "amber" : "up"}
+          tone={ea.avgSlippage == null ? "neutral" : ea.avgSlippage > 0.01 ? "amber" : "up"}
         />
         <StatTile label="Time-to-Fill" value={fmtMs(ea.avgTimeToFillMs)} tone="neutral" />
         <StatTile label="Kalshi RTT" value={fmtMs(ea.avgKalshiRtt)} tone="neutral" />
         <StatTile
           label="Polymkt RTT"
           value={fmtMs(ea.avgPolyRtt)}
-          tone={(ea.avgPolyRtt ?? 0) > 300 ? "amber" : "neutral"}
+          tone={ea.avgPolyRtt == null ? "neutral" : ea.avgPolyRtt > 300 ? "amber" : "neutral"}
         />
       </div>
 
@@ -111,7 +119,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
             </span>
           }
         >
-          {cap.expected == null ? (
+          {!hasEdgeCapture ? (
             <Empty>No exact-pair edge data</Empty>
           ) : (
             <EChart height={256} option={waterfallOption(wf, (v) => fmtCents(v, true))} />
@@ -130,12 +138,7 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
             p95={firstFeature(sigs, "polymarketRttP95Ms")}
             tone="poly"
           />
-          <LatencyRow
-            label="P Confirm"
-            p50={firstFeature(sigs, "polymarketConfirmationP95Ms")}
-            p95={firstFeature(sigs, "polymarketConfirmationP95Ms")}
-            tone="poly"
-          />
+          <LatencyRow label="P Confirm" p95={firstFeature(sigs, "polymarketConfirmationP95Ms")} tone="poly" />
           <div className="mt-1 flex items-center justify-between border-t border-line/60 pt-2">
             <span className="font-mono text-[10px] uppercase tracking-wide text-fg-muted">Submit Skew</span>
             <span className="font-mono text-[12px] tabular-nums text-fg">{fmtMs(ea.avgSubmitSkew)}</span>
@@ -186,24 +189,30 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
           <GateRow
             label="Exact-Pair Fill Rate"
             value={fmtPct(snap.execution?.executionQuality?.exactPairFillRate)}
-            bar={snap.execution?.executionQuality?.exactPairFillRate ?? 0}
+            bar={snap.execution?.executionQuality?.exactPairFillRate ?? null}
             good
           />
           <GateRow
             label="Mismatch Rate"
             value={fmtPct(snap.execution?.executionQuality?.mismatchRate)}
-            bar={snap.execution?.executionQuality?.mismatchRate ?? 0}
+            bar={snap.execution?.executionQuality?.mismatchRate ?? null}
           />
           <GateRow
             label="PM Timeout Rate"
             value={fmtPct(snap.execution?.executionQuality?.polymarketTimeoutRate)}
-            bar={snap.execution?.executionQuality?.polymarketTimeoutRate ?? 0}
+            bar={snap.execution?.executionQuality?.polymarketTimeoutRate ?? null}
           />
           <div className="grid grid-cols-3 gap-2 border-t border-line/60 pt-2.5">
             <StatTile
               label="Est. Edge"
               value={fmtCents(snap.execution?.executionQuality?.estimatedExecutableEdge)}
-              tone="up"
+              tone={
+                snap.execution?.executionQuality?.estimatedExecutableEdge == null
+                  ? "neutral"
+                  : (snap.execution?.executionQuality?.estimatedExecutableEdge ?? 0) > 0
+                    ? "up"
+                    : "amber"
+              }
             />
             <StatTile
               label="Avg PM RTT"
@@ -212,8 +221,8 @@ export function ExecutionView({ snap }: { snap: DashboardSnapshot }) {
             />
             <StatTile
               label="Mismatch $"
-              value={fmtUsd(snap.execution?.executionQuality?.avgMismatchCostDollars ?? 0)}
-              tone="amber"
+              value={fmtUsd(snap.execution?.executionQuality?.avgMismatchCostDollars ?? null)}
+              tone={snap.execution?.executionQuality?.avgMismatchCostDollars == null ? "neutral" : "amber"}
             />
           </div>
         </GridPanel>
@@ -237,7 +246,8 @@ function LatencyRow({
   tone,
 }: {
   label: string;
-  p50: number | null;
+  /** Omit when only a P95 percentile exists for this metric (e.g. Polymarket confirmation). */
+  p50?: number | null;
   p95: number | null;
   tone: "kalshi" | "poly";
 }) {
@@ -247,23 +257,37 @@ function LatencyRow({
       <div className="flex items-center justify-between">
         <span className="text-[11px] text-fg-secondary">{label}</span>
         <span className="font-mono text-[11px] tabular-nums text-fg">
-          {fmtMs(p50)} <span className="text-fg-faint">/ {fmtMs(p95)}</span>
+          {p50 !== undefined ? (
+            <>
+              {fmtMs(p50)} <span className="text-fg-faint">/ {fmtMs(p95)}</span>
+            </>
+          ) : (
+            <>
+              {fmtMs(p95)} <span className="text-fg-faint">p95</span>
+            </>
+          )}
         </span>
       </div>
-      <MiniBar value={(p95 ?? 0) / max} tone={tone} className="mt-1" />
+      {/* Null p95 = unmeasured -> idle bar, never a 0-width venue-coloured bar that contradicts the "–" text. */}
+      <MiniBar value={p95 == null ? 0 : p95 / max} tone={p95 == null ? "idle" : tone} className="mt-1" />
     </div>
   );
 }
 
-function GateRow({ label, value, bar, good }: { label: string; value: string; bar: number; good?: boolean }) {
-  const tone = good ? (bar >= 0.6 ? "live" : "stale") : bar > 0.1 ? "halt" : "live";
+function GateRow({ label, value, bar, good }: { label: string; value: string; bar: number | null; good?: boolean }) {
+  // A null metric is UNMEASURED (gate off / no samples) — show n/a + idle bar, never a green/empty 0 that
+  // reads as a real measurement. Mirrors HealthRail's RailStat.
+  const unmeasured = bar == null;
+  const tone = unmeasured ? "idle" : good ? (bar >= 0.6 ? "live" : "stale") : bar > 0.1 ? "halt" : "live";
   return (
     <div>
       <div className="flex items-center justify-between">
         <span className="text-[11px] text-fg-secondary">{label}</span>
-        <span className="font-mono text-[12px] tabular-nums text-fg">{value}</span>
+        <span className={cn("font-mono text-[12px] tabular-nums", unmeasured ? "text-fg-faint" : "text-fg")}>
+          {unmeasured ? "n/a" : value}
+        </span>
       </div>
-      <MiniBar value={bar} tone={tone} className="mt-1" />
+      <MiniBar value={unmeasured ? 0 : bar} tone={tone} className="mt-1" />
     </div>
   );
 }

@@ -10,7 +10,7 @@ import { fmtCents, fmtClock, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { strikeUniverse, resolveStrike } from "@/lib/selectors";
+import { strikeUniverse, resolveStrike, nearestContract, type NearestContract } from "@/lib/selectors";
 
 import { Ladder, type Side } from "./LadderView";
 import { HedgeMap, pairByStrike, enrich } from "./PositionsView";
@@ -36,13 +36,17 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
   const [side, setSide] = React.useState<Side>("yes");
   const [selectedCand, setSelectedCand] = React.useState<string | null>(null);
 
-  // Default to a strike BOTH venues quote so the Polymarket DOM populates on load (Kalshi lists denser
-  // strikes than Polymarket — defaulting off the raw union can land on a Kalshi-only strike → empty PM book).
+  // Kalshi and Polymarket keep INDEPENDENT strike grids, so a single shared strike often exists on only
+  // one venue. Default to a both-venue strike when one exists, then resolve EACH ladder to its own nearest
+  // available book — that way both DOMs stay populated at once (the whole point of the side-by-side view)
+  // instead of one going blank. Non-exact matches are labelled "≈ nearest" so the approximation is honest.
   const universe = React.useMemo(() => strikeUniverse(snap), [snap]);
   const strikes = universe.strikes;
   const sel = resolveStrike(selectedStrike, universe);
-  const kc = snap.books.kalshi.find((c) => c.strike === sel) ?? null;
-  const pc = snap.books.polymarket.find((c) => c.strike === sel) ?? null;
+  const kNear = React.useMemo(() => nearestContract(snap.books.kalshi, sel), [snap.books.kalshi, sel]);
+  const pNear = React.useMemo(() => nearestContract(snap.books.polymarket, sel), [snap.books.polymarket, sel]);
+  const kc = kNear.contract;
+  const pc = pNear.contract;
 
   const pairs = React.useMemo(
     () =>
@@ -75,8 +79,8 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
                     onBoth
                       ? "Quoted on both venues"
                       : only === "K"
-                        ? "Kalshi only — no Polymarket book at this strike"
-                        : "Polymarket only — no Kalshi book at this strike"
+                        ? "Kalshi-only strike — Polymarket shows its nearest book"
+                        : "Polymarket-only strike — Kalshi shows its nearest book"
                   }
                   className={cn(
                     "flex items-center gap-1 rounded-sm border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors",
@@ -144,18 +148,24 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
           <ResizablePane defaultSize={26} minSize={16}>
             <GridPanel
               title="Kalshi · DOM"
+              right={<DomStrikeTag near={kNear} />}
               className="h-full"
               dot={kc ? ageTone(now - kc.updatedAt, staleMs) : "idle"}
               accent={VENUE_ACCENT.kalshi}
               bodyClassName="overflow-auto p-0"
             >
-              {kc ? <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Kalshi book</Empty>}
+              {kc ? (
+                <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} />
+              ) : (
+                <Empty>No Kalshi book — no open BTC market</Empty>
+              )}
             </GridPanel>
           </ResizablePane>
           <ResizeHandle />
           <ResizablePane defaultSize={26} minSize={16}>
             <GridPanel
               title="Polymarket · DOM"
+              right={<DomStrikeTag near={pNear} />}
               className="h-full"
               dot={pc ? ageTone(now - pc.updatedAt, staleMs) : "idle"}
               accent={VENUE_ACCENT.polymarket}
@@ -164,7 +174,7 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
               {pc ? (
                 <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} />
               ) : (
-                <Empty>No Polymarket book at this strike</Empty>
+                <Empty>No Polymarket book — no open BTC market</Empty>
               )}
             </GridPanel>
           </ResizablePane>
@@ -194,11 +204,31 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
             onSelect={setSelectedCand}
           />
         </GridPanel>
-        <GridPanel title="Kalshi · DOM" accent={VENUE_ACCENT.kalshi} span={12} bodyClassName="p-0">
-          {kc ? <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Kalshi book</Empty>}
+        <GridPanel
+          title="Kalshi · DOM"
+          right={<DomStrikeTag near={kNear} />}
+          accent={VENUE_ACCENT.kalshi}
+          span={12}
+          bodyClassName="p-0"
+        >
+          {kc ? (
+            <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} />
+          ) : (
+            <Empty>No Kalshi book — no open BTC market</Empty>
+          )}
         </GridPanel>
-        <GridPanel title="Polymarket · DOM" accent={VENUE_ACCENT.polymarket} span={12} bodyClassName="p-0">
-          {pc ? <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Polymarket book at this strike</Empty>}
+        <GridPanel
+          title="Polymarket · DOM"
+          right={<DomStrikeTag near={pNear} />}
+          accent={VENUE_ACCENT.polymarket}
+          span={12}
+          bodyClassName="p-0"
+        >
+          {pc ? (
+            <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} />
+          ) : (
+            <Empty>No Polymarket book — no open BTC market</Empty>
+          )}
         </GridPanel>
         <GridPanel
           title="Live Strategy Tape"
@@ -226,9 +256,33 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
 
       {/* Row 4 — preview order ticket (full width so its two-column layout renders cleanly) */}
       <div className="h-[440px] overflow-hidden rounded-md border border-line">
-        <OrderEntryView snap={snap} />
+        <OrderEntryView snap={snap} embedded />
       </div>
     </ViewScroll>
+  );
+}
+
+/**
+ * Per-venue DOM header tag: shows the strike actually being displayed and flags it "≈ nearest" when this
+ * venue has no book at the selected strike (its grid differs from the other venue's), so the operator is
+ * never misled into reading two different strikes as the same one.
+ */
+function DomStrikeTag({ near }: { near: NearestContract }) {
+  if (!near.contract) return null;
+  return (
+    <span className="flex items-center gap-1.5 font-mono text-[10px]">
+      <span className="tabular-nums text-fg-secondary">{near.contract.strike.toLocaleString()}</span>
+      {!near.exact ? (
+        <span
+          title={`Nearest available strike — this venue has no book at the selected strike${
+            near.deltaDollars ? ` (off by $${near.deltaDollars.toLocaleString()})` : ""
+          }`}
+          className="rounded-sm border border-amber/40 bg-amber/10 px-1 py-px text-[8.5px] uppercase tracking-wide text-amber"
+        >
+          ≈ nearest
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -238,6 +292,14 @@ function CockpitTape({ events }: { events: TapeEvent[] }) {
   return (
     <div className="max-h-[260px] overflow-auto">
       <table className="w-full min-w-[360px] border-collapse text-[11px]">
+        <thead className="sticky top-0 z-10 bg-surface-2/90 text-fg-muted backdrop-blur">
+          <tr className="border-b border-line font-mono text-[9px] uppercase tracking-wide">
+            <th className="px-2.5 py-1.5 text-left">Time</th>
+            <th className="px-2 py-1.5 text-left">Event</th>
+            <th className="px-2 py-1.5 text-left">Market</th>
+            <th className="px-2.5 py-1.5 text-right">Edge</th>
+          </tr>
+        </thead>
         <tbody className="font-mono tabular-nums">
           {events.map((e) => {
             const meta = KIND_META[e.kind];

@@ -53,7 +53,7 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
       {/* control board */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         <ControlTile label="Operational" value={op.label} tone={op.tone} />
-        <ControlTile label="Risk State" value={(e?.riskState ?? "—").toUpperCase()} tone={riskStateTone(e?.riskState)} />
+        <ControlTile label="Risk State" value={e?.riskState?.toUpperCase() ?? "—"} tone={riskStateTone(e?.riskState)} />
         <ControlTile
           label="Circuit Breaker"
           value={e?.circuitBreakerLocked ? "LOCKED" : "CLEAR"}
@@ -66,8 +66,8 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
         />
         <ControlTile
           label="Reconciliation"
-          value={recon?.clean ? "CLEAN" : "DIRTY"}
-          tone={recon?.clean ? "live" : "halt"}
+          value={recon ? (recon.clean ? "CLEAN" : "DIRTY") : "—"}
+          tone={recon ? (recon.clean ? "live" : "halt") : "idle"}
         />
         <ControlTile
           label="Auto-Hardlocks"
@@ -143,8 +143,10 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
           />
           <TeleRow
             label="Avg Mismatch Cost"
-            value={eq?.avgMismatchCostDollars != null ? fmtUsd(eq.avgMismatchCostDollars) : "–"}
-            bar={eq?.avgMismatchCostDollars != null ? Math.min(1, eq.avgMismatchCostDollars / 5) : null}
+            // Mismatch cost is a P&L DRAG (subtracted from edge), so show it signed as a negative impact —
+            // consistent with the other signed figures here (e.g. Worst Trade −2.4¢), never a bare positive.
+            value={eq?.avgMismatchCostDollars != null ? fmtUsd(-eq.avgMismatchCostDollars) : "–"}
+            bar={eq?.avgMismatchCostDollars != null ? Math.min(1, Math.abs(eq.avgMismatchCostDollars) / 5) : null}
             invert
           />
           <TeleRow

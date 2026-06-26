@@ -79,21 +79,18 @@ export function HealthRailBody() {
         <RailStat
           label="Exact-Pair Fill"
           value={fmtPct(eq?.exactPairFillRate)}
-          bar={eq?.exactPairFillRate ?? 0}
-          tone="up"
+          bar={eq?.exactPairFillRate ?? null}
         />
         <RailStat
           label="Mismatch Rate"
           value={fmtPct(eq?.mismatchRate)}
-          bar={eq?.mismatchRate ?? 0}
-          tone="down"
+          bar={eq?.mismatchRate ?? null}
           invert
         />
         <RailStat
           label="PM Timeout"
           value={fmtPct(eq?.polymarketTimeoutRate)}
-          bar={eq?.polymarketTimeoutRate ?? 0}
-          tone="down"
+          bar={eq?.polymarketTimeoutRate ?? null}
           invert
         />
       </div>
@@ -106,19 +103,30 @@ export function HealthRailBody() {
           <span
             className={cn(
               "font-mono text-[12px] tabular-nums",
-              (recon?.quarantinedExposureDollars ?? 0) > 0 ? "text-down" : "text-up",
+              recon?.quarantinedExposureDollars == null
+                ? "text-fg-faint"
+                : recon.quarantinedExposureDollars > 0
+                  ? "text-down"
+                  : "text-up",
             )}
           >
-            {fmtUsd(recon?.quarantinedExposureDollars ?? 0)}
+            {fmtUsd(recon?.quarantinedExposureDollars ?? null)}
           </span>
         </div>
         <div className="flex items-center justify-between py-0.5">
           <span className="text-[11px] text-fg-secondary">Quarantined</span>
-          <span className="font-mono text-[12px] tabular-nums text-fg">{recon?.quarantinedSignalCount ?? 0}</span>
+          <span className="font-mono text-[12px] tabular-nums text-fg">{recon?.quarantinedSignalCount ?? "–"}</span>
         </div>
         <div className="flex items-center justify-between py-0.5">
           <span className="text-[11px] text-fg-secondary">Est. Edge</span>
-          <span className="font-mono text-[12px] tabular-nums text-up">{fmtCents(eq?.estimatedExecutableEdge)}</span>
+          <span
+            className={cn(
+              "font-mono text-[12px] tabular-nums",
+              eq?.estimatedExecutableEdge == null ? "text-fg-faint" : "text-up",
+            )}
+          >
+            {fmtCents(eq?.estimatedExecutableEdge)}
+          </span>
         </div>
       </div>
 
@@ -154,23 +162,26 @@ function RailStat({
   label,
   value,
   bar,
-  tone,
   invert,
 }: {
   label: string;
   value: string;
-  bar: number;
-  tone: "up" | "down";
+  bar: number | null;
   invert?: boolean;
 }) {
-  const barTone = invert ? (bar > 0.1 ? "halt" : "live") : bar >= 0.6 ? "live" : "stale";
+  // A null metric is UNMEASURED (exec-quality engine off / no samples) — show n/a + a neutral idle bar,
+  // never a green/empty 0 that reads as "all clear". Mirrors RiskView's TeleRow.
+  const unmeasured = bar == null;
+  const barTone = unmeasured ? "idle" : invert ? (bar > 0.1 ? "halt" : "live") : bar >= 0.6 ? "live" : "stale";
   return (
     <div className="py-1">
       <div className="flex items-center justify-between">
         <span className="text-[11px] text-fg-secondary">{label}</span>
-        <span className={cn("font-mono text-[12px] tabular-nums", tone === "up" ? "text-fg" : "text-fg")}>{value}</span>
+        <span className={cn("font-mono text-[12px] tabular-nums", unmeasured ? "text-fg-faint" : "text-fg")}>
+          {unmeasured ? "n/a" : value}
+        </span>
       </div>
-      <MiniBar value={bar} tone={barTone} className="mt-1" />
+      <MiniBar value={unmeasured ? 0 : bar} tone={barTone} className="mt-1" />
     </div>
   );
 }

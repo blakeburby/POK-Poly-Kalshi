@@ -262,6 +262,7 @@ function PositionTable({
           {rows.map((p) => {
             const age = p.updatedAt != null ? now - p.updatedAt : null;
             const stale = age != null && age > POSITION_STALE_MS;
+            const noTime = age == null; // unknown timestamp — must never render as a fresh "live" dot
             const pairing = p.strike != null ? residualByStrike.get(p.strike) : undefined;
             const naked = !!pairing && pairing.residual > 0 && pairing.residualVenue === p.venue;
             return (
@@ -283,11 +284,12 @@ function PositionTable({
                   <div className="flex items-center justify-end gap-1">
                     {naked ? <Badge variant="amber">naked</Badge> : null}
                     {stale ? <Badge variant="neutral">stale</Badge> : null}
+                    {noTime ? <Badge variant="neutral">no time</Badge> : null}
                     {p.value == null ? <Badge variant="neutral">no mark</Badge> : null}
-                    {!naked && !stale && p.value != null ? (
+                    {!naked && !stale && !noTime && p.value != null ? (
                       <span className="inline-flex items-center gap-1 text-fg-faint">
                         <StatusDot tone="live" className="size-1" />
-                        {age != null ? fmtRelative(p.updatedAt ?? undefined, now) : "ok"}
+                        {fmtRelative(p.updatedAt ?? undefined, now)}
                       </span>
                     ) : null}
                   </div>

@@ -46,7 +46,7 @@ function fmtCompact(v: number | null): string {
 export function ReleasesView() {
   const now = useNow(5000);
   const [releases, setReleases] = React.useState<ReleaseItem[]>([]);
-  const [state, setState] = React.useState<"loading" | "ok" | "error">("loading");
+  const [state, setState] = React.useState<"loading" | "ok" | "empty" | "error">("loading");
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [venue, setVenue] = React.useState<VenueFilter>("all");
   const [cryptoOnly, setCryptoOnly] = React.useState(false);
@@ -63,7 +63,8 @@ export function ReleasesView() {
         const r = data.releases ?? [];
         setReleases(r);
         setErrors(data.errors ?? {});
-        setState(r.length ? "ok" : "error");
+        // No releases is EMPTY (feed worked, nothing open) unless a venue actually errored — only then ERROR.
+        setState(r.length ? "ok" : Object.keys(data.errors ?? {}).length ? "error" : "empty");
       } catch {
         if (!cancelled) setState("error");
       } finally {
@@ -124,7 +125,7 @@ export function ReleasesView() {
 
       <GridPanel
         title="Market Releases · Kalshi + Polymarket"
-        dot={state === "ok" ? "live" : state === "loading" ? "stale" : "halt"}
+        dot={state === "ok" ? "live" : state === "loading" ? "stale" : state === "error" ? "halt" : "idle"}
         pulse={state === "ok"}
         span={12}
         right={
@@ -168,7 +169,11 @@ export function ReleasesView() {
           <div className="bg-grid flex h-40 flex-col items-center justify-center gap-2">
             <StatusDot tone={state === "error" ? "halt" : "idle"} className="size-2.5" />
             <p className="font-mono text-[11px] uppercase tracking-wide text-fg-secondary">
-              {state === "error" ? "Release feeds unavailable" : "No markets match the filter"}
+              {state === "error"
+                ? "Release feeds unavailable"
+                : state === "empty"
+                  ? "No active markets"
+                  : "No markets match the filter"}
             </p>
           </div>
         ) : (

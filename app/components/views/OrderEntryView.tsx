@@ -27,7 +27,12 @@ function fillableAt(askLevels: BookLevel[], limit: number): { shares: number; vw
   return { shares, vwap: shares > 0 ? cost / shares : null };
 }
 
-export function OrderEntryView({ snap }: { snap: DashboardSnapshot }) {
+/**
+ * Preview order ticket. `embedded` tunes the wrapper for the Cockpit's fixed-height panel — a single
+ * panel-appropriate scroll container instead of the full-page `ViewScroll` (whose page-centering wrapper
+ * would otherwise nest a second scroll context inside the 440px box).
+ */
+export function OrderEntryView({ snap, embedded = false }: { snap: DashboardSnapshot; embedded?: boolean }) {
   const [venue, setVenue] = React.useState<Venue>("kalshi");
   const [side, setSide] = React.useState<Side>("yes");
   const [strike, setStrike] = React.useState<number | null>(null);
@@ -56,16 +61,16 @@ export function OrderEntryView({ snap }: { snap: DashboardSnapshot }) {
 
   if (!strikes.length) {
     return (
-      <ViewScroll>
+      <Shell embedded={embedded}>
         <GridPanel title="Order Entry" span={12}>
           <Empty>No live markets to build a ticket</Empty>
         </GridPanel>
-      </ViewScroll>
+      </Shell>
     );
   }
 
   return (
-    <ViewScroll>
+    <Shell embedded={embedded}>
       <div className="flex items-center gap-2 rounded-md border border-amber/30 bg-amber/10 px-3 py-2">
         <StatusDot tone="stale" className="size-2" />
         <span className="font-mono text-[11px] uppercase tracking-wide text-amber">
@@ -200,8 +205,18 @@ export function OrderEntryView({ snap }: { snap: DashboardSnapshot }) {
           </GridPanel>
         </div>
       </Grid>
-    </ViewScroll>
+    </Shell>
   );
+}
+
+/**
+ * Scroll wrapper: the full-page `ViewScroll` standalone, or a lean panel-fit scroller when embedded in a
+ * fixed-height Cockpit cell (drops `ViewScroll`'s page max-width centering so it doesn't nest a second
+ * scroll context inside the bordered box).
+ */
+function Shell({ embedded, children }: { embedded: boolean; children: React.ReactNode }) {
+  if (!embedded) return <ViewScroll>{children}</ViewScroll>;
+  return <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">{children}</div>;
 }
 
 function BookPreview({ askLevels, limit, side }: { askLevels: BookLevel[]; limit: number | null; side: Side }) {

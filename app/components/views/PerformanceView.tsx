@@ -45,15 +45,17 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
   }));
 
   const cap = edgeCapture(a, snap);
-  const expected = cap.expected ?? 0;
-  const realized = cap.realized ?? 0;
-  // Honest Expected→Realized: the gap is a SINGLE REAL residual (slippage + mismatch + timeout + fees
-  // combined), NOT split by fabricated 60/40 ratios — the worker exposes no per-cause attribution.
-  const waterfall = [
-    { label: "Expected", delta: usd(expected) },
-    { label: "Net frictions", delta: usd(realized - expected) },
-    { label: "Realized", delta: usd(realized) },
-  ];
+  // Render the waterfall only when BOTH legs are real numbers — a null realized edge (no settled exact-pairs
+  // yet) must read as "no data", never a fabricated $0. Honest Expected→Realized: the gap is a SINGLE REAL
+  // residual (slippage + mismatch + timeout + fees combined), NOT split by fabricated 60/40 ratios.
+  const hasEdgeCapture = cap.expected != null && cap.realized != null;
+  const waterfall = hasEdgeCapture
+    ? [
+        { label: "Expected", delta: usd(cap.expected!) },
+        { label: "Net frictions", delta: usd(cap.realized! - cap.expected!) },
+        { label: "Realized", delta: usd(cap.realized!) },
+      ]
+    : [];
 
   const net = usd(a.netPnl);
 
@@ -62,12 +64,14 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
   const sharpe = venueEquitySharpe(snap);
   const sharpeDisp = equitySharpeDisplay(sharpe);
 
-  // Per-trade realized P&L for filled trades, oldest→newest (recentSignals is newest-first).
+  // Per-trade REALIZED P&L for SETTLED fills only (those carrying realized data), oldest→newest
+  // (recentSignals is newest-first). Estimated guaranteedProfit is deliberately excluded so this
+  // "realized" chart never plots an estimate as if it were actual P&L.
   const perTradePnls = (snap.recentSignals ?? [])
-    .filter((s) => s.action === "filled")
+    .filter((s) => s.action === "filled" && s.realizedGuaranteedProfit != null)
     .slice(0, 80)
     .reverse()
-    .map((s) => usd(s.realizedGuaranteedProfit ?? s.guaranteedProfit ?? 0));
+    .map((s) => usd(s.realizedGuaranteedProfit!));
 
   return (
     <ViewScroll>
@@ -157,7 +161,7 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
             </span>
           }
         >
-          {cap.expected == null ? (
+          {!hasEdgeCapture ? (
             <Empty>No exact-pair edge data</Empty>
           ) : (
             <EChart height={256} option={waterfallOption(waterfall, (v) => fmtUsd(v, { sign: true }))} />
@@ -198,14 +202,14 @@ export function PerformanceView({ snap }: { snap: DashboardSnapshot }) {
         bodyClassName="h-[240px] p-2"
         right={
           <span className="font-mono text-[10px] text-fg-faint">
-            last {perTradePnls.length} fills · cumulative cyan
+            last {perTradePnls.length} realized fills · cumulative cyan
           </span>
         }
       >
         {perTradePnls.length > 1 ? (
           <EChart height={216} option={perTradePnlOption(perTradePnls, fmt$)} />
         ) : (
-          <Empty>No filled trades in window</Empty>
+          <Empty>No realized trades in window</Empty>
         )}
       </GridPanel>
     </ViewScroll>
