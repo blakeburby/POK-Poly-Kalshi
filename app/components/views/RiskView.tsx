@@ -21,13 +21,25 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
 
   const ddPts = a?.buckets.map((b) => ({ t: b.startMs, v: b.drawdown * size })) ?? [];
   const exposure = recon?.quarantinedExposureDollars ?? 0;
-  const cap = recon?.quarantineCapDollars ?? e?.maxUnresolvedExposureDollars ?? 250;
+  // No fabricated fallback: when no real cap is configured, cap is null → shown as "n/a", not a guessed $250.
+  const cap = recon?.quarantineCapDollars ?? e?.maxUnresolvedExposureDollars ?? null;
 
   const quarantined = (snap.recentSignals ?? []).filter(
     (s) => s.riskQuarantinedAt || s.recoveryStatus === "risk_quarantined" || s.recoveryStatus === "operator_required",
   );
+  // Disjoint from `quarantined`: exclude quarantined + operator_required so a signal is never counted twice.
   const recovering = (snap.recentSignals ?? []).filter(
-    (s) => s.recoveryStatus && s.recoveryStatus !== "none" && !s.riskQuarantinedAt,
+    (s) =>
+      s.recoveryStatus != null &&
+      s.recoveryStatus !== "none" &&
+      s.recoveryStatus !== "risk_quarantined" &&
+      s.recoveryStatus !== "operator_required" &&
+      !s.riskQuarantinedAt,
+  );
+  // De-dupe the combined queue by id so RecoveryTable never renders a duplicate React key.
+  const seenQueueIds = new Set<number>();
+  const recoveryQueue = [...quarantined, ...recovering].filter((s) =>
+    seenQueueIds.has(s.id) ? false : (seenQueueIds.add(s.id), true),
   );
 
   // structures with a genuine loss window (probabilistic) sorted by worst case
@@ -41,11 +53,7 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
       {/* control board */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         <ControlTile label="Operational" value={op.label} tone={op.tone} />
-        <ControlTile
-          label="Risk State"
-          value={(e?.riskState ?? "—").toUpperCase()}
-          tone={e?.riskState === "trading" ? "live" : "stale"}
-        />
+        <ControlTile label="Risk State" value={(e?.riskState ?? "—").toUpperCase()} tone={riskStateTone(e?.riskState)} />
         <ControlTile
           label="Circuit Breaker"
           value={e?.circuitBreakerLocked ? "LOCKED" : "CLEAR"}
@@ -82,9 +90,13 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
             >
               {fmtUsd(exposure)}
             </span>
-            <span className="font-mono text-[11px] text-fg-muted">cap {fmtUsd(cap)}</span>
+            <span className="font-mono text-[11px] text-fg-muted">cap {cap != null ? fmtUsd(cap) : "n/a"}</span>
           </div>
-          <UtilBar value={cap ? exposure / cap : 0} warn={0.5} crit={0.85} />
+          {cap != null && cap > 0 ? (
+            <UtilBar value={exposure / cap} warn={0.5} crit={0.85} />
+          ) : (
+            <div className="h-1.5 w-full rounded-full bg-surface-3" title="No exposure cap configured" />
+          )}
           <div className="grid grid-cols-2 gap-2">
             <MiniStat
               label="Quarantined Signals"
@@ -122,23 +134,23 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
 
       <Grid>
         <GridPanel title="Hedge-Risk Telemetry" dot="info" span={4} bodyClassName="flex flex-col gap-2.5">
-          <TeleRow label="Mismatch Rate" value={fmtPct(eq?.mismatchRate)} bar={eq?.mismatchRate ?? 0} invert />
+          <TeleRow label="Mismatch Rate" value={fmtPct(eq?.mismatchRate)} bar={eq?.mismatchRate ?? null} invert />
           <TeleRow
             label="PM Timeout Rate"
             value={fmtPct(eq?.polymarketTimeoutRate)}
-            bar={eq?.polymarketTimeoutRate ?? 0}
+            bar={eq?.polymarketTimeoutRate ?? null}
             invert
           />
           <TeleRow
             label="Avg Mismatch Cost"
-            value={fmtUsd(eq?.avgMismatchCostDollars ?? 0)}
-            bar={Math.min(1, (eq?.avgMismatchCostDollars ?? 0) / 5)}
+            value={eq?.avgMismatchCostDollars != null ? fmtUsd(eq.avgMismatchCostDollars) : "–"}
+            bar={eq?.avgMismatchCostDollars != null ? Math.min(1, eq.avgMismatchCostDollars / 5) : null}
             invert
           />
           <TeleRow
             label="Worst Trade"
             value={fmtCents(a?.worstTradePnl)}
-            bar={Math.min(1, Math.abs(a?.worstTradePnl ?? 0) / 0.1)}
+            bar={a?.worstTradePnl != null ? Math.min(1, Math.abs(a.worstTradePnl) / 0.1) : null}
             invert
           />
         </GridPanel>
@@ -159,7 +171,7 @@ export function RiskView({ snap }: { snap: DashboardSnapshot }) {
         span={12}
         bodyClassName="p-0"
       >
-        <RecoveryTable rows={[...quarantined, ...recovering].slice(0, 12)} size={size} />
+        <RecoveryTable rows={recoveryQueue.slice(0, 12)} size={size} />
       </GridPanel>
     </ViewScroll>
   );
@@ -195,15 +207,36 @@ function MiniStat({ label, value, tone }: { label: string; value: string; tone: 
   );
 }
 
-function TeleRow({ label, value, bar, invert }: { label: string; value: string; bar: number; invert?: boolean }) {
-  const tone = invert ? (bar > 0.15 ? "halt" : bar > 0.05 ? "stale" : "live") : "live";
+/** Risk-state severity → tone. Severe halts are RED; recovering/controls-off are amber; trading is green. */
+function riskStateTone(state?: string | null): StatusTone {
+  switch (state) {
+    case "trading":
+      return "live";
+    case "hard_locked":
+    case "blocked":
+    case "quarantined":
+      return "halt";
+    case "recovering":
+    case "auto_hardlocks_disabled":
+      return "stale";
+    default:
+      return state ? "stale" : "idle";
+  }
+}
+
+function TeleRow({ label, value, bar, invert }: { label: string; value: string; bar: number | null; invert?: boolean }) {
+  // A null metric is UNMEASURED (engine off / insufficient samples) — show n/a + a neutral bar, never a green 0.
+  const unmeasured = bar == null;
+  const tone: StatusTone = unmeasured ? "idle" : invert ? (bar > 0.15 ? "halt" : bar > 0.05 ? "stale" : "live") : "live";
   return (
     <div>
       <div className="flex items-center justify-between">
         <span className="text-[11px] text-fg-secondary">{label}</span>
-        <span className="font-mono text-[12px] tabular-nums text-fg">{value}</span>
+        <span className={cn("font-mono text-[12px] tabular-nums", unmeasured ? "text-fg-faint" : "text-fg")}>
+          {unmeasured ? "n/a" : value}
+        </span>
       </div>
-      <MiniBar value={bar} tone={tone} className="mt-1" />
+      <MiniBar value={unmeasured ? 0 : bar} tone={tone} className="mt-1" />
     </div>
   );
 }

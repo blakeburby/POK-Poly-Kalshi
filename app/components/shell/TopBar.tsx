@@ -22,8 +22,14 @@ export function TopBar() {
   const source = useDashboardStore((s) => s.source);
   const now = useNow(1000);
   const op = snap ? operationalStatus(snap) : null;
-  const meta = sourceMeta[source];
   const snapshotAge = snap ? now - snap.generatedAt : null;
+  // A "live" stream that has gone silent still reports source==="live" (the browser EventSource fires no
+  // onerror on a stall), so the snapshot ages while the badge keeps claiming LIVE. Treat a live feed older
+  // than a freshness budget (a few stream intervals, floored at 8s) as STALE so stale data is never shown as
+  // fresh. (Doesn't touch the feed state machine — purely how the badge reads the snapshot's own timestamp.)
+  const staleMs = Math.max(8000, (snap?.latency?.dashboard?.streamIntervalMs ?? 1000) * 6);
+  const feedStale = source === "live" && snapshotAge != null && snapshotAge > staleMs;
+  const meta = feedStale ? { tone: "stale" as StatusTone, label: "STALE" } : sourceMeta[source];
   const candidates = snap?.scanner.lastCandidateCount ?? 0;
 
   return (
@@ -46,7 +52,9 @@ export function TopBar() {
         <StatusDot tone={meta.tone} pulse={meta.tone === "live"} />
         <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-fg-secondary">{meta.label}</span>
         {snapshotAge != null ? (
-          <span className="font-mono text-[10px] text-fg-muted">· {Math.max(0, Math.round(snapshotAge / 1000))}s</span>
+          <span className={cn("font-mono text-[10px]", feedStale ? "text-amber" : "text-fg-muted")}>
+            · {Math.max(0, Math.round(snapshotAge / 1000))}s
+          </span>
         ) : null}
       </div>
 

@@ -2,7 +2,14 @@
 
 import * as React from "react";
 import { useDashboardStore } from "@/store/dashboard-store";
-import { accountEquity, equityPnlOverMs, openPositionCount, tradeableNow, venueEquitySharpe, equitySharpeDisplay } from "@/lib/selectors";
+import {
+  accountEquity,
+  equityPnlOverMs,
+  openPositionCount,
+  operationalStatus,
+  venueEquitySharpe,
+  equitySharpeDisplay,
+} from "@/lib/selectors";
 import { fmtUsd, fmtPct, fmtCents, fmtNum, type StatusTone } from "@/lib/format";
 import { Sparkline } from "@/components/ui/stat";
 import { cn } from "@/lib/utils";
@@ -123,19 +130,31 @@ export function KpiStrip() {
           </div>
         </div>
       ))}
-      <TradeableTile ok={tradeableNow(snap)} riskState={exec?.riskState ?? "unknown"} />
+      <TradeableTile op={operationalStatus(snap)} riskState={exec?.riskState ?? "unknown"} />
     </div>
   );
 }
 
-function TradeableTile({ ok, riskState }: { ok: boolean; riskState: string }) {
+// Derives from the SAME operationalStatus() the TopBar pill + HealthRail headline use, so the KPI
+// System tile can never contradict them (the old tradeableNow() boolean said HALTED while op said ARMED
+// for non-"trading" risk states like auto_hardlocks_disabled). Tone/label mirror the op state machine.
+function TradeableTile({ op, riskState }: { op: ReturnType<typeof operationalStatus>; riskState: string }) {
+  const ok = op.state === "armed";
+  const dot =
+    op.tone === "live"
+      ? "bg-live heartbeat"
+      : op.tone === "halt"
+        ? "bg-halt"
+        : op.tone === "stale"
+          ? "bg-stale"
+          : "bg-idle";
   return (
     <div className="flex min-w-[44vw] snap-start flex-col justify-center gap-1 bg-surface-2/40 px-3.5 sm:min-w-[150px]">
       <span className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-fg-muted">System</span>
       <div className="flex items-center gap-2">
-        <span className={cn("size-2.5 rounded-full", ok ? "bg-live heartbeat" : "bg-halt")} />
-        <span className={cn("font-mono text-[15px] uppercase leading-none", ok ? "text-up" : "text-down")}>
-          {ok ? "TRADEABLE" : "HALTED"}
+        <span className={cn("size-2.5 rounded-full", dot)} />
+        <span className={cn("font-mono text-[15px] uppercase leading-none", toneClass(op.tone))}>
+          {ok ? "TRADEABLE" : op.label}
         </span>
       </div>
       <span className="font-mono text-[9.5px] uppercase tracking-wide text-fg-muted">risk · {riskState}</span>
