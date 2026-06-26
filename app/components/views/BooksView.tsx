@@ -11,6 +11,7 @@ import { fmtCents, fmtMs, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
+import { strikeUniverse, resolveStrike } from "@/lib/selectors";
 
 function cumulative(levels: BookLevel[] | undefined): Array<[number, number]> {
   if (!levels?.length) return [];
@@ -29,13 +30,9 @@ export function BooksView({ snap }: { snap: DashboardSnapshot }) {
   const selectedStrike = useDashboardStore((s) => s.selectedStrike);
   const setSelectedStrike = useDashboardStore((s) => s.setSelectedStrike);
 
-  const allStrikes = Array.from(
-    new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike)),
-  ).sort((a, b) => a - b);
-  const sel =
-    selectedStrike != null && allStrikes.includes(selectedStrike)
-      ? selectedStrike
-      : (allStrikes[Math.floor(allStrikes.length / 2)] ?? null);
+  // Default to a strike BOTH venues quote so the Polymarket book/depth populate (Kalshi lists denser strikes).
+  const universe = React.useMemo(() => strikeUniverse(snap), [snap]);
+  const sel = resolveStrike(selectedStrike, universe);
 
   const kc = snap.books.kalshi.find((c) => c.strike === sel);
   const pc = snap.books.polymarket.find((c) => c.strike === sel);

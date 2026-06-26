@@ -644,22 +644,33 @@ export function generateMockSnapshot(seedMs = Date.now()): DashboardSnapshot {
   const analytics = buildAnalytics(signals, now);
 
   // Live books + candidates.
-  const baseStrike = 64000 + Math.round(rng() * 4) * 250;
+  rng(); // preserve the rng sequence (baseStrike no longer derives from the per-tick seed)
+  // Keep the strike grid STABLE across ticks — real venues don't reprice their strike ladder every few
+  // seconds; only the quotes/sizes below evolve for the "live" feel. Drifts at most once per hour.
+  const baseStrike = 64000 + (Math.floor(now / 3_600_000) % 5) * 250;
   const kBooks: BinaryContract[] = [];
   const pBooks: BinaryContract[] = [];
   for (let i = 0; i < 8; i++) {
     const strike = baseStrike + i * 250;
     const yesMid = clampMid(0.85 - i * 0.1 + (rng() - 0.5) * 0.05);
     kBooks.push(contract("kalshi", strike, expiry, now, rng, yesMid));
-    pBooks.push(contract("polymarket", strike, expiry, now, rng, clampMid(yesMid + (rng() - 0.5) * 0.04)));
+    // Realistic divergence: Polymarket lists fewer strikes than Kalshi (skip a couple, incl. the union
+    // middle) so some Kalshi-only strikes exist — the dashboard must default to a strike both venues quote.
+    if (i !== 4 && i !== 6) {
+      pBooks.push(contract("polymarket", strike, expiry, now, rng, clampMid(yesMid + (rng() - 0.5) * 0.04)));
+    }
   }
 
   const liveCandidates: ArbCandidate[] = [];
   const syntheticStructures: ArbCandidate[] = [];
+  // Polymarket lists fewer strikes than Kalshi, so pair the cross-venue leg by STRIKE (not raw index) and
+  // skip adjacent pairs whose Polymarket leg doesn't exist — index pairing would mis-align strikes.
+  const pByStrike = new Map(pBooks.map((c) => [c.strike, c]));
   for (let i = 0; i < kBooks.length - 1; i++) {
     const lowerFromK = rng() > 0.5;
-    const lowerC = lowerFromK ? kBooks[i] : pBooks[i];
-    const higherC = lowerFromK ? pBooks[i + 1] : kBooks[i + 1];
+    const lowerC = lowerFromK ? kBooks[i] : pByStrike.get(kBooks[i].strike);
+    const higherC = lowerFromK ? pByStrike.get(kBooks[i + 1].strike) : kBooks[i + 1];
+    if (!lowerC || !higherC) continue;
     const cand = buildCandidate(lowerC, higherC, threshold);
     syntheticStructures.push(cand);
     if (cand.executable) liveCandidates.push(cand);

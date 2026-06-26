@@ -179,6 +179,39 @@ export function orderSize(snap: DashboardSnapshot): number {
   return snap.execution?.orderSize ?? snap.health.liveOrderSize ?? 1;
 }
 
+/**
+ * Cross-venue strike universe. Kalshi (15-min, dense strikes) and Polymarket do NOT list the same
+ * strike set, so picking a strike from the union can land on one only Kalshi has → an empty Polymarket
+ * ladder. `defaultStrike` therefore prefers a strike BOTH venues quote (so both DOMs populate), and the
+ * chips can flag single-venue strikes. Shared by Cockpit / Ladder / Books for consistent behaviour.
+ */
+export interface StrikeUniverse {
+  /** Union of all strikes, ascending. */
+  strikes: number[];
+  /** Strikes quoted on BOTH venues, ascending. */
+  bothVenueStrikes: number[];
+  kalshiStrikes: Set<number>;
+  polyStrikes: Set<number>;
+  /** Default strike — middle of the both-venue set if any, else middle of the union. */
+  defaultStrike: number | null;
+}
+
+export function strikeUniverse(snap: DashboardSnapshot): StrikeUniverse {
+  const k = snap.books.kalshi ?? [];
+  const p = snap.books.polymarket ?? [];
+  const kalshiStrikes = new Set(k.map((c) => c.strike));
+  const polyStrikes = new Set(p.map((c) => c.strike));
+  const strikes = [...new Set([...kalshiStrikes, ...polyStrikes])].sort((a, b) => a - b);
+  const bothVenueStrikes = strikes.filter((s) => kalshiStrikes.has(s) && polyStrikes.has(s));
+  const pool = bothVenueStrikes.length ? bothVenueStrikes : strikes;
+  return { strikes, bothVenueStrikes, kalshiStrikes, polyStrikes, defaultStrike: pool[Math.floor(pool.length / 2)] ?? null };
+}
+
+/** Resolve the active strike: the operator's selection if it is still a real strike, else the default. */
+export function resolveStrike(selected: number | null | undefined, u: StrikeUniverse): number | null {
+  return selected != null && u.strikes.includes(selected) ? selected : u.defaultStrike;
+}
+
 /** per-share contract dollars -> account dollars at the configured clip. */
 export function toDollars(perShare: number | null | undefined, size: number): number | null {
   if (perShare == null || !Number.isFinite(perShare)) return null;

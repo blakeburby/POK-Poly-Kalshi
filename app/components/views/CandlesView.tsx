@@ -37,13 +37,16 @@ export function CandleChartPanel({
   chartHeight = 440,
   showTiles = true,
   fill = false,
+  lockedAsset,
 }: {
   chartHeight?: number;
   showTiles?: boolean;
   /** Fill the parent height (for a resizable pane) instead of using a fixed chart height. */
   fill?: boolean;
+  /** Lock the chart to one asset and hide the switcher — BTC-only contexts like the Cockpit. */
+  lockedAsset?: Asset;
 }) {
-  const [asset, setAsset] = React.useState<Asset>("BTC");
+  const [asset, setAsset] = React.useState<Asset>(lockedAsset ?? "BTC");
   const [gran, setGran] = React.useState(60);
   const [candles, setCandles] = React.useState<Candle[]>([]);
   const [state, setState] = React.useState<"loading" | "ok" | "error">("loading");
@@ -116,20 +119,26 @@ export function CandleChartPanel({
       >
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex items-center gap-1.5">
-            {ASSETS.map((a) => (
-              <button
-                key={a}
-                onClick={() => setAsset(a)}
-                className={cn(
-                  "rounded-sm border px-2.5 py-1 font-mono text-[12px] font-medium tracking-wide transition-colors",
-                  a === asset
-                    ? "border-cyan/40 bg-cyan/10 text-fg"
-                    : "border-line bg-surface text-fg-muted hover:border-line-strong hover:text-fg-secondary",
-                )}
-              >
-                {a}
-              </button>
-            ))}
+            {lockedAsset ? (
+              <span className="rounded-sm border border-cyan/40 bg-cyan/10 px-2.5 py-1 font-mono text-[12px] font-medium tracking-wide text-fg">
+                {asset}
+              </span>
+            ) : (
+              ASSETS.map((a) => (
+                <button
+                  key={a}
+                  onClick={() => setAsset(a)}
+                  className={cn(
+                    "rounded-sm border px-2.5 py-1 font-mono text-[12px] font-medium tracking-wide transition-colors",
+                    a === asset
+                      ? "border-cyan/40 bg-cyan/10 text-fg"
+                      : "border-line bg-surface text-fg-muted hover:border-line-strong hover:text-fg-secondary",
+                  )}
+                >
+                  {a}
+                </button>
+              ))
+            )}
           </div>
           <div className="flex items-end gap-4">
             <div className="flex flex-col">

@@ -8,6 +8,7 @@ import { fmtCents, fmtInt, fmtMs, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
+import { strikeUniverse, resolveStrike, type StrikeUniverse } from "@/lib/selectors";
 
 export type Side = "yes" | "no";
 
@@ -57,17 +58,10 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
   const setSelectedStrike = useDashboardStore((s) => s.setSelectedStrike);
   const [side, setSide] = React.useState<Side>("yes");
 
-  const strikes = React.useMemo(
-    () =>
-      Array.from(new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike))).sort(
-        (a, b) => a - b,
-      ),
-    [snap.books.kalshi, snap.books.polymarket],
-  );
-  const sel =
-    selectedStrike != null && strikes.includes(selectedStrike)
-      ? selectedStrike
-      : (strikes[Math.floor(strikes.length / 2)] ?? null);
+  // Default to a strike BOTH venues quote so the Polymarket ladder populates (Kalshi lists denser strikes).
+  const universe = React.useMemo(() => strikeUniverse(snap), [snap]);
+  const strikes = universe.strikes;
+  const sel = resolveStrike(selectedStrike, universe);
 
   const kc = snap.books.kalshi.find((c) => c.strike === sel) ?? null;
   const pc = snap.books.polymarket.find((c) => c.strike === sel) ?? null;
@@ -84,7 +78,16 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
 
   return (
     <ViewScroll>
-      <ControlBar strikes={strikes} sel={sel} onSel={setSelectedStrike} side={side} onSide={setSide} kc={kc} pc={pc} />
+      <ControlBar
+        strikes={strikes}
+        universe={universe}
+        sel={sel}
+        onSel={setSelectedStrike}
+        side={side}
+        onSide={setSide}
+        kc={kc}
+        pc={pc}
+      />
 
       <Grid>
         <GridPanel
@@ -122,6 +125,7 @@ export function LadderView({ snap }: { snap: DashboardSnapshot }) {
 
 function ControlBar({
   strikes,
+  universe,
   sel,
   onSel,
   side,
@@ -130,6 +134,7 @@ function ControlBar({
   pc,
 }: {
   strikes: number[];
+  universe: StrikeUniverse;
   sel: number | null;
   onSel: (s: number) => void;
   side: Side;
@@ -150,20 +155,28 @@ function ControlBar({
       <div className="flex flex-col gap-1.5">
         <Label>Strike · BTC</Label>
         <div className="flex flex-wrap gap-1">
-          {strikes.map((s) => (
-            <button
-              key={s}
-              onClick={() => onSel(s)}
-              className={cn(
-                "rounded-sm border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors",
-                s === sel
-                  ? "border-cyan/40 bg-cyan/10 text-fg"
-                  : "border-line bg-surface text-fg-muted hover:border-line-strong hover:text-fg-secondary",
-              )}
-            >
-              {s.toLocaleString()}
-            </button>
-          ))}
+          {strikes.map((s) => {
+            const onBoth = universe.kalshiStrikes.has(s) && universe.polyStrikes.has(s);
+            const only = universe.kalshiStrikes.has(s) ? "K" : "P";
+            return (
+              <button
+                key={s}
+                onClick={() => onSel(s)}
+                title={onBoth ? "Quoted on both venues" : `${only === "K" ? "Kalshi" : "Polymarket"} only`}
+                className={cn(
+                  "flex items-center gap-1 rounded-sm border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors",
+                  s === sel
+                    ? "border-cyan/40 bg-cyan/10 text-fg"
+                    : onBoth
+                      ? "border-line bg-surface text-fg-muted hover:border-line-strong hover:text-fg-secondary"
+                      : "border-dashed border-line/60 bg-surface text-fg-faint hover:text-fg-muted",
+                )}
+              >
+                {s.toLocaleString()}
+                {!onBoth ? <span className="text-[8px] text-fg-faint">{only}</span> : null}
+              </button>
+            );
+          })}
         </div>
       </div>
 

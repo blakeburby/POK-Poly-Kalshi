@@ -9,6 +9,10 @@ export function StatusBar() {
   const snap = useDashboardStore((s) => s.snapshot);
   const source = useDashboardStore((s) => s.source);
   const now = useNow(1000);
+  // The wall-clock is time-dependent, so SSR and the first client paint disagree — render it only after
+  // mount to avoid a hydration mismatch (the rest of the bar is snapshot-derived and hydrates cleanly).
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
   const lat = snap?.latency;
   const items: Array<[string, string]> = snap
     ? [
@@ -39,7 +43,9 @@ export function StatusBar() {
       >
         ? shortcuts
       </button>
-      <span className="shrink-0 tabular-nums text-fg-secondary">{fmtClock(now, true)}</span>
+      <span className="shrink-0 tabular-nums text-fg-secondary" suppressHydrationWarning>
+        {mounted ? fmtClock(now, true) : "—"}
+      </span>
     </footer>
   );
 }

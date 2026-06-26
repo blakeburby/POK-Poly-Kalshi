@@ -10,6 +10,7 @@ import { fmtCents, fmtClock, ageTone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/hooks/useNow";
 import { useDashboardStore } from "@/store/dashboard-store";
+import { strikeUniverse, resolveStrike } from "@/lib/selectors";
 
 import { Ladder, type Side } from "./LadderView";
 import { HedgeMap, pairByStrike, enrich } from "./PositionsView";
@@ -35,17 +36,11 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
   const [side, setSide] = React.useState<Side>("yes");
   const [selectedCand, setSelectedCand] = React.useState<string | null>(null);
 
-  const strikes = React.useMemo(
-    () =>
-      Array.from(new Set([...(snap.books.kalshi ?? []), ...(snap.books.polymarket ?? [])].map((c) => c.strike))).sort(
-        (a, b) => a - b,
-      ),
-    [snap.books.kalshi, snap.books.polymarket],
-  );
-  const sel =
-    selectedStrike != null && strikes.includes(selectedStrike)
-      ? selectedStrike
-      : (strikes[Math.floor(strikes.length / 2)] ?? null);
+  // Default to a strike BOTH venues quote so the Polymarket DOM populates on load (Kalshi lists denser
+  // strikes than Polymarket — defaulting off the raw union can land on a Kalshi-only strike → empty PM book).
+  const universe = React.useMemo(() => strikeUniverse(snap), [snap]);
+  const strikes = universe.strikes;
+  const sel = resolveStrike(selectedStrike, universe);
   const kc = snap.books.kalshi.find((c) => c.strike === sel) ?? null;
   const pc = snap.books.polymarket.find((c) => c.strike === sel) ?? null;
 
@@ -69,20 +64,34 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
         <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-fg-muted">BTC Strike</span>
         <div className="flex flex-wrap gap-1">
           {strikes.length ? (
-            strikes.map((s) => (
-              <button
-                key={s}
-                onClick={() => setSelectedStrike(s)}
-                className={cn(
-                  "rounded-sm border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors",
-                  s === sel
-                    ? "border-cyan/40 bg-cyan/10 text-fg"
-                    : "border-line bg-surface text-fg-muted hover:border-line-strong hover:text-fg-secondary",
-                )}
-              >
-                {s.toLocaleString()}
-              </button>
-            ))
+            strikes.map((s) => {
+              const onBoth = universe.kalshiStrikes.has(s) && universe.polyStrikes.has(s);
+              const only = universe.kalshiStrikes.has(s) ? "K" : "P";
+              return (
+                <button
+                  key={s}
+                  onClick={() => setSelectedStrike(s)}
+                  title={
+                    onBoth
+                      ? "Quoted on both venues"
+                      : only === "K"
+                        ? "Kalshi only — no Polymarket book at this strike"
+                        : "Polymarket only — no Kalshi book at this strike"
+                  }
+                  className={cn(
+                    "flex items-center gap-1 rounded-sm border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors",
+                    s === sel
+                      ? "border-cyan/40 bg-cyan/10 text-fg"
+                      : onBoth
+                        ? "border-line bg-surface text-fg-muted hover:border-line-strong hover:text-fg-secondary"
+                        : "border-dashed border-line/60 bg-surface text-fg-faint hover:text-fg-muted",
+                  )}
+                >
+                  {s.toLocaleString()}
+                  {!onBoth ? <span className="text-[8px] text-fg-faint">{only}</span> : null}
+                </button>
+              );
+            })
           ) : (
             <span className="font-mono text-[11px] text-fg-faint">no live strikes</span>
           )}
@@ -107,7 +116,7 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
       <div className="hidden h-[400px] lg:block">
         <ResizableGroup direction="horizontal" autoSaveId="cockpit-row1">
           <ResizablePane defaultSize={64} minSize={38}>
-            <CandleChartPanel fill showTiles={false} />
+            <CandleChartPanel fill showTiles={false} lockedAsset="BTC" />
           </ResizablePane>
           <ResizeHandle />
           <ResizablePane defaultSize={36} minSize={22}>
@@ -155,13 +164,19 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
               {pc ? (
                 <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} />
               ) : (
-                <Empty>No Polymarket book</Empty>
+                <Empty>No Polymarket book at this strike</Empty>
               )}
             </GridPanel>
           </ResizablePane>
           <ResizeHandle />
           <ResizablePane defaultSize={48} minSize={24}>
-            <GridPanel title="Live Strategy Tape" className="h-full" dot="live" pulse bodyClassName="overflow-auto p-0">
+            <GridPanel
+              title="Live Strategy Tape"
+              className="h-full"
+              dot={events.length ? "live" : "idle"}
+              pulse={events.length > 0}
+              bodyClassName="overflow-auto p-0"
+            >
               <CockpitTape events={events} />
             </GridPanel>
           </ResizablePane>
@@ -170,7 +185,7 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
 
       {/* Rows 1+2 stacked (no drag) on small screens where side-by-side panes don't fit. */}
       <div className="flex flex-col gap-3 lg:hidden">
-        <CandleChartPanel chartHeight={280} showTiles={false} />
+        <CandleChartPanel chartHeight={280} showTiles={false} lockedAsset="BTC" />
         <GridPanel title="Edge / Opportunity" dot={candidates.length ? "live" : "idle"} span={12} bodyClassName="p-0">
           <CandidateTable
             candidates={candidates}
@@ -183,9 +198,15 @@ export function CockpitView({ snap }: { snap: DashboardSnapshot }) {
           {kc ? <Ladder contract={kc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Kalshi book</Empty>}
         </GridPanel>
         <GridPanel title="Polymarket · DOM" accent={VENUE_ACCENT.polymarket} span={12} bodyClassName="p-0">
-          {pc ? <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Polymarket book</Empty>}
+          {pc ? <Ladder contract={pc} side={side} flashEnabled={!reducedMotion} /> : <Empty>No Polymarket book at this strike</Empty>}
         </GridPanel>
-        <GridPanel title="Live Strategy Tape" dot="live" pulse span={12} bodyClassName="p-0">
+        <GridPanel
+          title="Live Strategy Tape"
+          dot={events.length ? "live" : "idle"}
+          pulse={events.length > 0}
+          span={12}
+          bodyClassName="p-0"
+        >
           <CockpitTape events={events} />
         </GridPanel>
       </div>
