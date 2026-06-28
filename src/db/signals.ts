@@ -363,10 +363,14 @@ export interface NakedResidualRow {
   expiryMs: number | null;
   nakedTokenId: string;
   nakedResidualShares: number;
-  // The hedged Polymarket shares (min(kalshiFill, polymarketFill)) the flattener must KEEP — it reduces the
-  // position down to this floor and never below, so it can never re-sell the shares matched to the Kalshi leg.
-  // null = NOT recorded (a legacy row predating the floor); the flattener SKIPS those rather than risk selling
-  // the matched pair. A recorded 0 is a genuine fully-naked trade (no hedge to keep).
+  // The hedging Kalshi market ticker for this residual's Polymarket token. The flattener looks up the LIVE,
+  // market-wide Kalshi NO contracts held under this ticker (authoritative venue positions, aggregated across
+  // every sibling signal) and keeps that many Polymarket shares as the hedged floor — selling only the excess
+  // above it. null = unmapped (legacy row) -> the flattener cannot prove the hedge, so it SKIPS.
+  kalshiContractId: string | null;
+  // LEGACY/diagnostic only: the per-signal min(kalshiFill, polymarketFill) captured at record time. No longer
+  // load-bearing for the sell decision — it was 0 whenever the deferred Kalshi hedge had not yet filled, which
+  // made the flattener dump the whole fungible-token balance. The live Kalshi-NO floor supersedes it.
   retainedShares: number | null;
 }
 
@@ -581,9 +585,10 @@ export class SignalStore {
       naked_token_id: string | null;
       naked_residual_shares: string | number | null;
       naked_retained_shares: string | number | null;
+      kalshi_contract_id: string | null;
     }>(
       `
-      SELECT id, expiry_ms,
+      SELECT id, expiry_ms, kalshi_contract_id,
              recovery_evidence->'autoUnwind'->>'nakedTokenId'        AS naked_token_id,
              recovery_evidence->'autoUnwind'->>'nakedResidualShares' AS naked_residual_shares,
              recovery_evidence->'autoUnwind'->>'nakedRetainedShares' AS naked_retained_shares
@@ -602,8 +607,9 @@ export class SignalStore {
         expiryMs: numberFrom(row.expiry_ms),
         nakedTokenId: row.naked_token_id,
         nakedResidualShares: numberFrom(row.naked_residual_shares),
-        // null when absent (legacy row) -> the flattener skips it; defaulting the floor to 0 would be the UNSAFE
-        // direction (it would sell the position down to zero and un-hedge the matched pair).
+        // The hedging Kalshi ticker -> the flattener reads its LIVE market-wide NO held as the floor.
+        kalshiContractId: row.kalshi_contract_id,
+        // Legacy/diagnostic only — superseded by the live Kalshi-NO floor (see NakedResidualRow).
         retainedShares: numberFrom(row.naked_retained_shares),
       }))
       .filter((row): row is NakedResidualRow => row.nakedTokenId != null && (row.nakedResidualShares ?? 0) > 0);

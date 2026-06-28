@@ -5,17 +5,23 @@ import { logEvent } from "../logger";
 /**
  * Async post-settlement naked-position flattener. Periodically MARKET-sells the unhedged Polymarket residuals
  * that the synchronous unwind could not flatten (e.g. the shares had not settled on-chain yet), then marks the
- * quarantine resolved. SAFE BY DESIGN: it acts ONLY on the RECORDED one-sided residual (exact tokenId + share
- * count captured at fill time, in recovery_evidence.autoUnwind), cross-checked against the ACTUALLY-held
- * shares — it never raw-scans positions, so it can never sell a hedged leg (the arb holds both hedged legs to
- * expiry; those are different tokenIds that are never recorded as naked).
+ * quarantine resolved. SAFE BY DESIGN: it sells ONLY the excess of a Polymarket token over its LIVE Kalshi
+ * hedge, so it can never sell a hedged leg.
  *
  * - OPEN markets only (a resolved/expired position is a realized loss → redeem/reconcile, never sell).
- * - HEDGED FLOOR: the Polymarket buy holds BOTH the hedged and the naked shares under the same tokenId (the
- *   hedge is the Kalshi leg), so the flattener only ever sells the portion ABOVE the recorded hedged-retained
- *   count and reduces the position toward — never below — that floor. This bounds the total sold to the naked
- *   excess across any number of ticks/partials and makes it structurally impossible to re-sell the matched pair.
- * - Never sells more than min(recorded residual, held − hedged floor).
+ * - LIVE, MARKET-WIDE HEDGED FLOOR: the Polymarket buy holds BOTH the hedged and the naked shares under one
+ *   (per-15-min-market) tokenId, and the hedge is the Kalshi NO leg. The flattener reads the AUTHORITATIVE,
+ *   currently-held Kalshi NO contracts for the hedging ticker (the venue position is already aggregated across
+ *   every sibling signal in that window) and keeps that many Polymarket shares as the floor — selling only
+ *   `held_PM − liveKalshiNO`. This is re-evaluated LIVE every tick, which is the crux: the prior design froze a
+ *   per-signal `min(kalshiFill, polymarketFill)` floor at record time, which was 0 whenever the deferred Kalshi
+ *   hedge had not yet filled — so it dumped the entire fungible-token balance (the 2026-06-28 −$166 incident).
+ * - FRESHNESS: if the Kalshi account snapshot is stale/missing (can't prove the hedge), SKIP — never sell.
+ * - CONSISTENCY / RACE GATE: the genuine unhedged excess should be ≈ the recorded residual. If the observed
+ *   excess is grossly larger (the Kalshi hedge is still mid-fill, or there is unexplained exposure), SKIP and
+ *   wait — this bounds the blast radius to the recorded residual even if the live floor momentarily undercounts
+ *   or the token→ticker join ever fails (it then fails SAFE: no sell).
+ * - Never sells more than min(recorded residual, held − live hedged floor).
  * - Idempotent: a sold token is on a re-sell cooldown that outlasts the ~20s account-position cache, and the
  *   quarantine is resolved once reduced to the floor so it drops out of the work-list. Single-flight; never throws.
  */
@@ -52,6 +58,12 @@ export interface NakedFlattenStatus {
 
 const DUST = 0.01;
 const RESELL_COOLDOWN_MS = 60_000; // outlast the ~20s account-position cache so a sold token is never re-sold
+// Race/consistency guard: the genuine unhedged excess (held_PM − liveKalshiNO) should be ≈ the recorded
+// residual. If it exceeds residual × this factor (+ a small absolute tolerance) the Kalshi hedge is almost
+// certainly still filling — skip and wait rather than sell into an incomplete hedge. 2× cleanly separates the
+// normal aggregate-vs-single discrepancy (~1.1× in the −$166 incident) from a true mid-fill race (~3×+).
+const MAX_EXCESS_RESIDUAL_FACTOR = 2;
+const MAX_EXCESS_ABS_TOLERANCE_SHARES = 1;
 
 export class NakedPositionFlattener {
   private running = false;
@@ -92,9 +104,20 @@ export class NakedPositionFlattener {
       for (const pos of snapshot.polymarket?.positions ?? []) {
         if (pos.id) heldByToken.set(pos.id, (heldByToken.get(pos.id) ?? 0) + (pos.shares ?? 0));
       }
+      // LIVE, market-wide hedged floor: authoritative Kalshi NO contracts held per ticker (the venue position
+      // is already netted across every sibling signal in the window). Only trust it when the Kalshi account
+      // snapshot is fresh — a stale/reconnecting fetch could undercount the hedge and un-hedge a live leg.
+      const kalshi = snapshot.kalshi;
+      const kalshiFresh = kalshi?.connectionStatus === "live" && kalshi?.portfolio?.stale !== true;
+      const kalshiNoHeldByTicker = new Map<string, number>();
+      for (const pos of kalshi?.positions ?? []) {
+        if (pos.market && (pos.outcome ?? "").toUpperCase() === "NO") {
+          kalshiNoHeldByTicker.set(pos.market, (kalshiNoHeldByTicker.get(pos.market) ?? 0) + (pos.shares ?? 0));
+        }
+      }
       for (const residual of residuals) {
         try {
-          await this.flattenOne(residual, heldByToken, now);
+          await this.flattenOne(residual, heldByToken, kalshiNoHeldByTicker, kalshiFresh, now);
         } catch (error) {
           this.lastError = error instanceof Error ? error.message : String(error);
         }
@@ -112,7 +135,13 @@ export class NakedPositionFlattener {
     }
   }
 
-  private async flattenOne(residual: NakedResidualRow, heldByToken: Map<string, number>, now: number): Promise<void> {
+  private async flattenOne(
+    residual: NakedResidualRow,
+    heldByToken: Map<string, number>,
+    kalshiNoHeldByTicker: Map<string, number>,
+    kalshiFresh: boolean,
+    now: number,
+  ): Promise<void> {
     // OPEN markets only — a resolved/expired position is a realized loss (redeem/reconcile, never a sell).
     if (residual.expiryMs != null && now >= residual.expiryMs) return;
     // Re-sell cooldown: never re-sell a token we just sold; the ~20s position cache may still show the pre-sell
@@ -121,22 +150,48 @@ export class NakedPositionFlattener {
     if (soldAt != null && now - soldAt < RESELL_COOLDOWN_MS) return;
     const held = heldByToken.get(residual.nakedTokenId) ?? 0;
     if (held <= DUST) return; // shares not settled yet, or already gone -> retry next tick
-    // HEDGED FLOOR: the Polymarket buy holds both the hedged and the naked shares under this ONE tokenId, so we
-    // may only sell the portion ABOVE the hedged retained count — reducing the position toward (never below) the
-    // shares matched against the Kalshi leg. `held - floor` shrinks as we sell, so this bounds the TOTAL sold to
-    // the naked excess across any number of ticks/partials and makes re-selling the matched pair impossible.
-    // A null floor means the residual predates floor-recording — SKIP it (selling with an assumed 0 floor would
-    // un-hedge the matched pair); reconciliation/expiry handles those legacy rows instead.
-    if (residual.retainedShares == null) return;
-    const floor = Math.max(0, residual.retainedShares);
-    const sellable = Math.max(0, held - floor);
-    if (sellable <= DUST) {
-      // Position is already reduced to (or below) the hedged floor — the naked excess is gone. Resolve so it
-      // drops out of the work-list; this is also the backstop that ends the loop after a full flatten.
-      await this.resolve(residual, now, 0, null, null, "naked residual already flat at hedged floor");
+    // FRESHNESS: the floor is the LIVE Kalshi NO held; if the Kalshi snapshot is stale/reconnecting we cannot
+    // prove the hedge — SKIP rather than risk un-hedging on an undercounted floor. Retry next tick.
+    if (!kalshiFresh) return;
+    // The hedging Kalshi ticker must be known to look up the live NO floor. Unmapped (legacy/missing) -> SKIP.
+    if (!residual.kalshiContractId) return;
+    // LIVE, MARKET-WIDE HEDGED FLOOR: the authoritative Kalshi NO contracts held for the hedging ticker (already
+    // netted across every sibling signal). The Polymarket buy holds both the hedged and the naked shares under
+    // this ONE tokenId, so we may only sell the portion ABOVE this floor — keeping the shares matched to the
+    // live Kalshi leg. Re-read every tick: a deferred hedge that fills later raises the floor and stops the sell.
+    const floor = Math.max(0, kalshiNoHeldByTicker.get(residual.kalshiContractId) ?? 0);
+    const excess = Math.max(0, held - floor);
+    if (excess <= DUST) {
+      // Held is at/below the live Kalshi hedge — fully hedged, no naked excess. Resolve so it drops out of the
+      // work-list; this is also the backstop that ends the loop after a full flatten.
+      await this.resolve(residual, now, 0, null, null, "naked residual already flat at live hedged floor");
       return;
     }
-    const sellShares = Math.min(residual.nakedResidualShares, sellable);
+    // CONSISTENCY / RACE GATE: the genuine unhedged excess should be ≈ the recorded residual. A much larger
+    // excess means the Kalshi hedge is still mid-fill (the residual was captured before the deferred leg filled)
+    // or there is unexplained exposure — either way, selling now could un-hedge a leg that is about to fill, so
+    // wait. This bounds the total ever sold to ~the recorded residual even if the live floor momentarily
+    // undercounts or the token→ticker join fails (it then fails SAFE: no sell).
+    const maxExcess = residual.nakedResidualShares * MAX_EXCESS_RESIDUAL_FACTOR + MAX_EXCESS_ABS_TOLERANCE_SHARES;
+    if (excess > maxExcess) {
+      this.lastError = `naked excess ${excess.toFixed(2)} > ${maxExcess.toFixed(2)} (residual ${residual.nakedResidualShares.toFixed(2)}, live Kalshi NO floor ${floor.toFixed(2)}) — hedge likely incomplete, skipping`;
+      logEvent({
+        severity: "WARN",
+        category: "EXECUTION",
+        message: "naked flatten skipped: excess exceeds recorded residual (hedge likely still filling)",
+        context: {
+          signalId: residual.id,
+          tokenId: residual.nakedTokenId,
+          kalshiTicker: residual.kalshiContractId,
+          heldPolymarket: held,
+          liveKalshiNoFloor: floor,
+          excess,
+          recordedResidual: residual.nakedResidualShares,
+        },
+      });
+      return;
+    }
+    const sellShares = Math.min(residual.nakedResidualShares, excess);
     if (sellShares <= DUST) return;
 
     const outcome = await this.seller.marketSellShares(residual.nakedTokenId, sellShares, {
@@ -158,14 +213,16 @@ export class NakedPositionFlattener {
       context: {
         signalId: residual.id,
         tokenId: residual.nakedTokenId,
+        kalshiTicker: residual.kalshiContractId,
         soldShares: outcome.soldShares,
         sellPrice: outcome.sellPrice,
         orderId: outcome.orderId,
-        retainedFloor: floor,
+        // The live, market-wide Kalshi NO held — the hedged floor the Polymarket position is kept at or above.
+        liveKalshiNoFloor: floor,
       },
     });
-    // Resolve the quarantine only when the position is now reduced to the hedged floor (the naked excess is
-    // sold). A partial fill leaves it quarantined and the next tick (after cooldown) sells the remainder.
+    // Resolve the quarantine only when the position is now reduced to the live hedged floor (the naked excess
+    // is sold). A partial fill leaves it quarantined and the next tick (after cooldown) sells the remainder.
     if (remainingHeld - floor <= DUST) {
       await this.resolve(residual, now, outcome.soldShares, outcome.sellPrice, outcome.orderId, null);
     }
@@ -185,7 +242,7 @@ export class NakedPositionFlattener {
       sellPrice,
       orderId,
       tokenId: residual.nakedTokenId,
-      retainedFloor: Math.max(0, residual.retainedShares ?? 0),
+      kalshiTicker: residual.kalshiContractId,
       flattenedAtMs: now,
     });
   }
